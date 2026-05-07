@@ -35,6 +35,7 @@ routes (proxy):
 - `GET /term/develop/`, `GET /term/wsl/` → admin terms
 - `GET|*  /<proj>/*` → reverse-proxy if `.project-meta.json` declares `proxyTarget`
 - `WS /ws/view-tree/<proj>` → live tree updates `{type: add|delete|change, path, kind?}`
+- `GET /api/gh/repos` → `{repos: [{nameWithOwner, description, isFork, isPrivate, updatedAt}]}`. sorted `updatedAt` desc. 503 on `gh` failure. cached in-process, 10 min TTL.
 
 files:
 - `services/claude-hub.service` — proxy unit
@@ -104,6 +105,9 @@ module exports (test surface, not public API):
   - **scan-existing** (clone path): Claude reads tree, drafts missing docs.
   - **greenfield** (skip / create + vite or none): Claude greets, asks "what should we build here?".
   bootstrapper writes branch-specific prompt to `<project>/.claude-bootstrap.txt`; `ttyd-attach.sh` `tmux send-keys` reads & sends, then deletes.
+- V32: `/api/gh/repos` runs `gh repo list --json nameWithOwner,description,isFork,isPrivate,updatedAt --limit 200`. result cached in-process w/ ≤ 10 min TTL. ⊥ shell-out per dialog open.
+- V33: dialog clone-source is a `<select>` populated async from `/api/gh/repos`. on fetch failure / empty / timeout → fall back to free-text `<input>`. ⊥ block dialog while waiting.
+- V34: cloning another user's repo = fork on github.com first, pick the fork from the dropdown. arbitrary-URL clone still possible via direct `POST /api/projects` w/ `source: 'owner/repo'` (power-user flow), but not via the dialog.
 
 ## §T TASKS
 
@@ -141,6 +145,10 @@ module exports (test surface, not public API):
 | T30 | x | `handleCreateProject`: force `template = 'none'` when `gh.mode === 'clone'`. ⊥ scaffolder run on cloned repo | V21,V29 |
 | T31 | x | `bootstrapClone`: keep "skip if exists" guards on AGENTS.md/README.md; add test asserting pre-existing files survive | V29 |
 | T32 | x | bootstrap-prompt branching: write `.claude-bootstrap.txt` per project (scan-existing for clone, greenfield for skip/create); `ttyd-attach.sh` reads + sends + deletes | V30,V31 |
+| T33 | x | `GET /api/gh/repos` route w/ in-process 10 min TTL cache. 503 on `gh` error | I.routes,V32 |
+| T34 | x | landing.html: clone-source becomes async `<select>`; fallback to `<input>` on fetch fail / empty | V33 |
+| T35 | x | tests: cache hit/miss + JSON shape (mock `gh` via stubbed `execFileP`) | V32 |
+| T36 | x | README + AGENTS note: forking workflow for non-owned repos | V34 |
 
 ## §B BUGS
 

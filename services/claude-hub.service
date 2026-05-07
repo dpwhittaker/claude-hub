@@ -13,6 +13,14 @@ User=david
 # replace this path with your account's home before installing.
 WorkingDirectory=/home/USER/projects/claude-hub
 ExecStart=/bin/bash -lc 'export NVM_DIR=$HOME/.nvm && . $NVM_DIR/nvm.sh && exec node server.js'
+# KillMode=process: stop only the main node PID on restart. Child ttyd
+# subprocesses (and the tmux servers they forked) escape the cgroup and
+# keep running, so a `systemctl restart claude-hub.service` does NOT kill
+# live Claude tmux sessions. Server.js unlinks stale sockets on startup so
+# the next /term/<name>/ hit can rebind. Orphan ttyd procs are unreachable
+# (their socket path is gone) and live until host reboot — small leak,
+# trade-off for not nuking user sessions.
+KillMode=process
 Restart=always
 RestartSec=2
 Environment=NODE_ENV=production

@@ -36,6 +36,7 @@ const { WebSocketServer } = require('ws');
 const { tabKey } = require('./lib/tab-key');
 const { allocatePort } = require('./lib/port-alloc');
 const { copyTemplate } = require('./lib/template');
+const { makeGhRepos } = require('./lib/gh-repos');
 
 const PORT = Number(process.env.PROXY_PORT) || 8002;
 const LANDING_PATH = path.join(__dirname, 'landing.html');
@@ -104,6 +105,21 @@ const TTYD_SOCKET_DIR = (() => {
   }
   const dir = path.join(base, `claude-hub-${uid}-sockets`);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // KillMode=process on the systemd unit lets ttyd subprocesses (and the
+  // tmux servers they forked) survive a `systemctl restart`. Their sockets
+  // remain bound by the orphan ttyd procs — but the *paths* are stale, and
+  // a fresh ttyd can rebind once the path is unlinked. Clear the dir on
+  // startup so the next /term/<name>/ hit gets a clean rebind. Orphan
+  // ttyds become unreachable (path gone) but the tmux session inside their
+  // attach chain is already daemonized and keeps running until a new
+  // /term/<name>/ visit reconnects.
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (f.endsWith('.sock')) {
+        try { fs.unlinkSync(path.join(dir, f)); } catch {}
+      }
+    }
+  } catch {}
   return dir;
 })();
 
@@ -182,7 +198,14 @@ function shutdownAllTtyd() {
   }
   ttydProcs.clear();
 }
-process.once('SIGTERM', () => { shutdownAllTtyd(); process.exit(0); });
+
+// On systemd-issued SIGTERM (claude-hub.service has KillMode=process), we
+// deliberately DO NOT kill the ttyd children — they hold the user's tmux
+// claude sessions. Just exit; init reparents the orphans and the next
+// startup unlinks stale sockets so fresh ttyds can rebind. SIGINT (from
+// running by hand and Ctrl-C) keeps the original "tear it all down"
+// behaviour because that's the explicit "I want to clean up" gesture.
+process.once('SIGTERM', () => { process.exit(0); });
 process.once('SIGINT',  () => { shutdownAllTtyd(); process.exit(0); });
 
 // Lazy-spawn lookup for /term/<key>/. Returns a route object once the ttyd
@@ -549,6 +572,18 @@ function handleDeleteProject(req, res, name) {
 // the environment to override.
 const GIT_AUTHOR_NAME = process.env.GIT_AUTHOR_NAME || '';
 const GIT_AUTHOR_EMAIL = process.env.GIT_AUTHOR_EMAIL || '';
+
+// `gh repo list` cache for the create-project dialog dropdown. See V32.
+const ghRepos = makeGhRepos({ exec: (cmd, args) => execFileP(cmd, args, { timeout: 15000 }) });
+
+async function handleGhRepos(req, res) {
+  try {
+    const repos = await ghRepos.list();
+    sendJson(res, 200, { repos });
+  } catch (e) {
+    sendJson(res, 503, { error: 'gh repo list failed: ' + e.message });
+  }
+}
 
 function execFileP(cmd, args, opts) {
   return new Promise((resolve, reject) => {
@@ -2229,6 +2264,12 @@ const server = http.createServer(async (req, res) => {
   const treeMatch = /^\/api\/view-tree\/([^/]+)$/.exec(apiPath);
   if (treeMatch) {
     if (req.method === 'GET') return handleViewTree(req, res, treeMatch[1]);
+    res.writeHead(405, { 'Content-Type': 'text/plain' });
+    res.end('method not allowed');
+    return;
+  }
+  if (apiPath === '/api/gh/repos') {
+    if (req.method === 'GET') return handleGhRepos(req, res);
     res.writeHead(405, { 'Content-Type': 'text/plain' });
     res.end('method not allowed');
     return;

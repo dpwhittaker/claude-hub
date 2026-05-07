@@ -112,7 +112,12 @@ curl -s   http://127.0.0.1:8002/api/view-tree/<project> | jq .
 ## Project creation
 
 Default template = **Vite (React + TypeScript)**. `POST /api/projects` body
-field `template: 'vite' | 'none'` (default `'vite'`). Vite scaffold:
+field `template: 'vite' | 'none'` (default `'vite'`; forced to `'none'` when
+`github.mode === 'clone'`). Clone source on the dialog comes from
+`GET /api/gh/repos` (cached 10 min) — only the user's own repos are listed.
+Cloning someone else's repo = fork on github.com first; the fork appears in
+the dropdown. `POST /api/projects` still accepts an arbitrary `source` slug
+or URL for power-user direct calls. Vite scaffold:
 
 1. `templates/vite/` copied with `<NAME>` + `<PORT>` placeholders replaced.
 2. Free port ≥ 5173 allocated by scanning sibling projects' `.project-meta.json` `proxyTarget`.

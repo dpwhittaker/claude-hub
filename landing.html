@@ -118,7 +118,21 @@
       display: none;
     }
     dialog.create-dialog .gh-sub.visible { display: block; }
-    dialog.create-dialog .gh-sub input[type=text] { font-size: 0.85rem; }
+    dialog.create-dialog .gh-sub input[type=text],
+    dialog.create-dialog .gh-sub select {
+      font-size: 0.85rem;
+      width: 100%;
+      background: var(--bg-2);
+      color: var(--fg);
+      border: 1px solid var(--edge);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+    dialog.create-dialog .gh-sub select:focus,
+    dialog.create-dialog .gh-sub input[type=text]:focus { outline: none; border-color: var(--accent); }
+    dialog.create-dialog .gh-sub .hint { display: block; margin-top: 6px; }
     dialog.create-dialog .hint {
       font-size: 0.78rem;
       color: var(--muted);
@@ -317,7 +331,9 @@
           <label class="gh-row"><input type="radio" name="gh-mode" value="skip" checked>Skip GitHub for now</label>
           <label class="gh-row"><input type="radio" name="gh-mode" value="clone">Clone existing repo</label>
           <div class="gh-sub" data-for="clone">
-            <input type="text" id="cd-clone-source" placeholder="owner/repo or full URL" autocomplete="off">
+            <select id="cd-clone-select" hidden></select>
+            <input type="text" id="cd-clone-source" placeholder="loading repos…" autocomplete="off" disabled>
+            <div class="hint" id="cd-clone-hint">Cloning someone else's repo? Fork it on GitHub first, then it'll show up here.</div>
           </div>
           <label class="gh-row"><input type="radio" name="gh-mode" value="create">Create new GitHub repo</label>
           <div class="gh-sub" data-for="create">
@@ -442,6 +458,7 @@
     const dlgForm = document.getElementById('create-form');
     const dlgName = document.getElementById('cd-name');
     const dlgCloneSrc = document.getElementById('cd-clone-source');
+    const dlgCloneSelect = document.getElementById('cd-clone-select');
     const dlgErr = document.getElementById('cd-err');
     const dlgSubmit = document.getElementById('cd-submit');
     const dlgCancel = document.getElementById('cd-cancel');
@@ -466,12 +483,55 @@
 
     dlgCancel.addEventListener('click', () => dlg.close());
 
+    // Populate the clone-source <select> from /api/gh/repos. On any
+    // failure (gh not authenticated, network blip, empty result) fall back
+    // to the free-text <input> so the dialog still works (V33).
+    let ghReposLoaded = false;
+    async function loadGhRepos() {
+      if (ghReposLoaded) return;
+      ghReposLoaded = true;
+      try {
+        const r = await fetch('/api/gh/repos');
+        const data = await r.json();
+        if (!r.ok || !Array.isArray(data.repos) || data.repos.length === 0) {
+          throw new Error((data && data.error) || 'no repos');
+        }
+        dlgCloneSelect.innerHTML = '';
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = '— pick a repo —';
+        dlgCloneSelect.appendChild(blank);
+        for (const repo of data.repos) {
+          const opt = document.createElement('option');
+          opt.value = repo.nameWithOwner;
+          const tag = repo.isFork ? ' [fork]' : (repo.isPrivate ? ' [private]' : '');
+          opt.textContent = repo.nameWithOwner + tag;
+          if (repo.description) opt.title = repo.description;
+          dlgCloneSelect.appendChild(opt);
+        }
+        dlgCloneSelect.hidden = false;
+        dlgCloneSrc.hidden = true;
+        dlgCloneSrc.disabled = true;
+      } catch (e) {
+        // Fallback path: re-enable text input so the user can still type
+        // an owner/repo or URL by hand.
+        dlgCloneSelect.hidden = true;
+        dlgCloneSrc.hidden = false;
+        dlgCloneSrc.disabled = false;
+        dlgCloneSrc.placeholder = 'owner/repo or full URL';
+        ghReposLoaded = false; // allow retry next open
+      }
+    }
+
     addBtn.addEventListener('click', () => {
       dlgForm.reset();
       dlgErr.textContent = '';
+      // The reset() call wiped the select's value; pick blank by default.
+      if (dlgCloneSelect.options.length > 0) dlgCloneSelect.selectedIndex = 0;
       syncGhSubs();
       dlg.showModal();
       setTimeout(() => dlgName.focus(), 0);
+      loadGhRepos();
     });
 
     dlgForm.addEventListener('submit', async (ev) => {
@@ -488,9 +548,16 @@
       const template = dlgForm.querySelector('input[name="cd-template"]:checked').value;
       const payload = { name, template };
       if (mode === 'clone') {
-        const source = dlgCloneSrc.value.trim();
+        // Prefer the dropdown value when it's loaded + populated; fall
+        // back to the text input (its `value` is empty when the select is
+        // showing because the input is disabled).
+        const source = (
+          !dlgCloneSelect.hidden && dlgCloneSelect.value
+            ? dlgCloneSelect.value
+            : dlgCloneSrc.value
+        ).trim();
         if (!source) {
-          dlgErr.textContent = 'Provide a repo (owner/repo or URL) to clone.';
+          dlgErr.textContent = 'Pick a repo to clone.';
           return;
         }
         payload.github = { mode: 'clone', source };
