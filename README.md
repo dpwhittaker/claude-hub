@@ -4,19 +4,24 @@ tags: [Hub, Tool]
 
 # claude-hub
 
-Local landing page + path-routed reverse proxy for the projects you spin up
-at home. Each project gets a card with three actions:
+**Persistent [Claude Code](https://claude.ai/claude-code) sessions in your browser, on every device you own. Start a project on your laptop, pick up the same conversation from your phone on the bus, ship it from a tablet on the couch.** One URL, one tmux per project, every Claude session waiting exactly where you left it.
+
+A new idea hits at 2am? Tap `+`. claude-hub mints a fresh project — folder, README, AGENTS.md, optional GitHub repo, Vite scaffold, dev server — and drops you straight into a Claude session that asks "what should we build here?" Build your next project anytime, anywhere.
+
+Each project gets a card with three actions:
 
 - **Open** — the live web app, if the project has one (otherwise the rendered README).
-- **Develop** — a browser terminal attached to a long-lived `tmux` session running [Claude Code](https://claude.ai/claude-code), so you can pick up where you left off from any device.
-- **Browse** — a two-pane file viewer (collapsible tree on the left, tabbed file panes on the right, gitignored entries dimmed).
+- **Develop** — a browser terminal attached to a long-lived `tmux` session running Claude Code, so you can pick up where you left off from any device.
+- **Browse** — a two-pane file viewer (collapsible tree on the left, tabbed file panes on the right, gitignored entries dimmed, live updates pushed over WebSocket so edits Claude makes show up without a refresh).
 
 Plus a `+` card that creates a brand-new project end-to-end: makes the
 folder, drops in a starter `README.md` and `AGENTS.md`, optionally clones an
-existing GitHub repo or `gh repo create`s a fresh one, brings up a `ttyd`
-terminal for it, and bootstraps the first Claude session with a prompt
-asking "what should we build here?" The card shows up on the landing page
-ready to click into.
+existing GitHub repo or `gh repo create`s a fresh one, scaffolds a
+Vite + React + TypeScript app (with `npm install` and an autostarted dev
+server already wired through the proxy), brings up a `ttyd` terminal for
+it, and bootstraps the first Claude session with a prompt asking "what
+should we build here?" The card shows up on the landing page ready to
+click into.
 
 The proxy itself binds `127.0.0.1:8002` — nothing is exposed to your LAN
 unless you opt in (see "Sharing across devices" below).
