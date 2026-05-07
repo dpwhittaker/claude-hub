@@ -7,7 +7,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/**/*.test.js"
+    "test": "node --test test/**/*.test.js",
+    "lint": "eslint ."
   },
   "engines": {
     "node": ">=22"
@@ -16,5 +17,10 @@
     "http-proxy": "^1.18.1",
     "marked": "^18.0.3",
     "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.3.0",
+    "globals": "^17.6.0"
   }
 }

@@ -105,7 +105,7 @@ env:
 | T15 | x | tests: WS lifecycle + dedup events | V9,V10,V12 |
 | T16 | x | tests: tab key collision (`render:` prefix vs path) | V15 |
 | T17 | x | watcher recursive on Linux Node 24 — failure-mode test (inotify limit) | V9 |
-| T18 | . | CI/lint pipeline (currently none) | C.deps |
+| T18 | x | CI/lint pipeline: ESLint flat config + GH Actions Node 22 | C.deps |
 | T19 | x | add `templates/vite/` w/ React+TS scaffold + `<NAME>`/`<PORT>` placeholders | I.files,V21 |
 | T20 | x | add `services/vite@.service` template (`npm run dev`, Restart=always) | I.files,V25 |
 | T21 | x | port allocator: scan free port ≥ 5173 not in any project's `.project-meta.json` | V22 |

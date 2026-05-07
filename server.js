@@ -583,7 +583,7 @@ async function bootstrapClone(dir, name, source) {
     });
   } catch (e) {
     fs.rmSync(dir, { recursive: true, force: true });
-    throw new Error('clone failed: ' + e.message);
+    throw new Error('clone failed: ' + e.message, { cause: e });
   }
   // Don't trample docs the cloned repo already has. If absent, drop in our
   // templates so claude has a starting point.
@@ -624,7 +624,7 @@ async function bootstrapCreateRepo(dir, name, visibility) {
     await ghInitPush(dir, name, visibility);
   } catch (e) {
     fs.rmSync(dir, { recursive: true, force: true });
-    throw new Error('repo setup failed: ' + e.message);
+    throw new Error('repo setup failed: ' + e.message, { cause: e });
   }
   // Re-stamp meta with the resulting github mode.
   fs.writeFileSync(
@@ -673,7 +673,7 @@ async function bootstrapVite(dir, name) {
     });
   } catch (e) {
     fs.rmSync(dir, { recursive: true, force: true });
-    throw new Error('vite scaffold failed: ' + e.message);
+    throw new Error('vite scaffold failed: ' + e.message, { cause: e });
   }
   return port;
 }
@@ -717,7 +717,7 @@ function handleCreateProject(req, res) {
             await ghInitPush(dir, name, visibility);
           } catch (e) {
             fs.rmSync(dir, { recursive: true, force: true });
-            throw new Error('repo setup failed: ' + e.message);
+            throw new Error('repo setup failed: ' + e.message, { cause: e });
           }
         } else {
           await bootstrapCreateRepo(dir, name, visibility);
@@ -2003,7 +2003,7 @@ function renderFrontmatter(meta) {
     if (Array.isArray(v)) {
       const items = v.map((x) => {
         const s = String(x);
-        return /[\s,\[\]]/.test(s) ? `"${escapeHtml(s)}"` : escapeHtml(s);
+        return /[\s,[\]]/.test(s) ? `"${escapeHtml(s)}"` : escapeHtml(s);
       }).join('<span class="fm-punct">, </span>');
       valHtml = `<span class="fm-punct">[</span>${items}<span class="fm-punct">]</span>`;
     } else {
