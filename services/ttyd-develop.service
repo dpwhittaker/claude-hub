@@ -1,0 +1,28 @@
+[Unit]
+Description=ttyd terminal for projects-folder admin (browser → fresh claude)
+Documentation=man:ttyd(1)
+After=network.target
+
+[Service]
+Type=simple
+# EDIT BEFORE INSTALLING: User= must match the account that owns the repo.
+User=david
+# Socket lives under /run/ttyd/ — created with the right ownership by systemd
+# from RuntimeDirectory below. The claude-hub proxy targets this socket
+# directly so we never expose a TCP port. Preserve=yes is critical:
+# /run/ttyd is shared with every ttyd@ instance and ttyd-wsl, so without
+# preserve any stop wipes everyone else's sockets too.
+RuntimeDirectory=ttyd
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+WorkingDirectory=/home/USER/projects
+# Each browser connection spawns a fresh claude — no tmux session, no
+# --continue. This is the admin entry point for cross-project work; long-lived
+# per-project sessions live behind /term/<project>/ via ttyd@.service.
+ExecStart=/usr/bin/ttyd -i /run/ttyd/develop.sock -W -b /term/develop -t titleFixed=develop -t disableLeaveAlert=true /home/USER/.local/bin/claude --chrome
+Restart=always
+RestartSec=2
+LimitNOFILE=512
+
+[Install]
+WantedBy=multi-user.target

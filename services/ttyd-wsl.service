@@ -1,0 +1,30 @@
+[Unit]
+Description=ttyd terminal for raw WSL bash (no claude, no tmux)
+Documentation=man:ttyd(1)
+After=network.target
+
+[Service]
+Type=simple
+# EDIT BEFORE INSTALLING: User= must match the account that owns the repo.
+User=david
+# Socket lives under /run/ttyd/ — created with the right ownership by systemd
+# from RuntimeDirectory below. The claude-hub proxy targets this socket
+# directly so we never expose a TCP port. Preserve=yes is critical:
+# /run/ttyd is shared with every ttyd@ instance and ttyd-develop, so without
+# preserve any stop wipes everyone else's sockets too.
+RuntimeDirectory=ttyd
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+WorkingDirectory=/home/USER
+# Each browser connection spawns a fresh login bash — no tmux session, no
+# claude wrapper. This is the bare WSL shell entry point; long-lived
+# per-project claude sessions live behind /term/<project>/ via ttyd@.service,
+# and a fresh-claude admin shell lives behind /term/develop/.
+ExecStart=/usr/bin/ttyd -i /run/ttyd/wsl.sock -W -b /term/wsl -t titleFixed=wsl -t disableLeaveAlert=true /bin/bash -l
+
+Restart=always
+RestartSec=2
+LimitNOFILE=512
+
+[Install]
+WantedBy=multi-user.target

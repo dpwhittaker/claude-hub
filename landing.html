@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>claude-hub</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-0: #050810;
+      --bg-1: #0d1320;
+      --bg-2: #131b2c;
+      --fg: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #7dd3fc;
+      --edge: #1f2937;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 20% 0%, rgba(125,211,252,0.08), transparent 50%),
+        radial-gradient(circle at 80% 100%, rgba(192,132,252,0.06), transparent 50%),
+        var(--bg-0);
+      color: var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      display: grid;
+      place-items: start center;
+      padding: 24px;
+    }
+    .wrap { max-width: 880px; width: 100%; }
+    h1 {
+      font-size: clamp(1.5rem, 4vw, 2.25rem);
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      margin: 0 0 4px;
+    }
+    .subtitle { color: var(--muted); font-size: 0.95rem; margin: 0 0 32px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      padding: 20px 22px 16px;
+      background: var(--bg-1);
+      border: 1px solid var(--edge);
+      border-radius: 14px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .card:hover { border-color: var(--accent); background: var(--bg-2); }
+    .delete-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 28px;
+      height: 28px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      border-radius: 6px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.15s, color 0.15s, background 0.15s;
+    }
+    .card:hover .delete-btn,
+    .delete-btn:focus-visible { opacity: 1; }
+    .delete-btn:hover { color: #fca5a5; background: rgba(252,165,165,0.12); }
+    .delete-btn[disabled] { cursor: progress; opacity: 0.5; }
+    dialog.create-dialog {
+      background: var(--bg-1);
+      color: var(--fg);
+      border: 1px solid var(--edge);
+      border-radius: 14px;
+      padding: 0;
+      max-width: 460px;
+      width: 90%;
+    }
+    dialog.create-dialog::backdrop { background: rgba(5,8,16,0.6); backdrop-filter: blur(2px); }
+    dialog.create-dialog form { padding: 22px 24px 18px; margin: 0; }
+    dialog.create-dialog h2 { margin: 0 0 14px; font-size: 1.1rem; font-weight: 600; }
+    dialog.create-dialog label.field { display: block; margin: 12px 0; font-size: 0.85rem; color: var(--muted); }
+    dialog.create-dialog label.field span { display: block; margin-bottom: 4px; }
+    dialog.create-dialog input[type=text] {
+      width: 100%;
+      background: var(--bg-2);
+      color: var(--fg);
+      border: 1px solid var(--edge);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: inherit;
+      font-size: 0.92rem;
+      box-sizing: border-box;
+    }
+    dialog.create-dialog input[type=text]:focus { outline: none; border-color: var(--accent); }
+    dialog.create-dialog .gh-group {
+      border: 1px solid var(--edge);
+      border-radius: 8px;
+      padding: 10px 14px 6px;
+      margin-top: 6px;
+    }
+    dialog.create-dialog .gh-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.9rem; color: var(--fg); }
+    dialog.create-dialog .gh-row input[type=radio] { accent-color: var(--accent); }
+    dialog.create-dialog .gh-sub {
+      margin: 4px 0 8px 24px;
+      display: none;
+    }
+    dialog.create-dialog .gh-sub.visible { display: block; }
+    dialog.create-dialog .gh-sub input[type=text] { font-size: 0.85rem; }
+    dialog.create-dialog .gh-sub label.inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-right: 14px;
+    }
+    dialog.create-dialog .buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 1px solid var(--edge);
+    }
+    dialog.create-dialog button.btn {
+      background: rgba(125,211,252,0.1);
+      color: var(--accent);
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    dialog.create-dialog button.btn:hover { background: rgba(125,211,252,0.2); }
+    dialog.create-dialog button.btn.muted { color: var(--muted); background: rgba(148,163,184,0.08); }
+    dialog.create-dialog button.btn.muted:hover { color: var(--fg); background: rgba(148,163,184,0.18); }
+    dialog.create-dialog button.btn[disabled] { cursor: progress; opacity: 0.6; }
+    dialog.create-dialog .err {
+      color: #fca5a5;
+      font-size: 0.82rem;
+      margin-top: 10px;
+      min-height: 1.2em;
+    }
+    .card .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .card .badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(125,211,252,0.12);
+      color: var(--accent);
+    }
+    .card h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin: 0 0 6px;
+    }
+    .card h2 a { color: var(--fg); text-decoration: none; }
+    .card h2 a:hover { color: var(--accent); }
+    .card p {
+      color: var(--muted);
+      font-size: 0.92rem;
+      margin: 0 0 14px;
+      line-height: 1.45;
+      flex: 1;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      border-top: 1px solid var(--edge);
+      padding-top: 12px;
+      margin-top: auto;
+    }
+    .actions a {
+      flex: 1;
+      min-width: 0;
+      text-align: center;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(125,211,252,0.06);
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      transition: background 0.15s, color 0.15s;
+    }
+    .actions a:hover { background: rgba(125,211,252,0.18); }
+    .actions a.muted { color: var(--muted); background: rgba(148,163,184,0.06); }
+    .actions a.muted:hover { color: var(--fg); background: rgba(148,163,184,0.16); }
+    .add-card {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 180px;
+      padding: 20px;
+      background: transparent;
+      border: 1px dashed var(--edge);
+      border-radius: 14px;
+      color: var(--muted);
+      font-size: 3rem;
+      font-weight: 200;
+      cursor: pointer;
+      font-family: inherit;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .add-card:hover { border-color: var(--accent); color: var(--accent); background: var(--bg-1); }
+    .add-card[disabled] { cursor: progress; opacity: 0.7; }
+    .add-card .label {
+      display: block;
+      font-size: 0.78rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-top: 4px;
+      font-weight: 500;
+    }
+    .add-card .stack { display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1; }
+    .placeholder-desc { color: var(--muted); font-style: italic; }
+    footer {
+      margin-top: 32px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-align: center;
+    }
+    code {
+      background: var(--bg-2);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 0.85em;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>claude-hub</h1>
+    <p class="subtitle">Pick where you're going.</p>
+    <div class="grid">
+
+      <div class="card">
+        <div class="badges"><span class="badge">Admin</span></div>
+        <h2><a href="/term/develop/">Develop</a></h2>
+        <p>Fresh Claude session in <code>~/projects</code> for cross-project chores. Each open spawns a new instance.</p>
+        <div class="actions">
+          <a href="/term/develop/">Open</a>
+          <a class="muted" href="/term/wsl/">Raw Shell</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="badges"><span class="badge">Infra</span></div>
+        <h2><a href="/view/claude-hub/AGENTS.md">claude-hub</a></h2>
+        <p>The path-based reverse proxy fronting this whole site. Routing, systemd units, landing page, two-pane viewer, projects API.</p>
+        <div class="actions">
+          <a href="/view/claude-hub/AGENTS.md">Open</a>
+          <a class="muted" href="/term/claude-hub/">Develop</a>
+          <a class="muted" href="/view/claude-hub/">Browse</a>
+        </div>
+      </div>
+
+      <button class="add-card" id="add-project" title="Create a new project">
+        <span class="stack">
+          <span>+</span>
+          <span class="label">New project</span>
+        </span>
+      </button>
+
+    </div>
+    <footer>
+      claude-hub · localhost only by default
+    </footer>
+  </div>
+
+  <dialog class="create-dialog" id="create-dialog">
+    <form method="dialog" id="create-form">
+      <h2>New project</h2>
+      <label class="field">
+        <span>Project name</span>
+        <input type="text" id="cd-name" placeholder="my-thing" autocomplete="off" required>
+      </label>
+      <div class="field"><span>Template</span>
+        <div class="gh-group">
+          <label class="gh-row"><input type="radio" name="cd-template" value="vite" checked>Vite (React + TypeScript)</label>
+          <label class="gh-row"><input type="radio" name="cd-template" value="none">None (bare AGENTS.md + README.md only)</label>
+        </div>
+      </div>
+      <div class="field"><span>GitHub</span>
+        <div class="gh-group">
+          <label class="gh-row"><input type="radio" name="gh-mode" value="skip" checked>Skip GitHub for now</label>
+          <label class="gh-row"><input type="radio" name="gh-mode" value="clone">Clone existing repo</label>
+          <div class="gh-sub" data-for="clone">
+            <input type="text" id="cd-clone-source" placeholder="owner/repo or full URL" autocomplete="off">
+          </div>
+          <label class="gh-row"><input type="radio" name="gh-mode" value="create">Create new GitHub repo</label>
+          <div class="gh-sub" data-for="create">
+            <label class="inline"><input type="radio" name="cd-vis" value="private" checked>Private</label>
+            <label class="inline"><input type="radio" name="cd-vis" value="public">Public</label>
+          </div>
+        </div>
+      </div>
+      <div class="err" id="cd-err"></div>
+      <div class="buttons">
+        <button type="button" class="btn muted" id="cd-cancel">Cancel</button>
+        <button type="submit" class="btn" id="cd-submit">Create</button>
+      </div>
+    </form>
+  </dialog>
+  <script>
+    const grid = document.querySelector('.grid');
+    const addBtn = document.getElementById('add-project');
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    const TRASH_SVG = '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">'
+      + '<path d="M6.5 1a1 1 0 0 0-1 1v.5H2.75a.75.75 0 0 0 0 1.5h.473l.707 9.564A2 2 0 0 0 5.926 15h4.148a2 2 0 0 0 1.996-1.436l.707-9.564h.473a.75.75 0 0 0 0-1.5H10.5V2a1 1 0 0 0-1-1h-3zm.5 1.5h2V2.5h-2v0zM4.732 4h6.536l-.69 9.354a.5.5 0 0 1-.499.359H5.921a.5.5 0 0 1-.499-.359L4.732 4zM6.5 5.5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5z"/>'
+      + '</svg>';
+
+    function attachDeleteButton(card, name, displayName) {
+      // Skip if there's already a trash icon (idempotent — safe to call again
+      // on cards that were rendered with one inline).
+      if (card.querySelector('.delete-btn')) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'delete-btn';
+      btn.title = 'Delete project';
+      btn.setAttribute('aria-label', `Delete ${displayName}`);
+      btn.innerHTML = TRASH_SVG;
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const ok = confirm(
+          `Delete project "${displayName}"?\n\n`
+          + `This stops the related systemd units and removes `
+          + `~/projects/${name} entirely. If it's worth keeping, push it to GitHub first.`
+        );
+        if (!ok) return;
+        btn.disabled = true;
+        try {
+          const r = await fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            alert('Could not delete: ' + (data.error || r.statusText));
+            btn.disabled = false;
+            return;
+          }
+          card.remove();
+        } catch (err) {
+          alert('Network error: ' + err.message);
+          btn.disabled = false;
+        }
+      });
+      card.prepend(btn);
+    }
+
+    function renderBadges(tags) {
+      // Empty tags collapses to a single "Project" placeholder so the card
+      // never shows a bare gap between top and title.
+      if (!tags || tags.length === 0) {
+        return '<span class="badge">Project</span>';
+      }
+      return tags.map((t) => `<span class="badge">${escapeHtml(t)}</span>`).join('');
+    }
+
+    function renderManaged(projects) {
+      for (const p of projects) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.dataset.project = p.name;
+        const desc = p.description
+          ? escapeHtml(p.description)
+          : '<span class="placeholder-desc">No description yet — Claude will fill this in.</span>';
+        // openUrl comes from .project-meta.json (set when a project declares
+        // a live app) and falls back to the rendered README otherwise.
+        const openUrl = p.openUrl || `/view/${encodeURIComponent(p.name)}/README.md`;
+        const titleText = p.title || p.name;
+        card.innerHTML = `
+          <div class="badges">${renderBadges(p.tags)}</div>
+          <h2><a href="${escapeHtml(openUrl)}">${escapeHtml(titleText)}</a></h2>
+          <p>${desc}</p>
+          <div class="actions">
+            <a href="${escapeHtml(openUrl)}">Open</a>
+            <a class="muted" href="${escapeHtml(p.termUrl)}">Develop</a>
+            <a class="muted" href="${escapeHtml(p.browseUrl)}">Browse</a>
+          </div>
+        `;
+        attachDeleteButton(card, p.name, titleText);
+        grid.insertBefore(card, addBtn);
+      }
+    }
+
+    async function loadManaged() {
+      try {
+        const r = await fetch('/api/projects');
+        if (!r.ok) return;
+        const data = await r.json();
+        renderManaged(data.projects || []);
+      } catch (e) {
+        console.warn('failed to load projects', e);
+      }
+    }
+
+    const dlg = document.getElementById('create-dialog');
+    const dlgForm = document.getElementById('create-form');
+    const dlgName = document.getElementById('cd-name');
+    const dlgCloneSrc = document.getElementById('cd-clone-source');
+    const dlgErr = document.getElementById('cd-err');
+    const dlgSubmit = document.getElementById('cd-submit');
+    const dlgCancel = document.getElementById('cd-cancel');
+
+    function syncGhSubs() {
+      const mode = dlgForm.querySelector('input[name="gh-mode"]:checked').value;
+      for (const sub of dlgForm.querySelectorAll('.gh-sub')) {
+        sub.classList.toggle('visible', sub.dataset.for === mode);
+      }
+    }
+    for (const r of dlgForm.querySelectorAll('input[name="gh-mode"]')) {
+      r.addEventListener('change', syncGhSubs);
+    }
+
+    dlgCancel.addEventListener('click', () => dlg.close());
+
+    addBtn.addEventListener('click', () => {
+      dlgForm.reset();
+      dlgErr.textContent = '';
+      syncGhSubs();
+      dlg.showModal();
+      setTimeout(() => dlgName.focus(), 0);
+    });
+
+    dlgForm.addEventListener('submit', async (ev) => {
+      // Block the default <form method="dialog"> close-on-submit so we can do
+      // async work and only close on success.
+      ev.preventDefault();
+      dlgErr.textContent = '';
+      const name = dlgName.value.trim();
+      if (!name) {
+        dlgErr.textContent = 'Project name required.';
+        return;
+      }
+      const mode = dlgForm.querySelector('input[name="gh-mode"]:checked').value;
+      const template = dlgForm.querySelector('input[name="cd-template"]:checked').value;
+      const payload = { name, template };
+      if (mode === 'clone') {
+        const source = dlgCloneSrc.value.trim();
+        if (!source) {
+          dlgErr.textContent = 'Provide a repo (owner/repo or URL) to clone.';
+          return;
+        }
+        payload.github = { mode: 'clone', source };
+      } else if (mode === 'create') {
+        const visibility = dlgForm.querySelector('input[name="cd-vis"]:checked').value;
+        payload.github = { mode: 'create', visibility };
+      } else {
+        payload.github = { mode: 'skip' };
+      }
+
+      dlgSubmit.disabled = true;
+      dlgCancel.disabled = true;
+      const prevLabel = dlgSubmit.textContent;
+      dlgSubmit.textContent = mode === 'skip' ? 'Creating…'
+        : mode === 'clone' ? 'Cloning…' : 'Setting up GitHub…';
+      try {
+        const r = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          dlgErr.textContent = data.error || r.statusText;
+          return;
+        }
+        dlg.close();
+        location.reload();
+      } catch (e) {
+        dlgErr.textContent = 'Network error: ' + e.message;
+      } finally {
+        dlgSubmit.disabled = false;
+        dlgCancel.disabled = false;
+        dlgSubmit.textContent = prevLabel;
+      }
+    });
+
+    loadManaged();
+  </script>
+</body>
+</html>

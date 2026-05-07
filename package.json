@@ -1,0 +1,20 @@
+{
+  "name": "claude-hub",
+  "version": "1.0.0",
+  "description": "Local landing page + path-routed reverse proxy for projects you spin up at home. Each project shows up as a card with Open / Develop (browser terminal running Claude Code in tmux) / Browse (two-pane file viewer). Optional Tailscale serve on top to share with your other devices.",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/**/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1",
+    "marked": "^18.0.3",
+    "ws": "^8.20.0"
+  }
+}

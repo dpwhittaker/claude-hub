@@ -1,0 +1,21 @@
+[Unit]
+Description=claude-hub — local landing page + path-routed reverse proxy
+After=network.target
+
+[Service]
+Type=simple
+# EDIT BEFORE INSTALLING: User= must match the account that owns the repo,
+# and the bash login shell must source nvm so `node` resolves to your
+# preferred version. marked v18 is ESM-only → node ≥ 22 required.
+User=david
+# systemd does NOT expand %h to User=david's home in system-mode units —
+# %h resolves against the manager (root). Use /home/<user> explicitly, or
+# replace this path with your account's home before installing.
+WorkingDirectory=/home/USER/projects/claude-hub
+ExecStart=/bin/bash -lc 'export NVM_DIR=$HOME/.nvm && . $NVM_DIR/nvm.sh && exec node server.js'
+Restart=always
+RestartSec=2
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Vite dev server for project %i
+After=network.target
+
+[Service]
+Type=simple
+# EDIT BEFORE INSTALLING: User= must match the account that owns the repo.
+User=david
+WorkingDirectory=/home/USER/projects/%i
+# Use a login shell so nvm's Node is on PATH; --login alone won't source nvm
+# in non-interactive shells, so run nvm.sh inline before exec'ing npm.
+ExecStart=/bin/bash -lc 'export NVM_DIR=$HOME/.nvm && . $NVM_DIR/nvm.sh && exec npm run dev'
+Restart=always
+RestartSec=2
+Environment=NODE_ENV=development
+
+[Install]
+WantedBy=multi-user.target

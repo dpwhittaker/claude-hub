@@ -1,0 +1,32 @@
+[Unit]
+Description=ttyd terminal for project %i (browser → tmux attach → claude)
+Documentation=man:ttyd(1)
+After=network.target
+
+[Service]
+Type=simple
+# EDIT BEFORE INSTALLING: User= must match the account that owns the repo.
+User=david
+# Socket lives under /run/ttyd/ — created with the right ownership by systemd
+# from RuntimeDirectory below. The claude-hub proxy targets this socket
+# directly so we never expose a TCP port.
+RuntimeDirectory=ttyd
+RuntimeDirectoryMode=0755
+# /run/ttyd is shared across every ttyd@ instance plus ttyd-develop and
+# ttyd-wsl. Without preserve=yes, when any single instance stops systemd
+# wipes the entire directory, killing every other instance's socket.
+RuntimeDirectoryPreserve=yes
+WorkingDirectory=/home/USER/projects/%i
+# ttyd flags:
+#   -i /run/ttyd/%i.sock   listen on a Unix socket instead of TCP
+#   -W                     writable (allow keystrokes from the browser)
+#   -b /term/%i            base path so xterm.js loads assets from the proxied prefix
+#   -t titleFixed=%i       prevent escape-sequence title hijacking
+#   -t disableLeaveAlert=true  no "are you sure?" on tab close
+ExecStart=/usr/bin/ttyd -i /run/ttyd/%i.sock -W -b /term/%i -t titleFixed=%i -t disableLeaveAlert=true /usr/local/bin/ttyd-attach.sh %i
+Restart=always
+RestartSec=2
+LimitNOFILE=512
+
+[Install]
+WantedBy=multi-user.target
