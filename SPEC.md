@@ -11,23 +11,19 @@ path-routed reverse proxy + landing page. one local port → multi-project hub. 
 - deps locked: `http-proxy ^1.18.1`, `marked ^18.0.3`, `ws ^8.20.0`. CommonJS.
 - projects root = `~/projects` (env `PROJECTS_ROOT` overrides).
 - proxy port 8002 (env `PROXY_PORT` overrides).
-- ttyd unix sockets only — no TCP. socket dir = `XDG_RUNTIME_DIR` else `/tmp`, mode `0o700`.
+- ttyd unix sockets only — no TCP. socket dir = `/run/ttyd/`, owner=david, mode `0755` (systemd `RuntimeDirectory=ttyd`).
 - claude binary = env `CLAUDE_BIN` else `~/.local/bin/claude`.
 - systemd-managed. units in `services/`. `RuntimeDirectoryPreserve=yes` required on every ttyd unit.
-- file viewer read-only. methods ≠ GET/HEAD → 405.
-- view tree node cap = 5000. file render cap = 2 MB.
-- project name regex = `/^[A-Za-z0-9_.-]+$/`. reserved names `{develop, wsl, view, term, api}`.
-- new projects scaffold Vite (React + TS) by default. opt-out via `template: 'none'`. `npm` ! in PATH at hub runtime.
-- per-project Vite port allocated free, ≥ 5173. persisted as `proxyTarget` in `.project-meta.json`.
+- `npm` in PATH at hub runtime (vite scaffold + per-project install).
 
 ## §I INTERFACES
 
 routes (proxy):
 - `GET /` → `landing.html`
 - `GET /api/projects` → `{projects: [...]}`
-- `POST /api/projects` body `{name, github?: {mode: skip|clone|create|onboard, source?, visibility?}, template?: 'vite'|'none'}` → `{ok, project}` (default `template: 'vite'`; **forced to `'none'` when `github.mode ∈ {clone, onboard}`**). `mode: 'onboard'` adopts an existing folder under `PROJECTS_ROOT` named `name`, stamps the sentinel, writes scan-existing bootstrap prompt, enables `ttyd@<name>.service`. ⊥ clone, ⊥ scaffold.
+- `POST /api/projects` body `{name, github?: {mode: skip|clone|create|onboard, source?, visibility?}, template?: 'vite'|'none'}` → `{name, termUrl, browseUrl}`. `template` defaults `'vite'`, forced `'none'` when `github.mode ∈ {clone, onboard}`. every mode ends w/ `sudo systemctl enable --now ttyd@<name>.service` (V13). onboard adopts an existing folder under `PROJECTS_ROOT` named `name`; ⊥ clone, ⊥ scaffold on onboard.
 - landing dialog field order: Project name → GitHub → Template. GitHub radio order: Clone (default) → Onboard existing folder → Skip → Create. Template fieldset hidden (display:none) when GitHub mode ∈ {clone, onboard}; visible for skip/create.
-- `DELETE /api/projects/<name>` → stop `ttyd@<name>` + `extraUnits`, kill tmux, rm folder
+- `DELETE /api/projects/<name>` → `sudo systemctl disable --now ttyd@<name>.service`, then `extraUnits`, kill tmux, rm folder
 - `GET /api/view-tree/<proj>` → `{project, tree}`. `?path=<sub>` → one-level lazy `{project, path, entries}`
 - `GET /view/<proj>/` → two-pane shell
 - `GET /view/<proj>/<file>` → rendered. `?embed=1` strip chrome. `?raw=1` raw bytes
@@ -42,12 +38,17 @@ files:
 - `services/claude-hub.service` — proxy unit
 - `services/ttyd@.service` — templated per-project term
 - `services/ttyd-develop.service`, `services/ttyd-wsl.service` — admin terms
-- `services/ttyd-attach.sh` — joins/creates tmux session, runs `claude --continue` ?
+- `services/ttyd-attach.sh` — joins/creates tmux session, runs `claude --continue` (gated by V4).
 - `services/vite@.service` — templated per-project Vite dev server. `ExecStart=npm run dev`, `WorkingDirectory=~/projects/%i`. enabled on Vite-template bootstrap.
 - `templates/vite/` — scaffold source (`package.json`, `vite.config.ts`, `index.html`, `tsconfig.json`, `src/main.tsx`, `src/App.tsx`, `.gitignore`). copied into project on create. `<NAME>` & `<PORT>` placeholders replaced.
-- `lib/tab-key.js` — single-source `tabKey(p, mode)`. server inlines via `.toString()` into client template.
+- `lib/tab-key.js` — `tabKey(p, mode)`. server inlines via `.toString()` into client template.
 - `lib/port-alloc.js` — `allocatePort(projectsRoot)` scans sibling `.project-meta.json` for free port ≥ 5173.
 - `lib/template.js` — `replaceVars` + `copyTemplate` for scaffold copy w/ `<KEY>` substitution.
+- `lib/project-name.js` — `PROJECT_ID_RE`, `RESERVED_PROJECT_NAMES` primitives. server.js re-exports.
+- `lib/bootstrap-prompt.js` — `writeBootstrapPrompt(dir, name, flavor)`.
+- `lib/template-policy.js` — `effectiveTemplate(body)` (V21 + clone/onboard force).
+- `lib/gh-repos.js` — `makeGhRepos({exec, ttlMs, now})` cache + `filterReposByFolders(repos, folders)`.
+- `lib/onboard.js` — `bootstrapOnboard(dir, name)` + `listOrphanFolderNames(projectsRoot)`.
 - `eslint.config.js` — flat config (`@eslint/js` recommended + node globals).
 - `.github/workflows/ci.yml` — push/PR trigger; `npm ci` + `npm run lint` + `npm test` on Node 22.
 - `<project>/.project-meta.json` — sentinel. fields: `name, createdAt, openUrl?, proxyTarget?, proxyPrefix?, stripPrefix?, extraUnits?, template?`
@@ -93,24 +94,21 @@ module exports (test surface, not public API):
 - V21: project create default `template: 'vite'` (React + TS). `template: 'none'` = legacy bare AGENTS+README only.
 - V22: per-project Vite port = free port ≥ 5173, allocated by in-process scanner before scaffold. persisted as `proxyTarget` in `.project-meta.json`. ⊥ collision.
 - V23: Vite template scaffold ! stamp `.project-meta.json` w/ `proxyTarget: 'http://127.0.0.1:<port>'`, `proxyPrefix: '/<name>'`, `stripPrefix: false`, `openUrl: '/<name>/'`, `template: 'vite'`, `extraUnits: ['vite@<name>.service']`. enforces V20.
-- V24: Vite scaffold post-step → `npm install` (background) + `sudo systemctl enable --now vite@<name>.service`. install fail → cleanup dir, return 500 (extends V13).
+- V24: Vite scaffold post-step → `npm install` + `sudo systemctl enable --now vite@<name>.service`. cleanup-on-fail per V13.
 - V25: `services/vite@.service` ! carry `Restart=always`, `RestartSec=2`. dev server crash → auto-recover w/o user touching systemd.
 - V26: project deletion ! stop `vite@<name>.service` via `extraUnits` before rm. ⊥ orphan port held.
 - V27: WS reconnect → force-reload every open tab (cache-bust). recover from `change` events missed during disconnect window. preserve scroll per V11.
 - V28: per-tab scroll position persisted to `view-shell:scroll:<proj>:<key>` localStorage. restored on iframe `load`. survives page refresh + tab close/reopen.
 - V29: `github.mode === 'clone'` preserves cloned tree verbatim. `AGENTS.md` / `README.md` written **only if missing**. ⊥ overwrite of pre-existing docs.
-- V30: bootstrap of `AGENTS.md` or `README.md` against a non-empty project (clone path) → Claude scans tree first turn & writes:
-  - `README.md`: human-facing — purpose + high-level "what is this & why" details.
-  - `AGENTS.md`: agent-facing — tech stack, conventions, directory layout, debugging signposts ("where would I look if X broke").
-- V31: bootstrap prompt branches:
-  - **scan-existing** (clone path): Claude reads tree, drafts missing docs.
+- V30: (merged into V31).
+- V31: bootstrap prompt branches, written to `<project>/.claude-bootstrap.txt` and consumed by `ttyd-attach.sh` `tmux send-keys` (read + send + delete):
+  - **scan-existing** (clone / onboard): Claude walks tree first turn and writes whichever of `README.md` (human-facing — purpose + "what is this & why") or `AGENTS.md` (agent-facing — tech stack, conventions, directory layout, debugging signposts) is missing. ⊥ overwrite per V29.
   - **greenfield** (skip / create + vite or none): Claude greets, asks "what should we build here?".
-  bootstrapper writes branch-specific prompt to `<project>/.claude-bootstrap.txt`; `ttyd-attach.sh` `tmux send-keys` reads & sends, then deletes.
 - V32: `/api/gh/repos` runs `gh repo list --json nameWithOwner,description,isFork,isPrivate,updatedAt --limit 200`. result cached in-process w/ ≤ 10 min TTL. ⊥ shell-out per dialog open. response excludes any candidate whose basename matches an existing folder under `PROJECTS_ROOT` (managed or not). sort: `isFork=false` first then `isFork=true`; `updatedAt` desc within each group. ⊥ user's own forks dominate top of dropdown.
-- V33: dialog clone-source is a `<select>` populated async from `/api/gh/repos`. on fetch failure / empty / timeout → fall back to free-text `<input>`. ⊥ block dialog while waiting. Template fieldset hidden (display:none) when GitHub mode ∈ {clone, onboard} — not faded.
+- V33: dialog clone-source is a `<select>` populated async from `/api/gh/repos`. on fetch failure / empty / timeout → fall back to free-text `<input>`. ⊥ block dialog while waiting.
 - V34: cloning another user's repo = fork on github.com first, pick the fork from the dropdown. arbitrary-URL clone still possible via direct `POST /api/projects` w/ `source: 'owner/repo'` (power-user flow), but not via the dialog.
 - V35: Clone is the default GitHub mode in the create dialog. Default dialog open state → Template fieldset hidden.
-- V36: `github.mode === 'onboard'` adopts an existing folder under `PROJECTS_ROOT`. Stamps sentinel `.project-meta.json` w/ `name + createdAt` only (no `github`, no `template`). Writes scan-existing bootstrap prompt. Enables `ttyd@<name>.service`. 409 if `.project-meta.json` already exists. 404 if folder missing. ⊥ overwrite of any existing file in the tree.
+- V36: `github.mode === 'onboard'` adopts an existing folder under `PROJECTS_ROOT`. Stamps sentinel `.project-meta.json` w/ `name + createdAt` only (no `github`, no `template`). Writes scan-existing bootstrap prompt. 409 if `.project-meta.json` already exists. 404 if folder missing. ⊥ overwrite of any existing file in the tree. ttyd@ enable per V13.
 - V37: dialog onboard mode populates `<select>` from `/api/projects/orphans`. Empty list → mode option disabled w/ hint "no orphan folders under ~/projects".
 
 ## §T TASKS
@@ -163,6 +161,7 @@ module exports (test surface, not public API):
 | T44 | x | rip lazy in-process ttyd. project create runs `sudo -n systemctl enable --now ttyd@<name>.service`; delete unconditionally disables it. /term/<key>/ proxies `unix:/run/ttyd/<key>.sock` directly. develop+wsl admin units enabled at install time | V13,V36,I.routes |
 | T45 | x | move test-only helpers out of `server.js` exports: `effectiveTemplate`, `writeBootstrapPrompt`, `filterReposByFolders`, `bootstrapOnboard`, `listOrphanFolderNames` → dedicated `lib/*.js` modules. tests import from `lib/`. server.js exports stay at `{server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES, projectWatchers}` | I.exports |
 | T46 | x | landing.html onboard hint = exact spec string `"no orphan folders under ~/projects"` | V37 |
+| T47 | x | spec dedup: drop §C lines duplicating V2/V3/V6/V7/V21/V22; refresh ttyd socket constraint to /run/ttyd/ 0755; rewrite `POST /api/projects` + `DELETE` narrative for T44 reality; refresh §I.files lib enumeration; trim V24 cleanup-dup, V33 hidden-fieldset-dup, V36 ttyd-enable-dup; merge V30 into V31 | - |
 
 ## §B BUGS
 
