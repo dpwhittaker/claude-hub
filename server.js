@@ -1850,7 +1850,13 @@ if (Number.isFinite(savedDevWidth)) setDevelopWidth(savedDevWidth);
 const initVisible = (() => {
   try { return localStorage.getItem(DEVELOP_VISIBLE_KEY) === '1'; } catch { return false; }
 })();
-if (initVisible) showDevelop(true);
+// Query string override (?dev=1 / ?dev=0) wins over saved state — useful
+// for share-links that want to land in a known layout, and for screenshot
+// scripts that need a deterministic shot.
+const devOverride = new URLSearchParams(location.search).get('dev');
+if (devOverride === '1') showDevelop(true);
+else if (devOverride === '0') showDevelop(false);
+else if (initVisible) showDevelop(true);
 
 let devDragging = false;
 DEVELOP_SPLITTER.addEventListener('mousedown', (e) => {
