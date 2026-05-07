@@ -21,6 +21,16 @@ ready to click into.
 The proxy itself binds `127.0.0.1:8002` — nothing is exposed to your LAN
 unless you opt in (see "Sharing across devices" below).
 
+## Screenshots
+
+**Landing page** — hardcoded `Develop` and `claude-hub` cards plus one card per project under `~/projects/`:
+
+![Landing page](docs/img/landing.png)
+
+**Two-pane file viewer** (`/view/<project>/`) — collapsible tree on the left, tabbed iframes on the right. README opens in the initial tab; markdown renders with frontmatter highlighted, `*.html` files get an eye icon to render in-place, and the terminal icon in the header opens a side-by-side `Develop` pane:
+
+![Two-pane viewer](docs/img/viewer.png)
+
 ## Quickstart
 
 ```bash

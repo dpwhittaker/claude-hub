@@ -42,6 +42,11 @@ files:
 - `services/ttyd-attach.sh` — joins/creates tmux session, runs `claude --continue` ?
 - `services/vite@.service` — templated per-project Vite dev server. `ExecStart=npm run dev`, `WorkingDirectory=~/projects/%i`. enabled on Vite-template bootstrap.
 - `templates/vite/` — scaffold source (`package.json`, `vite.config.ts`, `index.html`, `tsconfig.json`, `src/main.tsx`, `src/App.tsx`, `.gitignore`). copied into project on create. `<NAME>` & `<PORT>` placeholders replaced.
+- `lib/tab-key.js` — single-source `tabKey(p, mode)`. server inlines via `.toString()` into client template.
+- `lib/port-alloc.js` — `allocatePort(projectsRoot)` scans sibling `.project-meta.json` for free port ≥ 5173.
+- `lib/template.js` — `replaceVars` + `copyTemplate` for scaffold copy w/ `<KEY>` substitution.
+- `eslint.config.js` — flat config (`@eslint/js` recommended + node globals).
+- `.github/workflows/ci.yml` — push/PR trigger; `npm ci` + `npm run lint` + `npm test` on Node 22.
 - `<project>/.project-meta.json` — sentinel. fields: `name, createdAt, openUrl?, proxyTarget?, proxyPrefix?, stripPrefix?, extraUnits?, template?`
 - `<project>/README.md` — H1 = card title, first para = description, frontmatter `tags: [...]` = badges
 - `<project>/AGENTS.md` — agent context (per project)
@@ -52,6 +57,13 @@ env:
 - `PROJECTS_ROOT` (default `~/projects`)
 - `CLAUDE_BIN` (default `~/.local/bin/claude`)
 - `TTYD_BIN` (default `ttyd`)
+- `GIT_AUTHOR_NAME` (optional; passed as `git -c user.name=...` during `bootstrapCreateRepo` / `ghInitPush`. empty = let git use global config)
+- `GIT_AUTHOR_EMAIL` (optional; same)
+
+module exports (test surface, not public API):
+- `server` — `http.Server` instance, lazy-listened (guard: `require.main === module`)
+- `PROJECT_ID_RE`, `RESERVED_PROJECT_NAMES` — name validation primitives
+- `projectWatchers` — `Map<project, { watcher, clients, pending, dimRefresh }>`. tests probe `.has(project)` for teardown checks.
 
 ## §V INVARIANTS
 
