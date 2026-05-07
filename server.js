@@ -29,14 +29,18 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile, execFileSync, spawn } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const httpProxy = require('http-proxy');
 const { marked } = require('marked');
 const { WebSocketServer } = require('ws');
 const { tabKey } = require('./lib/tab-key');
 const { allocatePort } = require('./lib/port-alloc');
 const { copyTemplate } = require('./lib/template');
-const { makeGhRepos } = require('./lib/gh-repos');
+const { makeGhRepos, filterReposByFolders } = require('./lib/gh-repos');
+const { PROJECT_ID_RE, RESERVED_PROJECT_NAMES } = require('./lib/project-name');
+const { writeBootstrapPrompt } = require('./lib/bootstrap-prompt');
+const { effectiveTemplate } = require('./lib/template-policy');
+const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 
 const PORT = Number(process.env.PROXY_PORT) || 8002;
 const LANDING_PATH = path.join(__dirname, 'landing.html');
@@ -82,140 +86,37 @@ function refreshStaticRoutes() {
   STATIC_ROUTES = buildStaticRoutes();
 }
 
-// ---------- ttyd process manager ----------
-// claude-hub spawns ttyd as a child process per terminal "key" (project name,
-// or 'develop' / 'wsl' for the admin terminals). Lazy: a key's ttyd is
-// spawned the first time /term/<key>/ is requested, then the unix socket is
-// reused for all subsequent connections to that key. Children are reaped on
-// SIGTERM/SIGINT — the underlying tmux server (and per-project sessions)
-// runs separately, so a claude-hub restart only kills the browser
-// connection, not the user's claude conversation.
-const TTYD_BIN = process.env.TTYD_BIN || 'ttyd';
+// ---------- ttyd routing ----------
+// Each terminal "key" (project name, or 'develop' / 'wsl' for the admin
+// terminals) is served by a systemd-managed ttyd unit that binds a unix
+// socket under /run/ttyd/. SPEC §V.13, §V.36 — claude-hub never spawns ttyd
+// itself; it just proxies /term/<key>/ to the systemd-bound socket.
+//   - ttyd@<name>.service      → /run/ttyd/<name>.sock     (per project)
+//   - ttyd-develop.service     → /run/ttyd/develop.sock    (admin: fresh claude)
+//   - ttyd-wsl.service         → /run/ttyd/wsl.sock        (admin: raw bash)
 const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local', 'bin', 'claude');
-const ATTACH_SCRIPT = path.join(__dirname, 'services', 'ttyd-attach.sh');
-
-const TTYD_SOCKET_DIR = (() => {
-  const uid = process.getuid?.() ?? 'user';
-  // Prefer XDG_RUNTIME_DIR (auto-cleaned on logout) when set and writable;
-  // otherwise fall back to /tmp where we own the path.
-  const candidates = [process.env.XDG_RUNTIME_DIR, '/tmp'].filter(Boolean);
-  let base = '/tmp';
-  for (const c of candidates) {
-    try { fs.accessSync(c, fs.constants.W_OK); base = c; break; } catch {}
-  }
-  const dir = path.join(base, `claude-hub-${uid}-sockets`);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  // KillMode=process on the systemd unit lets ttyd subprocesses (and the
-  // tmux servers they forked) survive a `systemctl restart`. Their sockets
-  // remain bound by the orphan ttyd procs — but the *paths* are stale, and
-  // a fresh ttyd can rebind once the path is unlinked. Clear the dir on
-  // startup so the next /term/<name>/ hit gets a clean rebind. Orphan
-  // ttyds become unreachable (path gone) but the tmux session inside their
-  // attach chain is already daemonized and keeps running until a new
-  // /term/<name>/ visit reconnects.
-  try {
-    for (const f of fs.readdirSync(dir)) {
-      if (f.endsWith('.sock')) {
-        try { fs.unlinkSync(path.join(dir, f)); } catch {}
-      }
-    }
-  } catch {}
-  return dir;
-})();
+const TTYD_RUNTIME_DIR = '/run/ttyd';
 
 const TERM_KEY_RE = /^[A-Za-z0-9_.-]+$/;
-const ttydProcs = new Map(); // termKey → { proc, sockPath }
-let ttydShuttingDown = false;
 
-// Returns { cmd, args, cwd } for spawning the ttyd child for this terminal
-// key, or null if the key isn't valid.
-function ttydSpec(termKey) {
+function ttydSocketPath(termKey) {
   if (!TERM_KEY_RE.test(termKey) || termKey === '.' || termKey === '..') return null;
-  if (termKey === 'develop') {
-    return { cmd: CLAUDE_BIN, args: ['--chrome'], cwd: PROJECTS_ROOT };
-  }
-  if (termKey === 'wsl') {
-    return { cmd: '/bin/bash', args: ['-l'], cwd: process.env.HOME || '/' };
-  }
-  const projectDir = path.join(PROJECTS_ROOT, termKey);
-  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) return null;
-  return { cmd: ATTACH_SCRIPT, args: [termKey], cwd: projectDir };
+  return path.join(TTYD_RUNTIME_DIR, `${termKey}.sock`);
 }
 
-async function ensureTtyd(termKey) {
-  if (ttydShuttingDown) return null;
-  const existing = ttydProcs.get(termKey);
-  if (existing && existing.proc.exitCode == null && existing.proc.signalCode == null) {
-    return existing.sockPath;
-  }
-  const spec = ttydSpec(termKey);
-  if (!spec) return null;
-  const sockPath = path.join(TTYD_SOCKET_DIR, `${termKey}.sock`);
-  // Stale socket from a previous run / crash.
-  try { fs.unlinkSync(sockPath); } catch {}
-
-  const args = [
-    '-i', sockPath,
-    '-W',
-    '-b', `/term/${termKey}`,
-    '-t', `titleFixed=${termKey}`,
-    '-t', 'disableLeaveAlert=true',
-    spec.cmd,
-    ...spec.args,
-  ];
-  const proc = spawn(TTYD_BIN, args, { cwd: spec.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-  proc.stdout.on('data', (d) => process.stdout.write(`[ttyd:${termKey}] ${d}`));
-  proc.stderr.on('data', (d) => process.stderr.write(`[ttyd:${termKey}] ${d}`));
-  proc.on('exit', (code, signal) => {
-    if (!ttydShuttingDown) {
-      console.log(`[ttyd:${termKey}] exited code=${code} signal=${signal}`);
-    }
-    if (ttydProcs.get(termKey)?.proc === proc) ttydProcs.delete(termKey);
-    try { fs.unlinkSync(sockPath); } catch {}
-  });
-  ttydProcs.set(termKey, { proc, sockPath });
-  const ok = await waitForSocket(sockPath, 5000);
-  if (!ok) {
-    proc.kill('SIGTERM');
-    ttydProcs.delete(termKey);
-    return null;
-  }
-  return sockPath;
-}
-
-function killTtyd(termKey) {
-  const entry = ttydProcs.get(termKey);
-  if (!entry) return false;
-  entry.proc.kill('SIGTERM');
-  ttydProcs.delete(termKey);
-  return true;
-}
-
-function shutdownAllTtyd() {
-  ttydShuttingDown = true;
-  for (const [, { proc }] of ttydProcs) {
-    try { proc.kill('SIGTERM'); } catch {}
-  }
-  ttydProcs.clear();
-}
-
-// On systemd-issued SIGTERM (claude-hub.service has KillMode=process), we
-// deliberately DO NOT kill the ttyd children — they hold the user's tmux
-// claude sessions. Just exit; init reparents the orphans and the next
-// startup unlinks stale sockets so fresh ttyds can rebind. SIGINT (from
-// running by hand and Ctrl-C) keeps the original "tear it all down"
-// behaviour because that's the explicit "I want to clean up" gesture.
-process.once('SIGTERM', () => { process.exit(0); });
-process.once('SIGINT',  () => { shutdownAllTtyd(); process.exit(0); });
-
-// Lazy-spawn lookup for /term/<key>/. Returns a route object once the ttyd
-// child is running with its socket bound, or null if we couldn't start it.
-async function findTermRoute(url) {
+// Synchronous lookup for /term/<key>/. Returns a route object pointing at
+// the systemd-managed socket if it's bound; null otherwise.
+function findTermRoute(url) {
   const m = /^\/term\/([A-Za-z0-9_.-]+)(?=\/|\?|$)/.exec(url);
   if (!m) return null;
   const name = m[1];
-  const sockPath = await ensureTtyd(name);
+  const sockPath = ttydSocketPath(name);
   if (!sockPath) return null;
+  try {
+    if (!fs.statSync(sockPath).isSocket()) return null;
+  } catch {
+    return null;
+  }
   return { prefix: `/term/${name}`, socketPath: sockPath, stripPrefix: false };
 }
 
@@ -244,13 +145,10 @@ function findStaticRoute(url) {
   return null;
 }
 
-// Resolves /term/<key>/ asynchronously — spawning ttyd lazily — while
-// keeping static ROUTES lookup synchronous (avoids needless awaits on every
-// hit to /, /api/*, /view/*, etc.).
-async function findRoute(url) {
+function findRoute(url) {
   const r = findStaticRoute(url);
   if (r) return r;
-  return await findTermRoute(url);
+  return findTermRoute(url);
 }
 
 function rewriteUrl(req, route) {
@@ -546,7 +444,14 @@ function handleDeleteProject(req, res, name) {
   }
 
   (async () => {
-    killTtyd(name);
+    // Every managed project runs a systemd-managed ttyd@<name>.service per
+    // V13/V36; tear it down unconditionally before touching extraUnits or
+    // the project directory.
+    try {
+      await execFileP('sudo', ['-n', 'systemctl', 'disable', '--now', `ttyd@${name}.service`], { timeout: 30000 });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'systemctl disable failed for ttyd@: ' + e.message });
+    }
     if (extraUnits.length > 0) {
       try {
         await execFileP('sudo', ['-n', 'systemctl', 'disable', '--now', ...extraUnits], { timeout: 30000 });
@@ -590,13 +495,6 @@ function listProjectFolderNames() {
   }
 }
 
-function filterReposByFolders(repos, folders) {
-  return repos.filter((r) => {
-    const basename = String(r && r.nameWithOwner || '').split('/').pop();
-    return basename && !folders.has(basename);
-  });
-}
-
 async function handleGhRepos(req, res) {
   try {
     const repos = await ghRepos.list();
@@ -617,23 +515,6 @@ function execFileP(cmd, args, opts) {
       resolve({ stdout, stderr });
     });
   });
-}
-
-// First-attach prompt that ttyd-attach.sh sends to the new claude session.
-// Two flavors:
-//   - 'greenfield' (skip / create + scaffold): claude greets, asks the
-//     classic "what should we build here?" — stock fresh-project flow.
-//   - 'scan-existing' (clone): claude reads the cloned tree and writes
-//     whichever of AGENTS.md / README.md is missing per V30, leaving any
-//     pre-existing copy untouched per V29.
-function writeBootstrapPrompt(dir, name, flavor) {
-  const greenfield = `Read AGENTS.md and README.md in this directory, then briefly greet me and ask what I want to build here. Once we agree on the project, update README.md — rewrite the H1 (card title), rewrite the first paragraph (one-sentence card description), and set the 'tags: [...]' frontmatter to short tags like 'Game', 'Tool', 'API', 'Library', or 'Service' plus a status flag like 'WIP' or 'Stable'. The landing page reads all three from README.`;
-  const scanExisting = `This is the freshly cloned project "${name}". Walk the tree (skip node_modules/, .git/, dist/, build/, .next/, .cache/) and figure out what it is. Then write whichever of these files is missing — never overwrite an existing one:\n\n` +
-    `- README.md (human-facing): YAML frontmatter \`tags: [...]\` with two or three short tags (Game / Tool / API / Library / Service / etc., plus WIP or Stable). Then an H1 with the project's name. Then one paragraph that answers "what is this and why does it exist" the way you'd tell a stranger. The claude-hub landing page reads the H1, the first paragraph, and the tags into a card.\n` +
-    `- AGENTS.md (agent-facing): tech stack, conventions, directory layout, debugging signposts ("if X breaks, look in Y"). Cite real file paths. Keep it terse — this is the doc future agents will read before touching the code.\n\n` +
-    `When you're done, briefly summarize what you found and ask what I'd like to work on first.`;
-  const text = flavor === 'scan-existing' ? scanExisting : greenfield;
-  fs.writeFileSync(path.join(dir, '.claude-bootstrap.txt'), text + '\n');
 }
 
 async function bootstrapNoGithub(dir, name) {
@@ -747,64 +628,8 @@ async function bootstrapVite(dir, name) {
   return port;
 }
 
-// Cloning brings the repo's own structure; the Vite scaffolder would
-// smear template files over it. Force `template = 'none'` on clone so the
-// cloned tree stays intact and claude bootstraps docs against it (V29).
-// Onboard adopts an existing tree the same way — never scaffold (V36).
-function effectiveTemplate(body) {
-  const ghMode = (body && body.github && body.github.mode) || 'skip';
-  if (ghMode === 'clone' || ghMode === 'onboard') return 'none';
-  return body && body.template === 'none' ? 'none' : 'vite';
-}
-
-// Adopt an existing folder under PROJECTS_ROOT as a managed project. Stamps
-// the sentinel + writes the scan-existing bootstrap prompt; never overwrites
-// any pre-existing file in the tree (V36).
-async function bootstrapOnboard(dir, name) {
-  let st;
-  try { st = fs.statSync(dir); } catch { st = null; }
-  if (!st || !st.isDirectory()) {
-    const err = new Error('folder not found under PROJECTS_ROOT');
-    err.statusCode = 404;
-    throw err;
-  }
-  const metaPath = path.join(dir, '.project-meta.json');
-  if (fs.existsSync(metaPath)) {
-    const err = new Error('project already managed (.project-meta.json exists)');
-    err.statusCode = 409;
-    throw err;
-  }
-  fs.writeFileSync(
-    metaPath,
-    JSON.stringify({ name, createdAt: new Date().toISOString() }, null, 2) + '\n',
-  );
-  writeBootstrapPrompt(dir, name, 'scan-existing');
-}
-
-// Folders under PROJECTS_ROOT that exist but lack the sentinel — i.e.
-// candidates the user could adopt via the onboard flow (V36, V37).
-function listOrphanFolderNames() {
-  let entries;
-  try {
-    entries = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const out = [];
-  for (const e of entries) {
-    if (!e.isDirectory() || e.name.startsWith('.')) continue;
-    if (!PROJECT_ID_RE.test(e.name)) continue;
-    if (RESERVED_PROJECT_NAMES.has(e.name)) continue;
-    const meta = path.join(PROJECTS_ROOT, e.name, '.project-meta.json');
-    if (fs.existsSync(meta)) continue;
-    out.push(e.name);
-  }
-  out.sort();
-  return out;
-}
-
 function handleListOrphans(_req, res) {
-  sendJson(res, 200, { folders: listOrphanFolderNames() });
+  sendJson(res, 200, { folders: listOrphanFolderNames(PROJECTS_ROOT) });
 }
 
 function handleCreateProject(req, res) {
@@ -864,13 +689,19 @@ function handleCreateProject(req, res) {
       return sendJson(res, status, { error: e.message });
     }
 
-    // ttyd is now spawned lazily by claude-hub on first hit to /term/<name>/.
-    // Pre-warm it here so the user can click Open immediately without
-    // waiting for the first-spawn round-trip.
-    const sock = await ensureTtyd(name);
-    if (!sock) {
+    // V13/V36: every project gets a systemd-managed ttyd@<name>.service.
+    // Enable + start, then wait for /run/ttyd/<name>.sock to appear so the
+    // first /term/<name>/ proxy hit doesn't race the unit's binding.
+    try {
+      await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', `ttyd@${name}.service`], { timeout: 30000 });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'systemctl enable ttyd@ failed: ' + e.message });
+    }
+    const sockPath = ttydSocketPath(name);
+    const sockBound = await waitForSocket(sockPath, 5000);
+    if (!sockBound) {
       return sendJson(res, 500, {
-        error: `ttyd failed to start for ${name}; check the claude-hub log (likely a missing ${TTYD_BIN} binary or unreadable project dir)`,
+        error: `ttyd@${name}.service started but /run/ttyd/${name}.sock did not appear within 5s`,
       });
     }
     refreshStaticRoutes();
@@ -903,14 +734,6 @@ const PROJECTS_ROOT = process.env.PROJECTS_ROOT || path.join(process.env.HOME ||
 // scripts inherit the same values (no per-spawn env wiring needed).
 process.env.PROJECTS_ROOT = PROJECTS_ROOT;
 process.env.CLAUDE_BIN = CLAUDE_BIN;
-const PROJECT_ID_RE = /^[A-Za-z0-9_.-]+$/;
-// Reserved against folder names that would collide with hub-level routes.
-// Per-project proxy prefixes are declared in .project-meta.json, so any
-// project-specific name conflicts surface there via that file's own
-// `proxyPrefix`, not here.
-const RESERVED_PROJECT_NAMES = new Set([
-  'develop', 'wsl', 'view', 'term', 'api',
-]);
 
 function isViewableProject(name) {
   if (!PROJECT_ID_RE.test(name)) return false;
@@ -2385,7 +2208,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const route = await findRoute(url);
+  const route = findRoute(url);
   if (!route) {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('Not found. Try /, /api/projects, /view/<project>/, or /term/<project>/.');
@@ -2417,7 +2240,7 @@ server.on('upgrade', async (req, socket, head) => {
     return;
   }
 
-  const route = await findRoute(url);
+  const route = findRoute(url);
   if (!route) {
     socket.destroy();
     return;
@@ -2440,4 +2263,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES, projectWatchers, effectiveTemplate, writeBootstrapPrompt, filterReposByFolders, bootstrapOnboard, listOrphanFolderNames };
+module.exports = { server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES, projectWatchers };

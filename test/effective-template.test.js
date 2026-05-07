@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { effectiveTemplate } = require('../server');
+const { effectiveTemplate } = require('../lib/template-policy');
 
 test('default = vite when no template + no github', () => {
   assert.equal(effectiveTemplate({}), 'vite');

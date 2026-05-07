@@ -160,6 +160,9 @@ module exports (test surface, not public API):
 | T41 | x | landing.html: Onboard option populates select from `/api/projects/orphans`; disabled w/ hint when empty | V37 |
 | T42 | x | tests: orphan listing + onboard happy path + 409 / 404 errors | V36,V37 |
 | T43 | x | gh-repos sort: non-forks first then forks, updatedAt desc within group | V32 |
+| T44 | x | rip lazy in-process ttyd. project create runs `sudo -n systemctl enable --now ttyd@<name>.service`; delete unconditionally disables it. /term/<key>/ proxies `unix:/run/ttyd/<key>.sock` directly. develop+wsl admin units enabled at install time | V13,V36,I.routes |
+| T45 | x | move test-only helpers out of `server.js` exports: `effectiveTemplate`, `writeBootstrapPrompt`, `filterReposByFolders`, `bootstrapOnboard`, `listOrphanFolderNames` → dedicated `lib/*.js` modules. tests import from `lib/`. server.js exports stay at `{server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES, projectWatchers}` | I.exports |
+| T46 | x | landing.html onboard hint = exact spec string `"no orphan folders under ~/projects"` | V37 |
 
 ## §B BUGS
 

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { writeBootstrapPrompt } = require('../server');
+const { writeBootstrapPrompt } = require('../lib/bootstrap-prompt');
 
 function scratch() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-prompt-'));

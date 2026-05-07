@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { filterReposByFolders } = require('../server');
+const { filterReposByFolders } = require('../lib/gh-repos');
 
 function repos(...nwos) {
   return nwos.map((nameWithOwner) => ({ nameWithOwner }));
