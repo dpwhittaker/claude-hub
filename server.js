@@ -576,10 +576,31 @@ const GIT_AUTHOR_EMAIL = process.env.GIT_AUTHOR_EMAIL || '';
 // `gh repo list` cache for the create-project dialog dropdown. See V32.
 const ghRepos = makeGhRepos({ exec: (cmd, args) => execFileP(cmd, args, { timeout: 15000 }) });
 
+// Existing folder names under PROJECTS_ROOT (managed or not, hidden excluded).
+// Used to suppress already-cloned/already-imported repos from the dialog.
+function listProjectFolderNames() {
+  try {
+    return new Set(
+      fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+        .map((e) => e.name),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function filterReposByFolders(repos, folders) {
+  return repos.filter((r) => {
+    const basename = String(r && r.nameWithOwner || '').split('/').pop();
+    return basename && !folders.has(basename);
+  });
+}
+
 async function handleGhRepos(req, res) {
   try {
     const repos = await ghRepos.list();
-    sendJson(res, 200, { repos });
+    sendJson(res, 200, { repos: filterReposByFolders(repos, listProjectFolderNames()) });
   } catch (e) {
     sendJson(res, 503, { error: 'gh repo list failed: ' + e.message });
   }
@@ -729,10 +750,61 @@ async function bootstrapVite(dir, name) {
 // Cloning brings the repo's own structure; the Vite scaffolder would
 // smear template files over it. Force `template = 'none'` on clone so the
 // cloned tree stays intact and claude bootstraps docs against it (V29).
+// Onboard adopts an existing tree the same way — never scaffold (V36).
 function effectiveTemplate(body) {
   const ghMode = (body && body.github && body.github.mode) || 'skip';
-  if (ghMode === 'clone') return 'none';
+  if (ghMode === 'clone' || ghMode === 'onboard') return 'none';
   return body && body.template === 'none' ? 'none' : 'vite';
+}
+
+// Adopt an existing folder under PROJECTS_ROOT as a managed project. Stamps
+// the sentinel + writes the scan-existing bootstrap prompt; never overwrites
+// any pre-existing file in the tree (V36).
+async function bootstrapOnboard(dir, name) {
+  let st;
+  try { st = fs.statSync(dir); } catch { st = null; }
+  if (!st || !st.isDirectory()) {
+    const err = new Error('folder not found under PROJECTS_ROOT');
+    err.statusCode = 404;
+    throw err;
+  }
+  const metaPath = path.join(dir, '.project-meta.json');
+  if (fs.existsSync(metaPath)) {
+    const err = new Error('project already managed (.project-meta.json exists)');
+    err.statusCode = 409;
+    throw err;
+  }
+  fs.writeFileSync(
+    metaPath,
+    JSON.stringify({ name, createdAt: new Date().toISOString() }, null, 2) + '\n',
+  );
+  writeBootstrapPrompt(dir, name, 'scan-existing');
+}
+
+// Folders under PROJECTS_ROOT that exist but lack the sentinel — i.e.
+// candidates the user could adopt via the onboard flow (V36, V37).
+function listOrphanFolderNames() {
+  let entries;
+  try {
+    entries = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith('.')) continue;
+    if (!PROJECT_ID_RE.test(e.name)) continue;
+    if (RESERVED_PROJECT_NAMES.has(e.name)) continue;
+    const meta = path.join(PROJECTS_ROOT, e.name, '.project-meta.json');
+    if (fs.existsSync(meta)) continue;
+    out.push(e.name);
+  }
+  out.sort();
+  return out;
+}
+
+function handleListOrphans(_req, res) {
+  sendJson(res, 200, { folders: listOrphanFolderNames() });
 }
 
 function handleCreateProject(req, res) {
@@ -750,14 +822,18 @@ function handleCreateProject(req, res) {
       return sendJson(res, 400, { error: `"${name}" is a reserved name` });
     }
     const dir = path.join(PROJECTS_ROOT, name);
-    if (fs.existsSync(dir)) {
+    const gh = body.github || { mode: 'skip' };
+    // Onboard adopts an existing folder, so its 404/409 logic lives in
+    // bootstrapOnboard. Every other mode requires `dir` not yet exist.
+    if (gh.mode !== 'onboard' && fs.existsSync(dir)) {
       return sendJson(res, 409, { error: 'project already exists' });
     }
 
-    const gh = body.github || { mode: 'skip' };
     const template = effectiveTemplate(body);
     try {
-      if (gh.mode === 'clone') {
+      if (gh.mode === 'onboard') {
+        await bootstrapOnboard(dir, name);
+      } else if (gh.mode === 'clone') {
         // Cloned repos bring their own structure; ignore the template field.
         const source = String(gh.source || '').trim();
         if (!source) return sendJson(res, 400, { error: 'github.source required for clone' });
@@ -784,7 +860,8 @@ function handleCreateProject(req, res) {
         else await bootstrapNoGithub(dir, name);
       }
     } catch (e) {
-      return sendJson(res, 500, { error: e.message });
+      const status = Number.isInteger(e && e.statusCode) ? e.statusCode : 500;
+      return sendJson(res, status, { error: e.message });
     }
 
     // ttyd is now spawned lazily by claude-hub on first hit to /term/<name>/.
@@ -2253,6 +2330,12 @@ const server = http.createServer(async (req, res) => {
     res.end('method not allowed');
     return;
   }
+  if (apiPath === '/api/projects/orphans') {
+    if (req.method === 'GET') return handleListOrphans(req, res);
+    res.writeHead(405, { 'Content-Type': 'text/plain' });
+    res.end('method not allowed');
+    return;
+  }
   const projectMatch = /^\/api\/projects\/([^/]+)$/.exec(apiPath);
   if (projectMatch) {
     const name = projectMatch[1];
@@ -2357,4 +2440,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES, projectWatchers, effectiveTemplate, writeBootstrapPrompt };
+module.exports = { server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES, projectWatchers, effectiveTemplate, writeBootstrapPrompt, filterReposByFolders, bootstrapOnboard, listOrphanFolderNames };

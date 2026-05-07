@@ -328,13 +328,18 @@
       </label>
       <div class="field"><span>GitHub</span>
         <div class="gh-group">
-          <label class="gh-row"><input type="radio" name="gh-mode" value="skip" checked>Skip GitHub for now</label>
-          <label class="gh-row"><input type="radio" name="gh-mode" value="clone">Clone existing repo</label>
+          <label class="gh-row"><input type="radio" name="gh-mode" value="clone" checked>Clone existing repo</label>
           <div class="gh-sub" data-for="clone">
             <select id="cd-clone-select" hidden></select>
             <input type="text" id="cd-clone-source" placeholder="loading repos…" autocomplete="off" disabled>
             <div class="hint" id="cd-clone-hint">Cloning someone else's repo? Fork it on GitHub first, then it'll show up here.</div>
           </div>
+          <label class="gh-row"><input type="radio" name="gh-mode" value="onboard" id="cd-onboard-radio">Onboard existing folder</label>
+          <div class="gh-sub" data-for="onboard">
+            <select id="cd-onboard-select"></select>
+            <div class="hint" id="cd-onboard-hint">Folders under <code>~/projects</code> without a <code>.project-meta.json</code>.</div>
+          </div>
+          <label class="gh-row"><input type="radio" name="gh-mode" value="skip">Skip GitHub for now</label>
           <label class="gh-row"><input type="radio" name="gh-mode" value="create">Create new GitHub repo</label>
           <div class="gh-sub" data-for="create">
             <label class="inline"><input type="radio" name="cd-vis" value="private" checked>Private</label>
@@ -347,7 +352,6 @@
           <label class="gh-row"><input type="radio" name="cd-template" value="vite" checked>Vite (React + TypeScript)</label>
           <label class="gh-row"><input type="radio" name="cd-template" value="none">None (bare AGENTS.md + README.md only)</label>
         </div>
-        <div class="hint" id="cd-template-hint">Cloning brings the existing project's structure as-is — template is skipped.</div>
       </div>
       <div class="err" id="cd-err"></div>
       <div class="buttons">
@@ -459,6 +463,9 @@
     const dlgName = document.getElementById('cd-name');
     const dlgCloneSrc = document.getElementById('cd-clone-source');
     const dlgCloneSelect = document.getElementById('cd-clone-select');
+    const dlgOnboardSelect = document.getElementById('cd-onboard-select');
+    const dlgOnboardRadio = document.getElementById('cd-onboard-radio');
+    const dlgOnboardHint = document.getElementById('cd-onboard-hint');
     const dlgErr = document.getElementById('cd-err');
     const dlgSubmit = document.getElementById('cd-submit');
     const dlgCancel = document.getElementById('cd-cancel');
@@ -469,19 +476,52 @@
       for (const sub of dlgForm.querySelectorAll('.gh-sub')) {
         sub.classList.toggle('visible', sub.dataset.for === mode);
       }
-      // Cloning brings the repo's own structure — disable the template
-      // fieldset so the user can't ask for a Vite scaffold on top of it.
-      const cloning = mode === 'clone';
-      dlgTemplateField.classList.toggle('disabled', cloning);
-      for (const r of dlgForm.querySelectorAll('input[name="cd-template"]')) {
-        r.disabled = cloning;
-      }
+      // Clone + onboard adopt an existing tree — template scaffold doesn't
+      // apply, so hide the whole fieldset (V33, V35).
+      const noTemplate = mode === 'clone' || mode === 'onboard';
+      dlgTemplateField.style.display = noTemplate ? 'none' : '';
     }
     for (const r of dlgForm.querySelectorAll('input[name="gh-mode"]')) {
       r.addEventListener('change', syncGhSubs);
     }
 
     dlgCancel.addEventListener('click', () => dlg.close());
+
+    // Populate the onboard <select> from /api/projects/orphans. Empty list
+    // disables the radio and shows a hint (V37).
+    async function loadOrphans() {
+      try {
+        const r = await fetch('/api/projects/orphans');
+        const data = await r.json();
+        const folders = Array.isArray(data && data.folders) ? data.folders : [];
+        dlgOnboardSelect.innerHTML = '';
+        if (folders.length === 0) {
+          dlgOnboardRadio.disabled = true;
+          dlgOnboardHint.textContent = 'No orphan folders under ~/projects.';
+          return;
+        }
+        dlgOnboardRadio.disabled = false;
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = '— pick a folder —';
+        dlgOnboardSelect.appendChild(blank);
+        for (const f of folders) {
+          const opt = document.createElement('option');
+          opt.value = f;
+          opt.textContent = f;
+          dlgOnboardSelect.appendChild(opt);
+        }
+      } catch (e) {
+        dlgOnboardRadio.disabled = true;
+        dlgOnboardHint.textContent = 'Could not load orphan folders.';
+      }
+    }
+    // Auto-fill the project-name field when an orphan is picked, so the user
+    // can't accidentally type a name that doesn't match the folder (the
+    // server enforces this — V36 — but the UX nudge avoids the round trip).
+    dlgOnboardSelect.addEventListener('change', () => {
+      if (dlgOnboardSelect.value) dlgName.value = dlgOnboardSelect.value;
+    });
 
     // Populate the clone-source <select> from /api/gh/repos. On any
     // failure (gh not authenticated, network blip, empty result) fall back
@@ -528,10 +568,12 @@
       dlgErr.textContent = '';
       // The reset() call wiped the select's value; pick blank by default.
       if (dlgCloneSelect.options.length > 0) dlgCloneSelect.selectedIndex = 0;
+      if (dlgOnboardSelect.options.length > 0) dlgOnboardSelect.selectedIndex = 0;
       syncGhSubs();
       dlg.showModal();
       setTimeout(() => dlgName.focus(), 0);
       loadGhRepos();
+      loadOrphans();
     });
 
     dlgForm.addEventListener('submit', async (ev) => {
@@ -561,6 +603,17 @@
           return;
         }
         payload.github = { mode: 'clone', source };
+      } else if (mode === 'onboard') {
+        const folder = dlgOnboardSelect.value;
+        if (!folder) {
+          dlgErr.textContent = 'Pick a folder to onboard.';
+          return;
+        }
+        if (folder !== name) {
+          dlgErr.textContent = 'Project name must match the folder ("' + folder + '").';
+          return;
+        }
+        payload.github = { mode: 'onboard' };
       } else if (mode === 'create') {
         const visibility = dlgForm.querySelector('input[name="cd-vis"]:checked').value;
         payload.github = { mode: 'create', visibility };
@@ -572,7 +625,9 @@
       dlgCancel.disabled = true;
       const prevLabel = dlgSubmit.textContent;
       dlgSubmit.textContent = mode === 'skip' ? 'Creating…'
-        : mode === 'clone' ? 'Cloning…' : 'Setting up GitHub…';
+        : mode === 'clone' ? 'Cloning…'
+        : mode === 'onboard' ? 'Onboarding…'
+        : 'Setting up GitHub…';
       try {
         const r = await fetch('/api/projects', {
           method: 'POST',

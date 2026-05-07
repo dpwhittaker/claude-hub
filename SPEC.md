@@ -25,8 +25,8 @@ path-routed reverse proxy + landing page. one local port → multi-project hub. 
 routes (proxy):
 - `GET /` → `landing.html`
 - `GET /api/projects` → `{projects: [...]}`
-- `POST /api/projects` body `{name, github?: {mode: skip|clone|create, source?, visibility?}, template?: 'vite'|'none'}` → `{ok, project}` (default `template: 'vite'`; **forced to `'none'` when `github.mode === 'clone'`**)
-- landing dialog field order: Project name → GitHub → Template. Template fieldset disabled (radios + visual fade) when GitHub = clone.
+- `POST /api/projects` body `{name, github?: {mode: skip|clone|create|onboard, source?, visibility?}, template?: 'vite'|'none'}` → `{ok, project}` (default `template: 'vite'`; **forced to `'none'` when `github.mode ∈ {clone, onboard}`**). `mode: 'onboard'` adopts an existing folder under `PROJECTS_ROOT` named `name`, stamps the sentinel, writes scan-existing bootstrap prompt, enables `ttyd@<name>.service`. ⊥ clone, ⊥ scaffold.
+- landing dialog field order: Project name → GitHub → Template. GitHub radio order: Clone (default) → Onboard existing folder → Skip → Create. Template fieldset hidden (display:none) when GitHub mode ∈ {clone, onboard}; visible for skip/create.
 - `DELETE /api/projects/<name>` → stop `ttyd@<name>` + `extraUnits`, kill tmux, rm folder
 - `GET /api/view-tree/<proj>` → `{project, tree}`. `?path=<sub>` → one-level lazy `{project, path, entries}`
 - `GET /view/<proj>/` → two-pane shell
@@ -35,7 +35,8 @@ routes (proxy):
 - `GET /term/develop/`, `GET /term/wsl/` → admin terms
 - `GET|*  /<proj>/*` → reverse-proxy if `.project-meta.json` declares `proxyTarget`
 - `WS /ws/view-tree/<proj>` → live tree updates `{type: add|delete|change, path, kind?}`
-- `GET /api/gh/repos` → `{repos: [{nameWithOwner, description, isFork, isPrivate, updatedAt}]}`. sorted `updatedAt` desc. 503 on `gh` failure. cached in-process, 10 min TTL.
+- `GET /api/gh/repos` → `{repos: [{nameWithOwner, description, isFork, isPrivate, updatedAt}]}`. sorted `updatedAt` desc. 503 on `gh` failure. cached in-process, 10 min TTL. response excludes candidates whose basename matches an existing folder under `PROJECTS_ROOT` (managed or not).
+- `GET /api/projects/orphans` → `{folders: [string]}`. dirs under `PROJECTS_ROOT` that exist but lack `.project-meta.json` and don't start with `.`.
 
 files:
 - `services/claude-hub.service` — proxy unit
@@ -105,9 +106,12 @@ module exports (test surface, not public API):
   - **scan-existing** (clone path): Claude reads tree, drafts missing docs.
   - **greenfield** (skip / create + vite or none): Claude greets, asks "what should we build here?".
   bootstrapper writes branch-specific prompt to `<project>/.claude-bootstrap.txt`; `ttyd-attach.sh` `tmux send-keys` reads & sends, then deletes.
-- V32: `/api/gh/repos` runs `gh repo list --json nameWithOwner,description,isFork,isPrivate,updatedAt --limit 200`. result cached in-process w/ ≤ 10 min TTL. ⊥ shell-out per dialog open.
-- V33: dialog clone-source is a `<select>` populated async from `/api/gh/repos`. on fetch failure / empty / timeout → fall back to free-text `<input>`. ⊥ block dialog while waiting.
+- V32: `/api/gh/repos` runs `gh repo list --json nameWithOwner,description,isFork,isPrivate,updatedAt --limit 200`. result cached in-process w/ ≤ 10 min TTL. ⊥ shell-out per dialog open. response excludes any candidate whose basename matches an existing folder under `PROJECTS_ROOT` (managed or not).
+- V33: dialog clone-source is a `<select>` populated async from `/api/gh/repos`. on fetch failure / empty / timeout → fall back to free-text `<input>`. ⊥ block dialog while waiting. Template fieldset hidden (display:none) when GitHub mode ∈ {clone, onboard} — not faded.
 - V34: cloning another user's repo = fork on github.com first, pick the fork from the dropdown. arbitrary-URL clone still possible via direct `POST /api/projects` w/ `source: 'owner/repo'` (power-user flow), but not via the dialog.
+- V35: Clone is the default GitHub mode in the create dialog. Default dialog open state → Template fieldset hidden.
+- V36: `github.mode === 'onboard'` adopts an existing folder under `PROJECTS_ROOT`. Stamps sentinel `.project-meta.json` w/ `name + createdAt` only (no `github`, no `template`). Writes scan-existing bootstrap prompt. Enables `ttyd@<name>.service`. 409 if `.project-meta.json` already exists. 404 if folder missing. ⊥ overwrite of any existing file in the tree.
+- V37: dialog onboard mode populates `<select>` from `/api/projects/orphans`. Empty list → mode option disabled w/ hint "no orphan folders under ~/projects".
 
 ## §T TASKS
 
@@ -149,6 +153,12 @@ module exports (test surface, not public API):
 | T34 | x | landing.html: clone-source becomes async `<select>`; fallback to `<input>` on fetch fail / empty | V33 |
 | T35 | x | tests: cache hit/miss + JSON shape (mock `gh` via stubbed `execFileP`) | V32 |
 | T36 | x | README + AGENTS note: forking workflow for non-owned repos | V34 |
+| T37 | x | `/api/gh/repos`: filter out candidates whose basename matches any folder under `PROJECTS_ROOT` | I.routes,V32 |
+| T38 | x | landing.html: reorder GitHub radios (Clone default, Onboard added). Template fieldset `display:none` when mode ∈ {clone, onboard} | V33,V35 |
+| T39 | x | tests: gh-repos filter excludes folder-name matches | V32 |
+| T40 | x | server: `bootstrapOnboard(dir, name)` + `GET /api/projects/orphans` + dispatch in `handleCreateProject` for `github.mode === 'onboard'` | I.routes,V36 |
+| T41 | x | landing.html: Onboard option populates select from `/api/projects/orphans`; disabled w/ hint when empty | V37 |
+| T42 | x | tests: orphan listing + onboard happy path + 409 / 404 errors | V36,V37 |
 
 ## §B BUGS
 
