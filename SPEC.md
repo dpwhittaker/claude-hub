@@ -35,7 +35,7 @@ routes (proxy):
 - `GET /term/develop/`, `GET /term/wsl/` → admin terms
 - `GET|*  /<proj>/*` → reverse-proxy if `.project-meta.json` declares `proxyTarget`
 - `WS /ws/view-tree/<proj>` → live tree updates `{type: add|delete|change, path, kind?}`
-- `GET /api/gh/repos` → `{repos: [{nameWithOwner, description, isFork, isPrivate, updatedAt}]}`. sorted `updatedAt` desc. 503 on `gh` failure. cached in-process, 10 min TTL. response excludes candidates whose basename matches an existing folder under `PROJECTS_ROOT` (managed or not).
+- `GET /api/gh/repos` → `{repos: [{nameWithOwner, description, isFork, isPrivate, updatedAt}]}`. sort: non-forks first then forks; within each group `updatedAt` desc. 503 on `gh` failure. cached in-process, 10 min TTL. response excludes candidates whose basename matches an existing folder under `PROJECTS_ROOT` (managed or not).
 - `GET /api/projects/orphans` → `{folders: [string]}`. dirs under `PROJECTS_ROOT` that exist but lack `.project-meta.json` and don't start with `.`.
 
 files:
@@ -106,7 +106,7 @@ module exports (test surface, not public API):
   - **scan-existing** (clone path): Claude reads tree, drafts missing docs.
   - **greenfield** (skip / create + vite or none): Claude greets, asks "what should we build here?".
   bootstrapper writes branch-specific prompt to `<project>/.claude-bootstrap.txt`; `ttyd-attach.sh` `tmux send-keys` reads & sends, then deletes.
-- V32: `/api/gh/repos` runs `gh repo list --json nameWithOwner,description,isFork,isPrivate,updatedAt --limit 200`. result cached in-process w/ ≤ 10 min TTL. ⊥ shell-out per dialog open. response excludes any candidate whose basename matches an existing folder under `PROJECTS_ROOT` (managed or not).
+- V32: `/api/gh/repos` runs `gh repo list --json nameWithOwner,description,isFork,isPrivate,updatedAt --limit 200`. result cached in-process w/ ≤ 10 min TTL. ⊥ shell-out per dialog open. response excludes any candidate whose basename matches an existing folder under `PROJECTS_ROOT` (managed or not). sort: `isFork=false` first then `isFork=true`; `updatedAt` desc within each group. ⊥ user's own forks dominate top of dropdown.
 - V33: dialog clone-source is a `<select>` populated async from `/api/gh/repos`. on fetch failure / empty / timeout → fall back to free-text `<input>`. ⊥ block dialog while waiting. Template fieldset hidden (display:none) when GitHub mode ∈ {clone, onboard} — not faded.
 - V34: cloning another user's repo = fork on github.com first, pick the fork from the dropdown. arbitrary-URL clone still possible via direct `POST /api/projects` w/ `source: 'owner/repo'` (power-user flow), but not via the dialog.
 - V35: Clone is the default GitHub mode in the create dialog. Default dialog open state → Template fieldset hidden.
@@ -159,6 +159,7 @@ module exports (test surface, not public API):
 | T40 | x | server: `bootstrapOnboard(dir, name)` + `GET /api/projects/orphans` + dispatch in `handleCreateProject` for `github.mode === 'onboard'` | I.routes,V36 |
 | T41 | x | landing.html: Onboard option populates select from `/api/projects/orphans`; disabled w/ hint when empty | V37 |
 | T42 | x | tests: orphan listing + onboard happy path + 409 / 404 errors | V36,V37 |
+| T43 | x | gh-repos sort: non-forks first then forks, updatedAt desc within group | V32 |
 
 ## §B BUGS
 

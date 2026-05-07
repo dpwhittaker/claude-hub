@@ -28,12 +28,24 @@ test('list shells out to gh repo list with the right fields (V32)', async () => 
   assert.deepEqual(capturedArgs.args, ['repo', 'list', '--json', REPO_FIELDS, '--limit', '200']);
 });
 
-test('result sorted by updatedAt desc', async () => {
-  const repos = fakeRepos([5, 1, 3]); // r0=5d ago, r1=1d ago, r2=3d ago
+test('result sorted: non-forks first then forks, updatedAt desc within each group (V32)', async () => {
+  // Construct an explicit fork/non-fork mix so the ordering is unambiguous.
+  // fork=true items must sink below every fork=false item regardless of
+  // their updatedAt.
+  const day = (n) => new Date(Date.now() - n * 86400_000).toISOString();
+  const repos = [
+    { nameWithOwner: 'me/old-own',    isFork: false, updatedAt: day(30) },
+    { nameWithOwner: 'me/fresh-fork', isFork: true,  updatedAt: day(1) },
+    { nameWithOwner: 'me/new-own',    isFork: false, updatedAt: day(2) },
+    { nameWithOwner: 'me/old-fork',   isFork: true,  updatedAt: day(20) },
+  ];
   const exec = async () => ({ stdout: JSON.stringify(repos) });
   const g = makeGhRepos({ exec });
   const out = await g.list();
-  assert.deepEqual(out.map((r) => r.nameWithOwner), ['owner/r1', 'owner/r2', 'owner/r0']);
+  assert.deepEqual(
+    out.map((r) => r.nameWithOwner),
+    ['me/new-own', 'me/old-own', 'me/fresh-fork', 'me/old-fork'],
+  );
 });
 
 test('cache hit within TTL — exec called once across multiple list() calls (V32)', async () => {
