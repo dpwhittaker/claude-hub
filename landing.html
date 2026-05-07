@@ -508,6 +508,13 @@
     });
 
     loadManaged();
+
+    // Share-link affordance: visit /?new=1 to land with the create dialog
+    // already open. Also lets the screenshot script capture the dialog
+    // deterministically without driving the click.
+    if (new URLSearchParams(location.search).get('new') === '1') {
+      addBtn.click();
+    }
   </script>
 </body>
 </html>

@@ -44,6 +44,10 @@ unless you opt in (see "Sharing across devices" below).
 
 ![Develop terminal](docs/img/develop.png)
 
+**New project dialog** — the `+` card opens this. Pick a name, pick a template (Vite + React + TypeScript by default), pick a GitHub mode (skip, clone existing, or `gh repo create`). claude-hub does the rest: scaffold, `npm install`, autostart the dev server through the proxy, spin up a ttyd terminal, drop you into a fresh Claude session ready to plan:
+
+![New project dialog](docs/img/new-project.png)
+
 > Refresh these screenshots after a UI change with the `screenshots` skill (in `.claude/skills/screenshots/`).
 
 ## Quickstart

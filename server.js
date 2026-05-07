@@ -2222,13 +2222,13 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (url === '/' || url === '/index.html' || url === '/landing.html') {
+  // /view/<project>/<path> — markdown + code viewer (read-only).
+  const urlPathOnly = url.split('?', 1)[0];
+
+  if (urlPathOnly === '/' || urlPathOnly === '/index.html' || urlPathOnly === '/landing.html') {
     serveLanding(res);
     return;
   }
-
-  // /view/<project>/<path> — markdown + code viewer (read-only).
-  const urlPathOnly = url.split('?', 1)[0];
   if (urlPathOnly === '/view' || urlPathOnly === '/view/' || urlPathOnly.startsWith('/view/')) {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { 'Content-Type': 'text/plain' });

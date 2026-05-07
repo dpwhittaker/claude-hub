@@ -15,10 +15,11 @@ The skill produces four PNGs in `docs/img/` that the README embeds:
 
 | File | What it shows | Source URL |
 |------|---------------|------------|
-| `landing.png` | Hub home page with project cards | `http://127.0.0.1:8002/` |
+| `landing.png` | Hub home page with project cards | `http://127.0.0.1:9001/` (demo hub) |
 | `browse-default.png` | Two-pane viewer, no Develop pane | `http://127.0.0.1:8002/view/claude-hub/?dev=0` |
 | `browse-with-develop.png` | Two-pane viewer + Develop side-by-side | `http://127.0.0.1:8002/view/claude-hub/?dev=1` |
 | `develop.png` | Full-screen browser terminal w/ live Claude | rendered from xterm buffer of `/term/claude-hub/` |
+| `new-project.png` | The `+` create-project dialog | `http://127.0.0.1:8002/?new=1`, then ffmpeg crop |
 
 **The narrative the screenshots have to tell**: Claude does the work. The hub is the interface. Every screenshot should make that visible — a card that says "Develop", a Develop pane with a live Claude prompt, a terminal showing Claude's tool calls. If a screenshot shows the hub UI without Claude in frame, retake it.
 
@@ -199,6 +200,26 @@ kill $(cat /tmp/uploader.pid); rm -f /tmp/uploader.pid /tmp/uploader.{js,log}
 The terminal buffer that lands in the screenshot is whatever Claude was last doing in that tmux session. **Pick a moment where Claude is mid-task** — running a tool, printing diff output, asking a clarifying question, anything that makes Claude visibly the protagonist. If the buffer shows only a blank prompt, send a quick "what should we build today?" through the actual terminal first, wait for Claude's response, then capture.
 
 If you're worried about leaking session content, kill the tmux session (`tmux kill-session -t claude-hub`), reconnect through the browser to spawn a fresh Claude (it'll boot with `--continue`, so the prior conversation reappears — to truly start clean, also `rm ~/.claude/projects/-home-david-projects-claude-hub/*.jsonl` first), and capture the welcome banner instead.
+
+## Step 4.5 — capture the new-project dialog
+
+Visit `/?new=1` to land on the hub with the create dialog already open. Headless Chrome captures the full window; backdrop will show real project cards behind the dimmed overlay, which leaks names. Crop the dialog out with ffmpeg.
+
+```bash
+OUT=$(pwd)/docs/img/new-project.png
+WIN_OUT=$(wslpath -w "$OUT")
+'/mnt/c/Program Files/Google/Chrome/Application/chrome.exe' \
+  --headless --disable-gpu --hide-scrollbars \
+  --window-size=1280,900 --virtual-time-budget=4000 \
+  --screenshot="$WIN_OUT" \
+  "http://127.0.0.1:8002/?new=1"
+
+# Crop to dialog bounds. crop=W:H:X:Y. Tune if the dialog moves.
+ffmpeg -y -i docs/img/new-project.png -vf "crop=480:500:400:150" /tmp/np.png
+mv /tmp/np.png docs/img/new-project.png
+```
+
+If you'd rather avoid the crop, run the screenshot against the demo hub from step 1 (which has invented projects, not your real ones) and skip the ffmpeg pass.
 
 ## Step 5 — review and commit
 
