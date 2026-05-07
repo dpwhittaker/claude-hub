@@ -47,14 +47,25 @@ if ! tmux has-session -t "$PROJECT" 2>/dev/null; then
     # them — Claude Code uses this to detect when the browser tab loses focus.
     tmux set-option        -t "$PROJECT" -g focus-events on
 
-    # On a fresh project, kick claude with a bootstrap message a couple of
-    # seconds after launch so it greets the user, reads AGENTS.md, and
-    # starts populating the project's metadata. Backgrounded so the parent
-    # ttyd-attach.sh can continue to `exec tmux attach`. The sleep gives
-    # claude time to finish booting before we type into the pane.
+    # On a fresh project, send claude a bootstrap message a few seconds after
+    # launch so it greets the user, reads AGENTS.md, and populates the
+    # project's metadata. The bootstrapper in claude-hub writes a project-
+    # specific prompt to .claude-bootstrap.txt — different copy for greenfield
+    # vs cloned projects (V30/V31). If the file is absent (e.g. a project
+    # created out-of-band by hand), fall back to a generic greenfield prompt.
+    # Backgrounded so the parent ttyd-attach.sh can `exec tmux attach`. The
+    # sleep gives claude time to finish booting before we type into the pane.
     if [[ "$is_fresh" == "1" ]]; then
-        bootstrap_msg="Read AGENTS.md and README.md in this directory, then briefly greet me and ask what I want to build here. Once we agree on the project, update README.md — rewrite the H1 (card title), rewrite the first paragraph (one-sentence card description), and set the 'tags: [...]' frontmatter to short tags like 'Game', 'Tool', 'API', 'Library', or 'Service' plus a status flag like 'WIP' or 'Stable'. The landing page reads all three from README."
-        ( sleep 4 && tmux send-keys -t "$PROJECT" -l "$bootstrap_msg" && tmux send-keys -t "$PROJECT" Enter ) &
+        bootstrap_file="$PROJECT_DIR/.claude-bootstrap.txt"
+        ( sleep 4
+          if [[ -f "$bootstrap_file" ]]; then
+              tmux send-keys -t "$PROJECT" -l "$(cat "$bootstrap_file")"
+              rm -f "$bootstrap_file"
+          else
+              tmux send-keys -t "$PROJECT" -l "Read AGENTS.md and README.md in this directory, then briefly greet me and ask what I want to build here. Once we agree on the project, update README.md — rewrite the H1 (card title), rewrite the first paragraph (one-sentence card description), and set the 'tags: [...]' frontmatter to short tags like 'Game', 'Tool', 'API', 'Library', or 'Service' plus a status flag like 'WIP' or 'Stable'. The landing page reads all three from README."
+          fi
+          tmux send-keys -t "$PROJECT" Enter
+        ) &
     fi
 fi
 

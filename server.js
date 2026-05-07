@@ -563,6 +563,23 @@ function execFileP(cmd, args, opts) {
   });
 }
 
+// First-attach prompt that ttyd-attach.sh sends to the new claude session.
+// Two flavors:
+//   - 'greenfield' (skip / create + scaffold): claude greets, asks the
+//     classic "what should we build here?" — stock fresh-project flow.
+//   - 'scan-existing' (clone): claude reads the cloned tree and writes
+//     whichever of AGENTS.md / README.md is missing per V30, leaving any
+//     pre-existing copy untouched per V29.
+function writeBootstrapPrompt(dir, name, flavor) {
+  const greenfield = `Read AGENTS.md and README.md in this directory, then briefly greet me and ask what I want to build here. Once we agree on the project, update README.md — rewrite the H1 (card title), rewrite the first paragraph (one-sentence card description), and set the 'tags: [...]' frontmatter to short tags like 'Game', 'Tool', 'API', 'Library', or 'Service' plus a status flag like 'WIP' or 'Stable'. The landing page reads all three from README.`;
+  const scanExisting = `This is the freshly cloned project "${name}". Walk the tree (skip node_modules/, .git/, dist/, build/, .next/, .cache/) and figure out what it is. Then write whichever of these files is missing — never overwrite an existing one:\n\n` +
+    `- README.md (human-facing): YAML frontmatter \`tags: [...]\` with two or three short tags (Game / Tool / API / Library / Service / etc., plus WIP or Stable). Then an H1 with the project's name. Then one paragraph that answers "what is this and why does it exist" the way you'd tell a stranger. The claude-hub landing page reads the H1, the first paragraph, and the tags into a card.\n` +
+    `- AGENTS.md (agent-facing): tech stack, conventions, directory layout, debugging signposts ("if X breaks, look in Y"). Cite real file paths. Keep it terse — this is the doc future agents will read before touching the code.\n\n` +
+    `When you're done, briefly summarize what you found and ask what I'd like to work on first.`;
+  const text = flavor === 'scan-existing' ? scanExisting : greenfield;
+  fs.writeFileSync(path.join(dir, '.claude-bootstrap.txt'), text + '\n');
+}
+
 async function bootstrapNoGithub(dir, name) {
   fs.mkdirSync(dir, { recursive: false });
   fs.writeFileSync(path.join(dir, 'AGENTS.md'), agentsTemplate(name));
@@ -571,6 +588,7 @@ async function bootstrapNoGithub(dir, name) {
     path.join(dir, '.project-meta.json'),
     JSON.stringify({ name, createdAt: new Date().toISOString() }, null, 2) + '\n',
   );
+  writeBootstrapPrompt(dir, name, 'greenfield');
 }
 
 async function bootstrapClone(dir, name, source) {
@@ -585,16 +603,9 @@ async function bootstrapClone(dir, name, source) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw new Error('clone failed: ' + e.message, { cause: e });
   }
-  // Don't trample docs the cloned repo already has. If absent, drop in our
-  // templates so claude has a starting point.
-  const agentsPath = path.join(dir, 'AGENTS.md');
-  if (!fs.existsSync(agentsPath)) {
-    fs.writeFileSync(agentsPath, agentsTemplate(name));
-  }
-  const readmePath = path.join(dir, 'README.md');
-  if (!fs.existsSync(readmePath)) {
-    fs.writeFileSync(readmePath, readmeTemplate(name));
-  }
+  // V29: pre-existing AGENTS.md / README.md are NEVER overwritten. Missing
+  // ones are NOT pre-filled with boilerplate either — claude scans the
+  // cloned tree on first turn and writes whichever is missing (V30).
   // .project-meta.json is our sentinel; always write it.
   fs.writeFileSync(
     path.join(dir, '.project-meta.json'),
@@ -604,6 +615,7 @@ async function bootstrapClone(dir, name, source) {
       github: { mode: 'clone', source },
     }, null, 2) + '\n',
   );
+  writeBootstrapPrompt(dir, name, 'scan-existing');
 }
 
 async function ghInitPush(dir, name, visibility) {
@@ -675,7 +687,17 @@ async function bootstrapVite(dir, name) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw new Error('vite scaffold failed: ' + e.message, { cause: e });
   }
+  writeBootstrapPrompt(dir, name, 'greenfield');
   return port;
+}
+
+// Cloning brings the repo's own structure; the Vite scaffolder would
+// smear template files over it. Force `template = 'none'` on clone so the
+// cloned tree stays intact and claude bootstraps docs against it (V29).
+function effectiveTemplate(body) {
+  const ghMode = (body && body.github && body.github.mode) || 'skip';
+  if (ghMode === 'clone') return 'none';
+  return body && body.template === 'none' ? 'none' : 'vite';
 }
 
 function handleCreateProject(req, res) {
@@ -698,7 +720,7 @@ function handleCreateProject(req, res) {
     }
 
     const gh = body.github || { mode: 'skip' };
-    const template = body.template === 'none' ? 'none' : 'vite';
+    const template = effectiveTemplate(body);
     try {
       if (gh.mode === 'clone') {
         // Cloned repos bring their own structure; ignore the template field.
@@ -2294,4 +2316,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES, projectWatchers };
+module.exports = { server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES, projectWatchers, effectiveTemplate, writeBootstrapPrompt };

@@ -25,7 +25,8 @@ path-routed reverse proxy + landing page. one local port → multi-project hub. 
 routes (proxy):
 - `GET /` → `landing.html`
 - `GET /api/projects` → `{projects: [...]}`
-- `POST /api/projects` body `{name, github?: {mode: skip|clone|create, source?, visibility?}, template?: 'vite'|'none'}` → `{ok, project}` (default `template: 'vite'`)
+- `POST /api/projects` body `{name, github?: {mode: skip|clone|create, source?, visibility?}, template?: 'vite'|'none'}` → `{ok, project}` (default `template: 'vite'`; **forced to `'none'` when `github.mode === 'clone'`**)
+- landing dialog field order: Project name → GitHub → Template. Template fieldset disabled (radios + visual fade) when GitHub = clone.
 - `DELETE /api/projects/<name>` → stop `ttyd@<name>` + `extraUnits`, kill tmux, rm folder
 - `GET /api/view-tree/<proj>` → `{project, tree}`. `?path=<sub>` → one-level lazy `{project, path, entries}`
 - `GET /view/<proj>/` → two-pane shell
@@ -95,6 +96,14 @@ module exports (test surface, not public API):
 - V26: project deletion ! stop `vite@<name>.service` via `extraUnits` before rm. ⊥ orphan port held.
 - V27: WS reconnect → force-reload every open tab (cache-bust). recover from `change` events missed during disconnect window. preserve scroll per V11.
 - V28: per-tab scroll position persisted to `view-shell:scroll:<proj>:<key>` localStorage. restored on iframe `load`. survives page refresh + tab close/reopen.
+- V29: `github.mode === 'clone'` preserves cloned tree verbatim. `AGENTS.md` / `README.md` written **only if missing**. ⊥ overwrite of pre-existing docs.
+- V30: bootstrap of `AGENTS.md` or `README.md` against a non-empty project (clone path) → Claude scans tree first turn & writes:
+  - `README.md`: human-facing — purpose + high-level "what is this & why" details.
+  - `AGENTS.md`: agent-facing — tech stack, conventions, directory layout, debugging signposts ("where would I look if X broke").
+- V31: bootstrap prompt branches:
+  - **scan-existing** (clone path): Claude reads tree, drafts missing docs.
+  - **greenfield** (skip / create + vite or none): Claude greets, asks "what should we build here?".
+  bootstrapper writes branch-specific prompt to `<project>/.claude-bootstrap.txt`; `ttyd-attach.sh` `tmux send-keys` reads & sends, then deletes.
 
 ## §T TASKS
 
@@ -128,6 +137,10 @@ module exports (test surface, not public API):
 | T26 | x | update README.md + AGENTS.md w/ Vite-default workflow + install steps for `vite@.service` | I.files |
 | T27 | x | WS reconnect handler force-reloads all open tabs via `reloadTabFrame` | V11,V27 |
 | T28 | x | per-tab scroll persisted to localStorage; restored on iframe load | V28 |
+| T29 | x | landing.html: reorder dialog — GitHub above Template. Template fieldset disabled when `gh-mode === 'clone'` (radios + visual fade) | I.routes |
+| T30 | x | `handleCreateProject`: force `template = 'none'` when `gh.mode === 'clone'`. ⊥ scaffolder run on cloned repo | V21,V29 |
+| T31 | x | `bootstrapClone`: keep "skip if exists" guards on AGENTS.md/README.md; add test asserting pre-existing files survive | V29 |
+| T32 | x | bootstrap-prompt branching: write `.claude-bootstrap.txt` per project (scan-existing for clone, greenfield for skip/create); `ttyd-attach.sh` reads + sends + deletes | V30,V31 |
 
 ## §B BUGS
 

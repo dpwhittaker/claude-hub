@@ -119,6 +119,18 @@
     }
     dialog.create-dialog .gh-sub.visible { display: block; }
     dialog.create-dialog .gh-sub input[type=text] { font-size: 0.85rem; }
+    dialog.create-dialog .hint {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 6px;
+      padding: 0 2px;
+      display: none;
+    }
+    dialog.create-dialog .field.disabled .gh-group {
+      opacity: 0.4;
+      pointer-events: none;
+    }
+    dialog.create-dialog .field.disabled .hint { display: block; }
     dialog.create-dialog .gh-sub label.inline {
       display: inline-flex;
       align-items: center;
@@ -300,12 +312,6 @@
         <span>Project name</span>
         <input type="text" id="cd-name" placeholder="my-thing" autocomplete="off" required>
       </label>
-      <div class="field"><span>Template</span>
-        <div class="gh-group">
-          <label class="gh-row"><input type="radio" name="cd-template" value="vite" checked>Vite (React + TypeScript)</label>
-          <label class="gh-row"><input type="radio" name="cd-template" value="none">None (bare AGENTS.md + README.md only)</label>
-        </div>
-      </div>
       <div class="field"><span>GitHub</span>
         <div class="gh-group">
           <label class="gh-row"><input type="radio" name="gh-mode" value="skip" checked>Skip GitHub for now</label>
@@ -319,6 +325,13 @@
             <label class="inline"><input type="radio" name="cd-vis" value="public">Public</label>
           </div>
         </div>
+      </div>
+      <div class="field" id="cd-template-field"><span>Template</span>
+        <div class="gh-group">
+          <label class="gh-row"><input type="radio" name="cd-template" value="vite" checked>Vite (React + TypeScript)</label>
+          <label class="gh-row"><input type="radio" name="cd-template" value="none">None (bare AGENTS.md + README.md only)</label>
+        </div>
+        <div class="hint" id="cd-template-hint">Cloning brings the existing project's structure as-is — template is skipped.</div>
       </div>
       <div class="err" id="cd-err"></div>
       <div class="buttons">
@@ -433,10 +446,18 @@
     const dlgSubmit = document.getElementById('cd-submit');
     const dlgCancel = document.getElementById('cd-cancel');
 
+    const dlgTemplateField = document.getElementById('cd-template-field');
     function syncGhSubs() {
       const mode = dlgForm.querySelector('input[name="gh-mode"]:checked').value;
       for (const sub of dlgForm.querySelectorAll('.gh-sub')) {
         sub.classList.toggle('visible', sub.dataset.for === mode);
+      }
+      // Cloning brings the repo's own structure — disable the template
+      // fieldset so the user can't ask for a Vite scaffold on top of it.
+      const cloning = mode === 'clone';
+      dlgTemplateField.classList.toggle('disabled', cloning);
+      for (const r of dlgForm.querySelectorAll('input[name="cd-template"]')) {
+        r.disabled = cloning;
       }
     }
     for (const r of dlgForm.querySelectorAll('input[name="gh-mode"]')) {
