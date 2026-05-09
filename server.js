@@ -127,6 +127,10 @@ const proxy = httpProxy.createProxyServer({
   changeOrigin: false,
   ws: true,
   xfwd: true,
+  // We self-handle responses so we can inject the touch-wheel translator
+  // into bare /term/<key>/ HTML pages (V40). Non-injecting routes still get
+  // a transparent pipe via the proxyRes handler below.
+  selfHandleResponse: true,
 });
 
 proxy.on('error', (err, _req, res) => {
@@ -136,6 +140,41 @@ proxy.on('error', (err, _req, res) => {
   } else if (res && res.end) {
     res.end();
   }
+});
+
+// True iff `url` is the ttyd index for a term key — i.e. /term/<key>/ or
+// /term/<key> (no extra path, optional query). Anything deeper (asset, ws,
+// token endpoint) is not the HTML index and must pass through verbatim.
+const TERM_INDEX_RE = /^\/term\/[A-Za-z0-9_.-]+\/?(?:\?.*)?$/;
+const TOUCH_WHEEL_INJECT = `<script>(${require('./lib/touch-wheel').installTouchWheel.toString()})(document);</script>`;
+
+proxy.on('proxyRes', (proxyRes, req, res) => {
+  const wantsInject = req.method === 'GET'
+    && TERM_INDEX_RE.test(req.url || '')
+    && (proxyRes.headers['content-type'] || '').toLowerCase().includes('text/html')
+    && !proxyRes.headers['content-encoding']; // ttyd doesn't gzip; bail if it ever does
+  if (!wantsInject) {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res);
+    return;
+  }
+  const chunks = [];
+  proxyRes.on('data', (c) => chunks.push(c));
+  proxyRes.on('end', () => {
+    let html = Buffer.concat(chunks).toString('utf8');
+    if (html.includes('</body>')) {
+      html = html.replace('</body>', TOUCH_WHEEL_INJECT + '</body>');
+    } else {
+      html += TOUCH_WHEEL_INJECT;
+    }
+    const out = Buffer.from(html, 'utf8');
+    const headers = { ...proxyRes.headers };
+    headers['content-length'] = String(out.length);
+    delete headers['transfer-encoding'];
+    res.writeHead(proxyRes.statusCode, headers);
+    res.end(out);
+  });
+  proxyRes.on('error', () => { try { res.end(); } catch {} });
 });
 
 function findStaticRoute(url) {
@@ -1861,6 +1900,8 @@ DEVELOP_TOGGLE.addEventListener('click', () => showDevelop(DEVELOP_PANE.hidden))
 
 // V40: translate touch-drag → wheel events inside the terminal iframe so
 // xterm scrolls under finger drag on phones/tablets. Same-origin via proxy.
+// (Bare /term/<key>/ pages get the same handler injected by the proxy on
+// HTML response — see termIndexInjection in server.js.)
 DEVELOP_FRAME.addEventListener('load', () => {
   try {
     const doc = DEVELOP_FRAME.contentDocument;
