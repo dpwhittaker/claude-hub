@@ -110,6 +110,7 @@ module exports (test surface, not public API):
 - V35: Clone is the default GitHub mode in the create dialog. Default dialog open state → Template fieldset hidden.
 - V36: `github.mode === 'onboard'` adopts an existing folder under `PROJECTS_ROOT`. Stamps sentinel `.project-meta.json` w/ `name + createdAt` only (no `github`, no `template`). Writes scan-existing bootstrap prompt. 409 if `.project-meta.json` already exists. 404 if folder missing. ⊥ overwrite of any existing file in the tree. ttyd@ enable per V13.
 - V37: dialog onboard mode populates `<select>` from `/api/projects/orphans`. Empty list → mode option disabled w/ hint "no orphan folders under ~/projects".
+- V38: develop pane orientation = side-by-side (terminal right) iff viewport `width > 1.2 * height`; else stacked (terminal below file viewer). re-evaluate on `window.resize` + initial mount. splitter axis + pane flex-direction swap atomically. separate persisted size keys per orientation. ⊥ stale layout on viewport rotate/resize.
 
 ## §T TASKS
 
@@ -162,6 +163,7 @@ module exports (test surface, not public API):
 | T45 | x | move test-only helpers out of `server.js` exports: `effectiveTemplate`, `writeBootstrapPrompt`, `filterReposByFolders`, `bootstrapOnboard`, `listOrphanFolderNames` → dedicated `lib/*.js` modules. tests import from `lib/`. server.js exports stay at `{server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES, projectWatchers}` | I.exports |
 | T46 | x | landing.html onboard hint = exact spec string `"no orphan folders under ~/projects"` | V37 |
 | T47 | x | spec dedup: drop §C lines duplicating V2/V3/V6/V7/V21/V22; refresh ttyd socket constraint to /run/ttyd/ 0755; rewrite `POST /api/projects` + `DELETE` narrative for T44 reality; refresh §I.files lib enumeration; trim V24 cleanup-dup, V33 hidden-fieldset-dup, V36 ttyd-enable-dup; merge V30 into V31 | - |
+| T48 | x | responsive develop-pane orientation: side-by-side when `vw > 1.2 * vh`, stacked otherwise. listen `resize`, swap flex-direction + splitter axis. separate persisted size keys per orientation | V38 |
 
 ## §B BUGS
 

@@ -41,6 +41,7 @@ const { PROJECT_ID_RE, RESERVED_PROJECT_NAMES } = require('./lib/project-name');
 const { writeBootstrapPrompt } = require('./lib/bootstrap-prompt');
 const { effectiveTemplate } = require('./lib/template-policy');
 const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
+const { pickDevelopOrientation } = require('./lib/orientation');
 
 const PORT = Number(process.env.PROXY_PORT) || 8002;
 const LANDING_PATH = path.join(__dirname, 'landing.html');
@@ -1257,7 +1258,9 @@ function renderViewShell(project) {
     transition: background 0.15s;
   }
   .splitter:hover, .splitter.dragging { background: var(--accent); }
-  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing { user-select: none; }
+  body.resizing.col { cursor: col-resize; }
+  body.resizing.row { cursor: row-resize; }
   body.resizing iframe { pointer-events: none; }
   /* Right pane */
   section.viewer-pane { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
@@ -1298,6 +1301,9 @@ function renderViewShell(project) {
     position: absolute; inset: 0; display: flex; align-items: center;
     justify-content: center; color: var(--muted); font-style: italic; font-size: 0.9rem;
   }
+  /* Work area = viewer + develop. Row by default; column when stacked (V38). */
+  .work-area { flex: 1 1 auto; display: flex; min-width: 0; min-height: 0; }
+  body.dev-stacked .work-area { flex-direction: column; }
   /* Develop pane */
   section.develop-pane {
     flex: 0 0 var(--develop-width, 50%);
@@ -1306,10 +1312,22 @@ function renderViewShell(project) {
     background: var(--bg-0);
     border-left: 1px solid var(--edge);
   }
+  body.dev-stacked section.develop-pane {
+    flex: 0 0 var(--develop-height, 50%);
+    min-width: 0;
+    min-height: 180px;
+    border-left: none;
+    border-top: 1px solid var(--edge);
+  }
   section.develop-pane iframe {
     flex: 1 1 auto; width: 100%; border: none; background: var(--bg-0);
   }
   section.develop-pane[hidden], .splitter.develop-splitter[hidden] { display: none; }
+  body.dev-stacked .splitter.develop-splitter {
+    cursor: row-resize;
+    border-left: none; border-right: none;
+    border-top: 1px solid var(--edge); border-bottom: 1px solid var(--edge);
+  }
 </style>
 </head>
 <body>
@@ -1332,16 +1350,18 @@ function renderViewShell(project) {
     <div class="tree-empty">loading…</div>
   </aside>
   <div class="splitter" id="splitter" title="Drag to resize"></div>
-  <section class="viewer-pane">
-    <div class="tabs" id="tabs"></div>
-    <div class="frames" id="frames">
-      <div class="empty-state" id="empty-state" hidden>No file open. Click a file in the tree.</div>
-    </div>
-  </section>
-  <div class="splitter develop-splitter" id="develop-splitter" title="Drag to resize" hidden></div>
-  <section class="develop-pane" id="develop-pane" hidden>
-    <iframe id="develop-frame" title="Develop terminal"></iframe>
-  </section>
+  <div class="work-area" id="work-area">
+    <section class="viewer-pane">
+      <div class="tabs" id="tabs"></div>
+      <div class="frames" id="frames">
+        <div class="empty-state" id="empty-state" hidden>No file open. Click a file in the tree.</div>
+      </div>
+    </section>
+    <div class="splitter develop-splitter" id="develop-splitter" title="Drag to resize" hidden></div>
+    <section class="develop-pane" id="develop-pane" hidden>
+      <iframe id="develop-frame" title="Develop terminal"></iframe>
+    </section>
+  </div>
 </main>
 <script>
 const PROJECT = ${JSON.stringify(project)};
@@ -1352,6 +1372,7 @@ const EMPTY = document.getElementById('empty-state');
 const PATH_HINT = document.getElementById('path-hint');
 const SPLITTER = document.getElementById('splitter');
 const MAIN = document.getElementById('main');
+const WORK_AREA = document.getElementById('work-area');
 const DEVELOP_PANE = document.getElementById('develop-pane');
 const DEVELOP_SPLITTER = document.getElementById('develop-splitter');
 const DEVELOP_FRAME = document.getElementById('develop-frame');
@@ -1367,6 +1388,7 @@ const ACTIVE_KEY = 'view-shell:active:' + PROJECT;
 const TREE_WIDTH_KEY = 'view-shell:tree-width';
 const DEVELOP_VISIBLE_KEY = 'view-shell:develop-visible:' + PROJECT;
 const DEVELOP_WIDTH_KEY = 'view-shell:develop-width:' + PROJECT;
+const DEVELOP_HEIGHT_KEY = 'view-shell:develop-height:' + PROJECT;
 const SCROLL_KEY_PREFIX = 'view-shell:scroll:' + PROJECT + ':';
 
 function scrollStorageKey(key) { return SCROLL_KEY_PREFIX + key; }
@@ -1415,6 +1437,8 @@ function wireFrameScroll(frame, key) {
 }
 
 ${tabKey.toString()}
+
+${pickDevelopOrientation.toString()}
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1778,17 +1802,49 @@ SPLITTER.addEventListener('mousedown', (e) => {
   e.preventDefault();
   treeDragging = true;
   SPLITTER.classList.add('dragging');
-  document.body.classList.add('resizing');
+  document.body.classList.add('resizing', 'col');
 });
 
-// Develop pane: terminal iframe to /term/<project>/. Width + visibility
-// persisted per project so refresh keeps the layout.
+// Develop pane: terminal iframe to /term/<project>/. Visibility persisted per
+// project so refresh keeps the layout. Orientation chosen per V38: side-by-
+// side when viewport vw > 1.2 * vh, stacked otherwise. Each orientation has
+// its own persisted size key so rotating doesn't clobber the other axis.
 function setDevelopWidth(px) {
-  const total = MAIN.getBoundingClientRect().width;
-  const clamped = Math.max(240, Math.min(total - 240, px));
+  const total = WORK_AREA.getBoundingClientRect().width;
+  const clamped = Math.max(240, Math.min(Math.max(240, total - 240), px));
   document.documentElement.style.setProperty('--develop-width', clamped + 'px');
   try { localStorage.setItem(DEVELOP_WIDTH_KEY, String(clamped)); } catch {}
 }
+function setDevelopHeight(px) {
+  const total = WORK_AREA.getBoundingClientRect().height;
+  const clamped = Math.max(180, Math.min(Math.max(180, total - 180), px));
+  document.documentElement.style.setProperty('--develop-height', clamped + 'px');
+  try { localStorage.setItem(DEVELOP_HEIGHT_KEY, String(clamped)); } catch {}
+}
+function loadDevWidth() {
+  try { return parseFloat(localStorage.getItem(DEVELOP_WIDTH_KEY) || ''); } catch { return NaN; }
+}
+function loadDevHeight() {
+  try { return parseFloat(localStorage.getItem(DEVELOP_HEIGHT_KEY) || ''); } catch { return NaN; }
+}
+
+let currentOrientation = null;
+function applyDevelopOrientation() {
+  const next = pickDevelopOrientation(window.innerWidth, window.innerHeight);
+  if (next === currentOrientation) return;
+  currentOrientation = next;
+  document.body.classList.toggle('dev-stacked', next === 'stacked');
+  if (next === 'side') {
+    const w = loadDevWidth();
+    if (Number.isFinite(w)) setDevelopWidth(w);
+  } else {
+    const h = loadDevHeight();
+    if (Number.isFinite(h)) setDevelopHeight(h);
+  }
+}
+applyDevelopOrientation();
+window.addEventListener('resize', applyDevelopOrientation);
+
 function showDevelop(show) {
   DEVELOP_PANE.hidden = !show;
   DEVELOP_SPLITTER.hidden = !show;
@@ -1800,10 +1856,6 @@ function showDevelop(show) {
 }
 DEVELOP_TOGGLE.addEventListener('click', () => showDevelop(DEVELOP_PANE.hidden));
 
-const savedDevWidth = (() => {
-  try { return parseFloat(localStorage.getItem(DEVELOP_WIDTH_KEY) || ''); } catch { return NaN; }
-})();
-if (Number.isFinite(savedDevWidth)) setDevelopWidth(savedDevWidth);
 const initVisible = (() => {
   try { return localStorage.getItem(DEVELOP_VISIBLE_KEY) === '1'; } catch { return false; }
 })();
@@ -1820,15 +1872,20 @@ DEVELOP_SPLITTER.addEventListener('mousedown', (e) => {
   e.preventDefault();
   devDragging = true;
   DEVELOP_SPLITTER.classList.add('dragging');
-  document.body.classList.add('resizing');
+  document.body.classList.add('resizing', currentOrientation === 'stacked' ? 'row' : 'col');
 });
 
 window.addEventListener('mousemove', (e) => {
   if (treeDragging) {
     setTreeWidth(e.clientX);
   } else if (devDragging) {
-    const fromRight = window.innerWidth - e.clientX;
-    setDevelopWidth(fromRight);
+    if (currentOrientation === 'stacked') {
+      const rect = WORK_AREA.getBoundingClientRect();
+      setDevelopHeight(rect.bottom - e.clientY);
+    } else {
+      const rect = WORK_AREA.getBoundingClientRect();
+      setDevelopWidth(rect.right - e.clientX);
+    }
   }
 });
 window.addEventListener('mouseup', () => {
@@ -1840,7 +1897,7 @@ window.addEventListener('mouseup', () => {
     devDragging = false;
     DEVELOP_SPLITTER.classList.remove('dragging');
   }
-  document.body.classList.remove('resizing');
+  document.body.classList.remove('resizing', 'col', 'row');
 });
 
 // Bootstrap: fetch tree, render, restore saved tabs (or open README.md).
