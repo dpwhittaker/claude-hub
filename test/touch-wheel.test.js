@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { installTouchWheel } = require('../lib/touch-wheel');
 
-function makeDoc() {
+function makeDoc({ viewport } = {}) {
   const handlers = {};
   const dispatched = [];
   const view = {
@@ -10,16 +10,20 @@ function makeDoc() {
       return { type, deltaY: init.deltaY, deltaMode: init.deltaMode, bubbles: init.bubbles };
     },
   };
+  const viewportEl = viewport === undefined
+    ? { dispatchEvent(e) { dispatched.push({ where: 'viewport', e }); return true; } }
+    : viewport;
   const doc = {
     defaultView: view,
     addEventListener(type, h) { handlers[type] = h; },
     dispatchEvent(e) { dispatched.push({ where: 'doc', e }); return true; },
+    querySelector(sel) { return sel === '.xterm-viewport' ? viewportEl : null; },
   };
   const target = { dispatchEvent(e) { dispatched.push({ where: 'target', e }); return true; } };
-  return { doc, handlers, dispatched, target };
+  return { doc, handlers, dispatched, target, viewportEl };
 }
 
-test('touchmove dispatches wheel with deltaY = lastY - currY (V40)', () => {
+test('touchmove dispatches wheel on .xterm-viewport with deltaY = lastY - currY (V40)', () => {
   const { doc, handlers, dispatched, target } = makeDoc();
   installTouchWheel(doc);
   handlers.touchstart({ touches: [{ clientY: 100 }] });
@@ -30,12 +34,22 @@ test('touchmove dispatches wheel with deltaY = lastY - currY (V40)', () => {
     preventDefault() { prevented = true; },
   });
   assert.equal(dispatched.length, 1);
-  assert.equal(dispatched[0].where, 'target');
+  assert.equal(dispatched[0].where, 'viewport');
   assert.equal(dispatched[0].e.type, 'wheel');
   assert.equal(dispatched[0].e.deltaY, 30);
   assert.equal(dispatched[0].e.deltaMode, 0);
   assert.equal(dispatched[0].e.bubbles, true);
   assert.equal(prevented, true);
+});
+
+test('falls back to event target when .xterm-viewport not in DOM yet', () => {
+  const { doc, handlers, dispatched, target } = makeDoc({ viewport: null });
+  installTouchWheel(doc);
+  handlers.touchstart({ touches: [{ clientY: 100 }] });
+  handlers.touchmove({ touches: [{ clientY: 80 }], target, preventDefault() {} });
+  assert.equal(dispatched.length, 1);
+  assert.equal(dispatched[0].where, 'target');
+  assert.equal(dispatched[0].e.deltaY, 20);
 });
 
 test('finger drag down (y increases) → negative deltaY (scroll up)', () => {
