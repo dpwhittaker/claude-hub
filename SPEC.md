@@ -111,6 +111,7 @@ module exports (test surface, not public API):
 - V36: `github.mode === 'onboard'` adopts an existing folder under `PROJECTS_ROOT`. Stamps sentinel `.project-meta.json` w/ `name + createdAt` only (no `github`, no `template`). Writes scan-existing bootstrap prompt. 409 if `.project-meta.json` already exists. 404 if folder missing. ⊥ overwrite of any existing file in the tree. ttyd@ enable per V13.
 - V37: dialog onboard mode populates `<select>` from `/api/projects/orphans`. Empty list → mode option disabled w/ hint "no orphan folders under ~/projects".
 - V38: develop pane orientation = side-by-side (terminal right) iff viewport `width > 1.2 * height`; else stacked (terminal below file viewer). re-evaluate on `window.resize` + initial mount. splitter axis + pane flex-direction swap atomically. separate persisted size keys per orientation. ⊥ stale layout on viewport rotate/resize.
+- V39: `ttyd-attach.sh` `CLAUDE_BIN` default ! match §C claude-binary default (`$HOME/.local/bin/claude`). bare `claude` ⊥ resolve in systemd PATH (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin`) → tmux command fails → session dies → V4 exit-loop trip.
 
 ## §T TASKS
 
@@ -176,3 +177,4 @@ module exports (test surface, not public API):
 | B5 | 2026-05-05 | `claude --continue` on fresh project → exit-loop (no prior session) | V4 |
 | B6 | 2026-05-05 | tab key `'render:' + path` collides w/ filename literally `render:foo` (Linux allows `:` in names) | V15 |
 | B7 | 2026-05-05 | WS dropped on server restart; client reconnect backoff 1–30s; edits during gap → no `change` events → tab stale | V27 |
+| B8 | 2026-05-08 | ttyd-attach.sh fell back to bare `claude`; absent from systemd PATH → tmux new-session command fails → session dies → exit-loop on every browser connect | V39 |

@@ -12,7 +12,7 @@ set -e
 
 PROJECT="$1"
 PROJECT_DIR="${PROJECTS_ROOT:-$HOME/projects}/$PROJECT"
-CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
 
 if [[ -z "$PROJECT" || ! -d "$PROJECT_DIR" ]]; then
     echo "usage: $0 <project-name> (project must exist under \$PROJECTS_ROOT, default ~/projects/)" >&2
