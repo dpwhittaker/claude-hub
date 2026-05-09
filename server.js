@@ -42,6 +42,7 @@ const { writeBootstrapPrompt } = require('./lib/bootstrap-prompt');
 const { effectiveTemplate } = require('./lib/template-policy');
 const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const { pickDevelopOrientation } = require('./lib/orientation');
+const { installTouchWheel } = require('./lib/touch-wheel');
 
 const PORT = Number(process.env.PROXY_PORT) || 8002;
 const LANDING_PATH = path.join(__dirname, 'landing.html');
@@ -1440,6 +1441,8 @@ ${tabKey.toString()}
 
 ${pickDevelopOrientation.toString()}
 
+${installTouchWheel.toString()}
+
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -1855,6 +1858,15 @@ function showDevelop(show) {
   try { localStorage.setItem(DEVELOP_VISIBLE_KEY, show ? '1' : '0'); } catch {}
 }
 DEVELOP_TOGGLE.addEventListener('click', () => showDevelop(DEVELOP_PANE.hidden));
+
+// V40: translate touch-drag → wheel events inside the terminal iframe so
+// xterm scrolls under finger drag on phones/tablets. Same-origin via proxy.
+DEVELOP_FRAME.addEventListener('load', () => {
+  try {
+    const doc = DEVELOP_FRAME.contentDocument;
+    if (doc) installTouchWheel(doc);
+  } catch {}
+});
 
 const initVisible = (() => {
   try { return localStorage.getItem(DEVELOP_VISIBLE_KEY) === '1'; } catch { return false; }

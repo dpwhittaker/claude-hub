@@ -112,6 +112,7 @@ module exports (test surface, not public API):
 - V37: dialog onboard mode populates `<select>` from `/api/projects/orphans`. Empty list → mode option disabled w/ hint "no orphan folders under ~/projects".
 - V38: develop pane orientation = side-by-side (terminal right) iff viewport `width > 1.2 * height`; else stacked (terminal below file viewer). re-evaluate on `window.resize` + initial mount. splitter axis + pane flex-direction swap atomically. separate persisted size keys per orientation. ⊥ stale layout on viewport rotate/resize.
 - V39: `ttyd-attach.sh` `CLAUDE_BIN` default ! match §C claude-binary default (`$HOME/.local/bin/claude`). bare `claude` ⊥ resolve in systemd PATH (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin`) → tmux command fails → session dies → V4 exit-loop trip.
+- V40: develop-pane terminal iframe ! translate touch-drag → synthetic `wheel` events on iframe document so xterm scrolls under finger drag. attach on iframe `load` (same-origin via proxy). deltaY = -(currentY - lastY). ⊥ stuck terminal scroll on mobile/tablet.
 
 ## §T TASKS
 
@@ -165,6 +166,7 @@ module exports (test surface, not public API):
 | T46 | x | landing.html onboard hint = exact spec string `"no orphan folders under ~/projects"` | V37 |
 | T47 | x | spec dedup: drop §C lines duplicating V2/V3/V6/V7/V21/V22; refresh ttyd socket constraint to /run/ttyd/ 0755; rewrite `POST /api/projects` + `DELETE` narrative for T44 reality; refresh §I.files lib enumeration; trim V24 cleanup-dup, V33 hidden-fieldset-dup, V36 ttyd-enable-dup; merge V30 into V31 | - |
 | T48 | x | responsive develop-pane orientation: side-by-side when `vw > 1.2 * vh`, stacked otherwise. listen `resize`, swap flex-direction + splitter axis. separate persisted size keys per orientation | V38 |
+| T49 | x | touch→wheel translator on develop iframe: on `load`, listen `touchstart/touchmove` on `contentWindow.document`, dispatch `WheelEvent('wheel', {deltaY, deltaMode:0})` per move delta. preventDefault on touchmove to suppress page scroll inside iframe | V40 |
 
 ## §B BUGS
 
