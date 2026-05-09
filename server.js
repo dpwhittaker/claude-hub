@@ -146,7 +146,11 @@ proxy.on('error', (err, _req, res) => {
 // /term/<key> (no extra path, optional query). Anything deeper (asset, ws,
 // token endpoint) is not the HTML index and must pass through verbatim.
 const TERM_INDEX_RE = /^\/term\/[A-Za-z0-9_.-]+\/?(?:\?.*)?$/;
-const TOUCH_WHEEL_INJECT = `<script>(${require('./lib/touch-wheel').installTouchWheel.toString()})(document);</script>`;
+// Inject installTouchWheel into bare ttyd /term/<key>/ pages so touch-drag
+// scrolls history on phones/tablets. Lives in <head> (runs before body
+// parses) since ttyd's preact mount replaces body children, which would
+// strip a body-end script before it could run.
+const TOUCH_WHEEL_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${require('./lib/touch-wheel').installTouchWheel.toString()})(document);});</script>`;
 
 proxy.on('proxyRes', (proxyRes, req, res) => {
   const wantsInject = req.method === 'GET'
@@ -162,7 +166,11 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
   proxyRes.on('data', (c) => chunks.push(c));
   proxyRes.on('end', () => {
     let html = Buffer.concat(chunks).toString('utf8');
-    if (html.includes('</body>')) {
+    // Inject into <head> (runs before body parses) so ttyd's preact mount
+    // can't wipe us. Defer DOM work via DOMContentLoaded + setInterval.
+    if (html.includes('</head>')) {
+      html = html.replace('</head>', TOUCH_WHEEL_INJECT + '</head>');
+    } else if (html.includes('</body>')) {
       html = html.replace('</body>', TOUCH_WHEEL_INJECT + '</body>');
     } else {
       html += TOUCH_WHEEL_INJECT;
@@ -2326,6 +2334,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   rewriteUrl(req, route);
+  // For bare /term/<key>/ HTML index requests we need to inject the touch-
+  // wheel translator into the body. ttyd will gzip if the client accepts it,
+  // and we'd rather not decompress/recompress just to splice 3KB. Force
+  // identity so the upstream returns plaintext we can buffer and rewrite.
+  if (req.method === 'GET' && TERM_INDEX_RE.test(req.url)) {
+    req.headers['accept-encoding'] = 'identity';
+  }
   proxy.web(req, res, { target: routeTarget(route) });
 });
 
