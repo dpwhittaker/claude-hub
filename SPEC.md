@@ -115,6 +115,7 @@ module exports (test surface, not public API):
 - V39: `ttyd-attach.sh` `CLAUDE_BIN` default ! match §C claude-binary default (`$HOME/.local/bin/claude`). bare `claude` ⊥ resolve in systemd PATH (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin`) → tmux command fails → session dies → V4 exit-loop trip.
 - V40: develop-pane terminal iframe ! translate touch-drag → synthetic `wheel` events on iframe document so xterm scrolls under finger drag. attach on iframe `load` (same-origin via proxy). deltaY = -(currentY - lastY). ⊥ stuck terminal scroll on mobile/tablet.
 - V41: ∀ WS `change` event → reload tabs where `info.path === path` ∨ tab doc is embedder (ext ∈ {`md`, `markdown`, `html`, `htm`}). HTML/MD transitively embed `<img>`/`<script>`/`<link>`; child-asset change ⇒ parent tab must cache-bust. ⊥ stale embedded asset until tab close+reopen. scroll preserved per V11.
+- V42: any `lib/*.js` function inlined into client via `.toString()` ! reference module-scope consts (closure dies on inline → `ReferenceError` at runtime). literals must live inside the function body. test must round-trip via `new Function(src)()` to prove self-containment.
 
 ## §T TASKS
 
@@ -170,6 +171,7 @@ module exports (test surface, not public API):
 | T48 | x | responsive develop-pane orientation: side-by-side when `vw > 1.2 * vh`, stacked otherwise. listen `resize`, swap flex-direction + splitter axis. separate persisted size keys per orientation | V38 |
 | T49 | x | touch→wheel translator on develop iframe: on `load`, listen `touchstart/touchmove` on `contentWindow.document`, dispatch `WheelEvent('wheel', {deltaY, deltaMode:0})` per move delta. preventDefault on touchmove to suppress page scroll inside iframe | V40 |
 | T50 | x | extract reload-target selector → `lib/tab-reload-targets.js` (`isEmbedder` + `tabsToReload`). server `handleChange` uses it; inlined into client via `.toString()`. tests cover direct match + embedder transitive reload | V41 |
+| T51 | x | inline `EMBED_EXT` const into `isEmbedder` body so `.toString()` round-trip stays self-contained; add Function-reconstruction test | V42 |
 
 ## §B BUGS
 
@@ -184,3 +186,4 @@ module exports (test surface, not public API):
 | B7 | 2026-05-05 | WS dropped on server restart; client reconnect backoff 1–30s; edits during gap → no `change` events → tab stale | V27 |
 | B8 | 2026-05-08 | ttyd-attach.sh fell back to bare `claude`; absent from systemd PATH → tmux new-session command fails → session dies → exit-loop on every browser connect | V39 |
 | B9 | 2026-05-09 | browse tab not auto-reload when image/js referenced by an open `.md`/`.html` tab changes; `handleChange` filtered by exact path match only → user had to close+reopen tab | V41 |
+| B10 | 2026-05-09 | V41 fix shipped broken: `isEmbedder` referenced module-scope `const EMBED_EXT` that didn't survive `.toString()` inline → `ReferenceError` aborted `handleChange` for every embedder-mismatch tab → no reload at all on the-first-step/sparks.md edit | V42 |

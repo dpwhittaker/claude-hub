@@ -64,6 +64,23 @@ test('V41: empty tabs → empty result', () => {
   assert.deepEqual(tabsToReload(new Map(), 'anything'), []);
 });
 
+// Server inlines isEmbedder + tabsToReload into the client via `.toString()`
+// — closure references (e.g. a hoisted EMBED_EXT const) would become
+// ReferenceError on the client. Round-trip the source through Function() to
+// catch any future closure leak.
+test('V41: isEmbedder + tabsToReload survive .toString() round-trip (no closure refs)', () => {
+  const src = isEmbedder.toString() + '\n' + tabsToReload.toString() + '\nreturn { isEmbedder, tabsToReload };';
+  const reconstructed = new Function(src)();
+  assert.equal(reconstructed.isEmbedder('README.md'), true);
+  assert.equal(reconstructed.isEmbedder('foo.png'), false);
+  const tabs = new Map([
+    ['k1', { path: 'README.md', mode: 'view' }],
+    ['k2', { path: 'foo.png', mode: 'view' }],
+  ]);
+  const out = reconstructed.tabsToReload(tabs, 'foo.png');
+  assert.equal(out.length, 2);
+});
+
 test('V41: multiple embedder tabs all reload on any change', () => {
   const a = { path: 'A.md', mode: 'view' };
   const b = { path: 'B.html', mode: 'render' };
