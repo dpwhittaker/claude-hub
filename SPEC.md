@@ -111,7 +111,7 @@ module exports (test surface, not public API):
 - V35: Clone is the default GitHub mode in the create dialog. Default dialog open state → Template fieldset hidden.
 - V36: `github.mode === 'onboard'` adopts an existing folder under `PROJECTS_ROOT`. Stamps sentinel `.project-meta.json` w/ `name + createdAt` only (no `github`, no `template`). Writes scan-existing bootstrap prompt. 409 if `.project-meta.json` already exists. 404 if folder missing. ⊥ overwrite of any existing file in the tree. ttyd@ enable per V13.
 - V37: dialog onboard mode populates `<select>` from `/api/projects/orphans`. Empty list → mode option disabled w/ hint "no orphan folders under ~/projects".
-- V38: develop pane orientation = side-by-side (terminal right) iff viewport `width > 1.2 * height`; else stacked (terminal below file viewer). re-evaluate on `window.resize` + initial mount. splitter axis + pane flex-direction swap atomically. separate persisted size keys per orientation. ⊥ stale layout on viewport rotate/resize.
+- V38: develop pane sits at `<main>` level — sibling of the (tree-pane | work-area) row — so it spans the full `<main>` width when shown. ⊥ nested inside `work-area` (would clip terminal to area below the file-tabs row). `<main>` is column flex; persisted as `view-shell:develop-height:<proj>`.
 - V39: `ttyd-attach.sh` `CLAUDE_BIN` default ! match §C claude-binary default (`$HOME/.local/bin/claude`). bare `claude` ⊥ resolve in systemd PATH (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin`) → tmux command fails → session dies → V4 exit-loop trip.
 - V40: develop-pane terminal iframe ! translate touch-drag → synthetic `wheel` events on iframe document so xterm scrolls under finger drag. attach on iframe `load` (same-origin via proxy). deltaY = -(currentY - lastY). ⊥ stuck terminal scroll on mobile/tablet.
 - V41: ∀ WS `change` event → reload tabs where `info.path === path` ∨ tab doc is embedder (ext ∈ {`md`, `markdown`, `html`, `htm`}). HTML/MD transitively embed `<img>`/`<script>`/`<link>`; child-asset change ⇒ parent tab must cache-bust. ⊥ stale embedded asset until tab close+reopen. scroll preserved per V11.
@@ -172,6 +172,7 @@ module exports (test surface, not public API):
 | T49 | x | touch→wheel translator on develop iframe: on `load`, listen `touchstart/touchmove` on `contentWindow.document`, dispatch `WheelEvent('wheel', {deltaY, deltaMode:0})` per move delta. preventDefault on touchmove to suppress page scroll inside iframe | V40 |
 | T50 | x | extract reload-target selector → `lib/tab-reload-targets.js` (`isEmbedder` + `tabsToReload`). server `handleChange` uses it; inlined into client via `.toString()`. tests cover direct match + embedder transitive reload | V41 |
 | T51 | x | inline `EMBED_EXT` const into `isEmbedder` body so `.toString()` round-trip stays self-contained; add Function-reconstruction test | V42 |
+| T52 | x | restructure view shell `<main>` into column flex w/ `.top-row` (tree+work-area) + `develop-splitter` + `develop-pane` siblings. drop V38 side-by-side orientation logic and `lib/orientation.js`. develop-pane spans full `<main>` width. structural HTML test asserts develop-pane sibling-of-top-row | V38 |
 
 ## §B BUGS
 
@@ -187,3 +188,4 @@ module exports (test surface, not public API):
 | B8 | 2026-05-08 | ttyd-attach.sh fell back to bare `claude`; absent from systemd PATH → tmux new-session command fails → session dies → exit-loop on every browser connect | V39 |
 | B9 | 2026-05-09 | browse tab not auto-reload when image/js referenced by an open `.md`/`.html` tab changes; `handleChange` filtered by exact path match only → user had to close+reopen tab | V41 |
 | B10 | 2026-05-09 | V41 fix shipped broken: `isEmbedder` referenced module-scope `const EMBED_EXT` that didn't survive `.toString()` inline → `ReferenceError` aborted `handleChange` for every embedder-mismatch tab → no reload at all on the-first-step/sparks.md edit | V42 |
+| B11 | 2026-05-10 | develop-pane nested inside `work-area` (sibling of viewer-pane) → terminal width clipped to area below the file-tabs row instead of spanning full `<main>`. classic side-by-side orientation logic (V38 v1) baked the nesting in | V38 (revised) |
