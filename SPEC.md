@@ -49,6 +49,7 @@ files:
 - `lib/template-policy.js` — `effectiveTemplate(body)` (V21 + clone/onboard force).
 - `lib/gh-repos.js` — `makeGhRepos({exec, ttlMs, now})` cache + `filterReposByFolders(repos, folders)`.
 - `lib/onboard.js` — `bootstrapOnboard(dir, name)` + `listOrphanFolderNames(projectsRoot)`.
+- `lib/tab-reload-targets.js` — `isEmbedder(path)` + `tabsToReload(tabs, changedPath)`. inlined into client via `.toString()`.
 - `eslint.config.js` — flat config (`@eslint/js` recommended + node globals).
 - `.github/workflows/ci.yml` — push/PR trigger; `npm ci` + `npm run lint` + `npm test` on Node 22.
 - `<project>/.project-meta.json` — sentinel. fields: `name, createdAt, openUrl?, proxyTarget?, proxyPrefix?, stripPrefix?, extraUnits?, template?`
@@ -113,6 +114,7 @@ module exports (test surface, not public API):
 - V38: develop pane orientation = side-by-side (terminal right) iff viewport `width > 1.2 * height`; else stacked (terminal below file viewer). re-evaluate on `window.resize` + initial mount. splitter axis + pane flex-direction swap atomically. separate persisted size keys per orientation. ⊥ stale layout on viewport rotate/resize.
 - V39: `ttyd-attach.sh` `CLAUDE_BIN` default ! match §C claude-binary default (`$HOME/.local/bin/claude`). bare `claude` ⊥ resolve in systemd PATH (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin`) → tmux command fails → session dies → V4 exit-loop trip.
 - V40: develop-pane terminal iframe ! translate touch-drag → synthetic `wheel` events on iframe document so xterm scrolls under finger drag. attach on iframe `load` (same-origin via proxy). deltaY = -(currentY - lastY). ⊥ stuck terminal scroll on mobile/tablet.
+- V41: ∀ WS `change` event → reload tabs where `info.path === path` ∨ tab doc is embedder (ext ∈ {`md`, `markdown`, `html`, `htm`}). HTML/MD transitively embed `<img>`/`<script>`/`<link>`; child-asset change ⇒ parent tab must cache-bust. ⊥ stale embedded asset until tab close+reopen. scroll preserved per V11.
 
 ## §T TASKS
 
@@ -167,6 +169,7 @@ module exports (test surface, not public API):
 | T47 | x | spec dedup: drop §C lines duplicating V2/V3/V6/V7/V21/V22; refresh ttyd socket constraint to /run/ttyd/ 0755; rewrite `POST /api/projects` + `DELETE` narrative for T44 reality; refresh §I.files lib enumeration; trim V24 cleanup-dup, V33 hidden-fieldset-dup, V36 ttyd-enable-dup; merge V30 into V31 | - |
 | T48 | x | responsive develop-pane orientation: side-by-side when `vw > 1.2 * vh`, stacked otherwise. listen `resize`, swap flex-direction + splitter axis. separate persisted size keys per orientation | V38 |
 | T49 | x | touch→wheel translator on develop iframe: on `load`, listen `touchstart/touchmove` on `contentWindow.document`, dispatch `WheelEvent('wheel', {deltaY, deltaMode:0})` per move delta. preventDefault on touchmove to suppress page scroll inside iframe | V40 |
+| T50 | x | extract reload-target selector → `lib/tab-reload-targets.js` (`isEmbedder` + `tabsToReload`). server `handleChange` uses it; inlined into client via `.toString()`. tests cover direct match + embedder transitive reload | V41 |
 
 ## §B BUGS
 
@@ -180,3 +183,4 @@ module exports (test surface, not public API):
 | B6 | 2026-05-05 | tab key `'render:' + path` collides w/ filename literally `render:foo` (Linux allows `:` in names) | V15 |
 | B7 | 2026-05-05 | WS dropped on server restart; client reconnect backoff 1–30s; edits during gap → no `change` events → tab stale | V27 |
 | B8 | 2026-05-08 | ttyd-attach.sh fell back to bare `claude`; absent from systemd PATH → tmux new-session command fails → session dies → exit-loop on every browser connect | V39 |
+| B9 | 2026-05-09 | browse tab not auto-reload when image/js referenced by an open `.md`/`.html` tab changes; `handleChange` filtered by exact path match only → user had to close+reopen tab | V41 |

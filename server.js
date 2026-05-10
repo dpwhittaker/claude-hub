@@ -43,6 +43,7 @@ const { effectiveTemplate } = require('./lib/template-policy');
 const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const { pickDevelopOrientation } = require('./lib/orientation');
 const { installTouchWheel } = require('./lib/touch-wheel');
+const { isEmbedder, tabsToReload } = require('./lib/tab-reload-targets');
 
 const PORT = Number(process.env.PROXY_PORT) || 8002;
 const LANDING_PATH = path.join(__dirname, 'landing.html');
@@ -1490,6 +1491,10 @@ ${pickDevelopOrientation.toString()}
 
 ${installTouchWheel.toString()}
 
+${isEmbedder.toString()}
+
+${tabsToReload.toString()}
+
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -1653,14 +1658,12 @@ function closeTabsUnderPath(prefix) {
   }
 }
 
-// File content changed on disk — reload every tab pointing at it, restoring
-// scroll position so the user doesn't lose their place. Both 'view' and
-// 'render' tabs reload; both come from same-origin URLs so contentWindow
-// scroll access works.
+// File content changed on disk — reload every tab whose iframe content may
+// have gone stale (V41): direct path match, OR embedder docs (.md/.html)
+// that may transitively reference the changed asset (image/js/css).
+// Scroll preserved per V11.
 function handleChange(p) {
-  for (const [, info] of tabs) {
-    if (info.path === p) reloadTabFrame(info);
-  }
+  for (const info of tabsToReload(tabs, p)) reloadTabFrame(info);
 }
 
 function reloadTabFrame(info) {
