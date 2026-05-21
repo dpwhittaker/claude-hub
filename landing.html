@@ -350,8 +350,12 @@
       <div class="field" id="cd-template-field"><span>Template</span>
         <div class="gh-group">
           <label class="gh-row"><input type="radio" name="cd-template" value="vite" checked>Vite (React + TypeScript)</label>
+          <label class="gh-row"><input type="radio" name="cd-template" value="game-2d">2D Game (Phaser)</label>
+          <label class="gh-row"><input type="radio" name="cd-template" value="game-3d">Simple 3D (R3F + Three)</label>
+          <label class="gh-row"><input type="radio" name="cd-template" value="game-3d-complex">Complex 3D (Babylon)</label>
           <label class="gh-row"><input type="radio" name="cd-template" value="none">None (bare AGENTS.md + README.md only)</label>
         </div>
+        <label class="gh-row" id="cd-firebase-row"><input type="checkbox" id="cd-firebase">Firebase backend (Auth + Firestore + Hosting)</label>
       </div>
       <div class="err" id="cd-err"></div>
       <div class="buttons">
@@ -485,6 +489,22 @@
       r.addEventListener('change', syncGhSubs);
     }
 
+    // Firebase backend only makes sense when a template is scaffolded — disable
+    // (and clear) the checkbox when "None" is selected. SPEC §V45.
+    const dlgFirebaseRow = document.getElementById('cd-firebase-row');
+    const dlgFirebase = document.getElementById('cd-firebase');
+    function syncFirebase() {
+      const template = dlgForm.querySelector('input[name="cd-template"]:checked').value;
+      const disabled = template === 'none';
+      dlgFirebase.disabled = disabled;
+      if (disabled) dlgFirebase.checked = false;
+      dlgFirebaseRow.style.opacity = disabled ? '0.45' : '';
+    }
+    for (const r of dlgForm.querySelectorAll('input[name="cd-template"]')) {
+      r.addEventListener('change', syncFirebase);
+    }
+    syncFirebase();
+
     dlgCancel.addEventListener('click', () => dlg.close());
 
     // Populate the onboard <select> from /api/projects/orphans. Empty list
@@ -588,7 +608,7 @@
       }
       const mode = dlgForm.querySelector('input[name="gh-mode"]:checked').value;
       const template = dlgForm.querySelector('input[name="cd-template"]:checked').value;
-      const payload = { name, template };
+      const payload = { name, template, firebase: dlgFirebase.checked && !dlgFirebase.disabled };
       if (mode === 'clone') {
         // Prefer the dropdown value when it's loaded + populated; fall
         // back to the text input (its `value` is empty when the select is
