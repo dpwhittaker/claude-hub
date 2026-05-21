@@ -37,6 +37,41 @@ test('scan-existing prompt instructs claude to scan tree + write missing docs (V
   }
 });
 
+test('greenfield prompt names the template stack so claude is oriented (V31)', () => {
+  const d = scratch();
+  try {
+    writeBootstrapPrompt(d, 'demo', 'greenfield', { templateId: 'game-3d' });
+    const txt = fs.readFileSync(path.join(d, '.claude-bootstrap.txt'), 'utf8');
+    assert.match(txt, /react-three-fiber/);
+    assert.match(txt, /rapier/);
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('greenfield prompt mentions Firebase when overlaid (V31)', () => {
+  const d = scratch();
+  try {
+    writeBootstrapPrompt(d, 'demo', 'greenfield', { templateId: 'game-2d', firebase: true });
+    const txt = fs.readFileSync(path.join(d, '.claude-bootstrap.txt'), 'utf8');
+    assert.match(txt, /Phaser/);
+    assert.match(txt, /Firebase/);
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('greenfield prompt has no stack line for template none / no opts', () => {
+  const d = scratch();
+  try {
+    writeBootstrapPrompt(d, 'demo', 'greenfield');
+    const txt = fs.readFileSync(path.join(d, '.claude-bootstrap.txt'), 'utf8');
+    assert.doesNotMatch(txt, /This project is/);
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
 test('unknown flavor falls back to greenfield', () => {
   const d = scratch();
   try {

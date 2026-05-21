@@ -39,7 +39,7 @@ const { copyTemplate } = require('./lib/template');
 const { makeGhRepos, filterReposByFolders } = require('./lib/gh-repos');
 const { PROJECT_ID_RE, RESERVED_PROJECT_NAMES } = require('./lib/project-name');
 const { writeBootstrapPrompt } = require('./lib/bootstrap-prompt');
-const { effectiveTemplate } = require('./lib/template-policy');
+const { effectiveTemplate, firebaseEnabled } = require('./lib/template-policy');
 const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const { installTouchWheel } = require('./lib/touch-wheel');
 const { isEmbedder, tabsToReload } = require('./lib/tab-reload-targets');
@@ -635,17 +635,27 @@ async function bootstrapCreateRepo(dir, name, visibility) {
   );
 }
 
-// Vite (React + TS) scaffold. Copies templates/vite/ → project dir with
-// `<NAME>` and `<PORT>` placeholders replaced, stamps .project-meta.json,
-// runs `npm install`, then enables the per-project vite@<name>.service.
-// Cleans up on any failure so the caller's "doesn't exist" precondition is
-// restored on retry. SPEC §V.21–V.26.
-async function bootstrapVite(dir, name) {
+// Vite-based template scaffold (vite | game-2d | game-3d | game-3d-complex).
+// Copies templates/<templateId>/ → project dir with `<NAME>`/`<PORT>`
+// placeholders replaced, stamps .project-meta.json, optionally overlays the
+// _firebase template + installs firebase, runs `npm install`, then enables the
+// per-project vite@<name>.service. All templates are vite projects so they
+// reuse the one unit — no per-template service (SPEC §V43). Cleans up on any
+// failure so the caller's "doesn't exist" precondition is restored on retry.
+// SPEC §V21–V26, §V43–V45.
+async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {}) {
   fs.mkdirSync(dir, { recursive: false });
   const port = allocatePort(PROJECTS_ROOT);
-  const templateDir = path.join(__dirname, 'templates', 'vite');
+  const templateDir = path.join(__dirname, 'templates', templateId);
   try {
     copyTemplate(templateDir, dir, { NAME: name, PORT: String(port) });
+    // Firebase overlay copied over the base tree before install so `npm
+    // install firebase` and the base install can be folded into one step.
+    // npm merges firebase into package.json — avoids JSON-merge-via-placeholder
+    // (SPEC §V45).
+    if (firebase) {
+      copyTemplate(path.join(__dirname, 'templates', '_firebase'), dir, { NAME: name, PORT: String(port) });
+    }
     // Write meta before npm install so a failed install still leaves a
     // recognizable managed project that DELETE /api/projects can clean up.
     fs.writeFileSync(
@@ -653,7 +663,7 @@ async function bootstrapVite(dir, name) {
       JSON.stringify({
         name,
         createdAt: new Date().toISOString(),
-        template: 'vite',
+        template: templateId,
         proxyTarget: 'http://127.0.0.1:' + port,
         proxyPrefix: '/' + name,
         stripPrefix: false,
@@ -661,7 +671,10 @@ async function bootstrapVite(dir, name) {
         extraUnits: ['vite@' + name + '.service'],
       }, null, 2) + '\n',
     );
-    await execFileP('/bin/bash', ['-lc', 'export NVM_DIR=$HOME/.nvm && . $NVM_DIR/nvm.sh && cd "$0" && npm install', dir], {
+    const installCmd = firebase
+      ? 'cd "$0" && npm install && npm install firebase'
+      : 'cd "$0" && npm install';
+    await execFileP('/bin/bash', ['-lc', 'export NVM_DIR=$HOME/.nvm && . $NVM_DIR/nvm.sh && ' + installCmd, dir], {
       timeout: 5 * 60 * 1000,
     });
     // sudoers grant for `sudo -n systemctl enable --now vite@<name>.service`
@@ -671,9 +684,9 @@ async function bootstrapVite(dir, name) {
     });
   } catch (e) {
     fs.rmSync(dir, { recursive: true, force: true });
-    throw new Error('vite scaffold failed: ' + e.message, { cause: e });
+    throw new Error(templateId + ' scaffold failed: ' + e.message, { cause: e });
   }
-  writeBootstrapPrompt(dir, name, 'greenfield');
+  writeBootstrapPrompt(dir, name, 'greenfield', { templateId, firebase });
   return port;
 }
 
@@ -704,6 +717,7 @@ function handleCreateProject(req, res) {
     }
 
     const template = effectiveTemplate(body);
+    const firebase = firebaseEnabled(body, template);
     try {
       if (gh.mode === 'onboard') {
         await bootstrapOnboard(dir, name);
@@ -718,8 +732,8 @@ function handleCreateProject(req, res) {
         await bootstrapClone(dir, name, source);
       } else if (gh.mode === 'create') {
         const visibility = gh.visibility === 'public' ? 'public' : 'private';
-        if (template === 'vite') {
-          await bootstrapVite(dir, name);
+        if (template !== 'none') {
+          await bootstrapTemplate(dir, name, template, { firebase });
           try {
             await ghInitPush(dir, name, visibility);
           } catch (e) {
@@ -730,7 +744,7 @@ function handleCreateProject(req, res) {
           await bootstrapCreateRepo(dir, name, visibility);
         }
       } else {
-        if (template === 'vite') await bootstrapVite(dir, name);
+        if (template !== 'none') await bootstrapTemplate(dir, name, template, { firebase });
         else await bootstrapNoGithub(dir, name);
       }
     } catch (e) {
@@ -1223,8 +1237,31 @@ function releaseWatcher(project, ws) {
 // Right pane: tab strip + per-tab iframe pointing at the existing file-view
 // endpoint with ?embed=1 (which suppresses the per-page header). README.md
 // (case-insensitive) opens in the initial tab if present.
+// Lookup the project's reverse-proxy prefix from its `.project-meta.json`,
+// matching the resolution rule in `buildStaticRoutes`. Returns null when the
+// project has no `proxyTarget` declared. The view shell injects this so the
+// HTML eye-icon (render mode) can target the live proxy URL for build-tool
+// projects whose on-disk `index.html` is a source template, not runnable
+// bytes (e.g. Vite: `<script src="/src/main.tsx">`).
+function readProjectProxyPrefix(project) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(
+      path.join(PROJECTS_ROOT, project, '.project-meta.json'), 'utf8'));
+    const target = typeof meta.proxyTarget === 'string' ? meta.proxyTarget.trim() : '';
+    if (!target) return null;
+    const prefix = typeof meta.proxyPrefix === 'string' && meta.proxyPrefix.startsWith('/')
+      ? meta.proxyPrefix
+      : '/' + project;
+    if (!/^\/[A-Za-z0-9_./-]+$/.test(prefix)) return null;
+    return prefix;
+  } catch {
+    return null;
+  }
+}
+
 function renderViewShell(project) {
   const safeProject = escapeHtml(project);
+  const proxyPrefix = readProjectProxyPrefix(project);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1408,6 +1445,11 @@ function renderViewShell(project) {
 </main>
 <script>
 const PROJECT = ${JSON.stringify(project)};
+// Reverse-proxy prefix for this project (e.g. "/lifebot"), or null when the
+// project has no proxyTarget. SPEC §V16 — eye-icon render mode routes through
+// the proxy when set, since build-tool index.html files (Vite etc.) are
+// source templates that can't run from raw bytes.
+const PROXY_PREFIX = ${JSON.stringify(proxyPrefix)};
 const TREE_PANE = document.getElementById('tree-pane');
 const TABS = document.getElementById('tabs');
 const FRAMES = document.getElementById('frames');
@@ -1755,11 +1797,32 @@ function openTab(filePath, mode) {
 
   const frame = document.createElement('iframe');
   // Encode each segment so spaces / unicode survive, but keep slashes
-  // between segments. ?embed=1 strips the per-file header for normal view;
-  // ?raw=1 returns raw bytes (text/html for .html), so iframe runs the page.
-  const segs = filePath.split('/').map(encodeURIComponent).join('/');
-  const qs = mode === 'render' ? '?raw=1' : '?embed=1';
-  frame.src = '/view/' + encodeURIComponent(PROJECT) + '/' + segs + qs;
+  // between segments. Render mode prefers the live proxy URL when the
+  // project declares a proxyTarget (build-tool entry points like Vite's
+  // index.html reference /src/main.tsx and cannot run from raw bytes);
+  // falls back to ?raw=1 for projects with no proxy. View mode always
+  // goes through /view/ with ?embed=1 (per-file header stripped).
+  if (mode === 'render' && PROXY_PREFIX) {
+    // index.html at any depth → trailing slash (let the upstream serve
+    // its own root index). Other paths pass through verbatim so e.g.
+    // public/foo.html lands on <proxyPrefix>/public/foo.html.
+    const lower = filePath.toLowerCase();
+    const isIndex = lower === 'index.html' || lower === 'index.htm'
+      || lower.endsWith('/index.html') || lower.endsWith('/index.htm');
+    let tail;
+    if (isIndex) {
+      const lastSlash = filePath.lastIndexOf('/');
+      tail = lastSlash < 0 ? '' : filePath.slice(0, lastSlash + 1);
+    } else {
+      tail = filePath;
+    }
+    const segs = tail.split('/').map(encodeURIComponent).join('/');
+    frame.src = PROXY_PREFIX + '/' + segs;
+  } else {
+    const segs = filePath.split('/').map(encodeURIComponent).join('/');
+    const qs = mode === 'render' ? '?raw=1' : '?embed=1';
+    frame.src = '/view/' + encodeURIComponent(PROJECT) + '/' + segs + qs;
+  }
   FRAMES.appendChild(frame);
   wireFrameScroll(frame, key);
 

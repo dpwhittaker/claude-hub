@@ -80,3 +80,22 @@ test('reserved project names cannot be created', async () => {
     await fx.close();
   }
 });
+
+// game template + firebase fields must not bypass name validation: rejection
+// happens before any scaffold runs (so the test never shells out to npm).
+// SPEC §V43, §V45.
+test('game template + firebase payload still rejects invalid names', async () => {
+  const fx = await startFixture();
+  try {
+    for (const name of ['../escape', 'bad name!', '']) {
+      const res = await fetch(fx.url + '/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, template: 'game-3d', firebase: true }),
+      });
+      assert.ok(res.status >= 400, `"${name}" w/ game-3d+firebase must fail (got ${res.status})`);
+    }
+  } finally {
+    await fx.close();
+  }
+});

@@ -44,7 +44,7 @@ unless you opt in (see "Sharing across devices" below).
 
 ![Develop terminal](docs/img/develop.png)
 
-**New project dialog** — the `+` card opens this. Pick a name, pick a GitHub mode (skip, clone existing, or `gh repo create`), pick a template (Vite + React + TypeScript by default — auto-disabled when cloning since the repo brings its own structure). claude-hub does the rest: scaffold, `npm install`, autostart the dev server through the proxy, spin up a ttyd terminal, drop you into a fresh Claude session ready to plan:
+**New project dialog** — the `+` card opens this. Pick a name, pick a GitHub mode (skip, clone existing, or `gh repo create`), pick a template, and optionally tick **Firebase backend** (Auth + Firestore + Hosting). Templates: **Vite** (React + TS, default), **2D Game** (Phaser), **Simple 3D** (react-three-fiber + Three), **Complex 3D** (Babylon.js + Havok) — all auto-disabled when cloning since the repo brings its own structure. Game templates are still Vite projects (one `vite@` unit) and ship `build:pages` / `build:firebase` scripts for static deploy to GitHub Pages or Firebase Hosting. claude-hub does the rest: scaffold, `npm install`, autostart the dev server through the proxy, spin up a ttyd terminal, drop you into a fresh Claude session ready to plan:
 
 ![New project dialog](docs/img/new-project.png)
 

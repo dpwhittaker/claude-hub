@@ -112,20 +112,42 @@ curl -s   http://127.0.0.1:8002/api/view-tree/<project> | jq .
 ## Project creation
 
 Default template = **Vite (React + TypeScript)**. `POST /api/projects` body
-field `template: 'vite' | 'none'` (default `'vite'`; forced to `'none'` when
-`github.mode === 'clone'`). Clone source on the dialog comes from
+field `template: 'none' | 'vite' | 'game-2d' | 'game-3d' | 'game-3d-complex'`
+(default `'vite'`; unknown coerced to `'vite'`; forced to `'none'` when
+`github.mode ∈ {clone, onboard}`). Optional `firebase: bool` opt-in (forced
+false on `none`/clone/onboard). Clone source on the dialog comes from
 `GET /api/gh/repos` (cached 10 min) — only the user's own repos are listed.
 Cloning someone else's repo = fork on github.com first; the fork appears in
 the dropdown. `POST /api/projects` still accepts an arbitrary `source` slug
-or URL for power-user direct calls. Vite scaffold:
+or URL for power-user direct calls.
 
-1. `templates/vite/` copied with `<NAME>` + `<PORT>` placeholders replaced.
+**Template catalog** — every non-`none` template is a Vite project, so they
+all share one `vite@<name>.service` (no per-template systemd unit):
+
+| `template` | Stack | Entry |
+|---|---|---|
+| `vite` | React + TypeScript | `src/main.tsx` |
+| `game-2d` | Phaser 3 (2D engine) | `src/main.ts` |
+| `game-3d` | react-three-fiber + Three + rapier + zustand ("Simple 3D") | `src/App.tsx` |
+| `game-3d-complex` | Babylon.js + Havok + inspector ("Complex 3D") | `src/main.ts` |
+
+Scaffold (`bootstrapTemplate`):
+
+1. `templates/<template>/` copied with `<NAME>` + `<PORT>` placeholders replaced (`template` id == dir name, 1:1).
 2. Free port ≥ 5173 allocated by scanning sibling projects' `.project-meta.json` `proxyTarget`.
-3. `.project-meta.json` stamped: `template: 'vite'`, `proxyTarget`, `proxyPrefix: /<name>`, `stripPrefix: false`, `openUrl: /<name>/`, `extraUnits: ['vite@<name>.service']`.
-4. `npm install` (5 min timeout) in scaffolded dir.
-5. `sudo systemctl enable --now vite@<name>.service`.
+3. If `firebase` → `templates/_firebase/` overlaid (adds `src/firebase.ts`, `.env.example`, `firebase.json`, `.firebaserc`).
+4. `.project-meta.json` stamped: `template: '<template>'`, `proxyTarget`, `proxyPrefix: /<name>`, `stripPrefix: false`, `openUrl: /<name>/`, `extraUnits: ['vite@<name>.service']`.
+5. `npm install` (+ `npm install firebase` when overlaid), 5 min timeout, in scaffolded dir.
+6. `sudo systemctl enable --now vite@<name>.service`.
 
 `template: 'none'` skips all of this — bare `AGENTS.md` + `README.md` + sentinel only.
+
+**Static deploy** — games are meant to ship to static hosting, not run from
+the hub long-term. Each template ships `build:pages` (`vite build
+--base=/<NAME>/`, GitHub Pages — base = repo name) and `build:firebase`
+(`--base=/`, Firebase Hosting), plus `.github/workflows/pages.yml`. The dev
+base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
+`firebase.json` (Hosting → `dist`) for `firebase deploy`.
 
 ### Manual (without the + card)
 

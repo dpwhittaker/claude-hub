@@ -21,8 +21,8 @@ path-routed reverse proxy + landing page. one local port → multi-project hub. 
 routes (proxy):
 - `GET /` → `landing.html`
 - `GET /api/projects` → `{projects: [...]}`
-- `POST /api/projects` body `{name, github?: {mode: skip|clone|create|onboard, source?, visibility?}, template?: 'vite'|'none'}` → `{name, termUrl, browseUrl}`. `template` defaults `'vite'`, forced `'none'` when `github.mode ∈ {clone, onboard}`. every mode ends w/ `sudo systemctl enable --now ttyd@<name>.service` (V13). onboard adopts an existing folder under `PROJECTS_ROOT` named `name`; ⊥ clone, ⊥ scaffold on onboard.
-- landing dialog field order: Project name → GitHub → Template. GitHub radio order: Clone (default) → Onboard existing folder → Skip → Create. Template fieldset hidden (display:none) when GitHub mode ∈ {clone, onboard}; visible for skip/create.
+- `POST /api/projects` body `{name, github?: {mode: skip|clone|create|onboard, source?, visibility?}, template?: 'none'|'vite'|'game-2d'|'game-3d'|'game-3d-complex', firebase?: bool}` → `{name, termUrl, browseUrl}`. `template` defaults `'vite'`, unknown coerced `'vite'`, forced `'none'` when `github.mode ∈ {clone, onboard}` (V43). `firebase` defaults false, forced false when `template==='none'` ∨ clone ∨ onboard (V45). every mode ends w/ `sudo systemctl enable --now ttyd@<name>.service` (V13). onboard adopts an existing folder under `PROJECTS_ROOT` named `name`; ⊥ clone, ⊥ scaffold on onboard.
+- landing dialog field order: Project name → GitHub → Template. GitHub radio order: Clone (default) → Onboard existing folder → Skip → Create. Template radios: None | Vite (React+TS) | 2D Game (Phaser) | Simple 3D (R3F+Three) | Complex 3D (Babylon). `Firebase backend` checkbox below radios, enabled iff template ≠ None. Template fieldset hidden (display:none) when GitHub mode ∈ {clone, onboard}; visible for skip/create.
 - `DELETE /api/projects/<name>` → `sudo systemctl disable --now ttyd@<name>.service`, then `extraUnits`, kill tmux, rm folder
 - `GET /api/view-tree/<proj>` → `{project, tree}`. `?path=<sub>` → one-level lazy `{project, path, entries}`
 - `GET /view/<proj>/` → two-pane shell
@@ -41,12 +41,16 @@ files:
 - `services/ttyd-attach.sh` — joins/creates tmux session, runs `claude --continue` (gated by V4).
 - `services/vite@.service` — templated per-project Vite dev server. `ExecStart=npm run dev`, `WorkingDirectory=~/projects/%i`. enabled on Vite-template bootstrap.
 - `templates/vite/` — scaffold source (`package.json`, `vite.config.ts`, `index.html`, `tsconfig.json`, `src/main.tsx`, `src/App.tsx`, `.gitignore`). copied into project on create. `<NAME>` & `<PORT>` placeholders replaced.
+- `templates/game-2d/` — Phaser scaffold. vite + TS + `phaser`. `src/main.ts` boots `Phaser.Game` w/ demo Scene (arcade physics, keyboard input, sprite). no React. `<NAME>`/`<PORT>`.
+- `templates/game-3d/` — "Simple 3D". vite + React + TS + `three` `@react-three/fiber` `@react-three/drei` `@react-three/rapier` `zustand`. demo: lit scene, `KeyboardControls`, one rapier body, zustand store, drei `Html` HUD. `<NAME>`/`<PORT>`.
+- `templates/game-3d-complex/` — "Complex 3D". vite + TS + `@babylonjs/core` `@babylonjs/loaders` `@babylonjs/inspector` + Havok. `src/main.ts`: engine+scene in canvas, Havok physics, inspector toggle on key. `<NAME>`/`<PORT>`.
+- `templates/_firebase/` — overlay (⊥ standalone template). `src/firebase.ts` (env-gated Auth+Firestore init), `.env.example` (`VITE_FIREBASE_*`), `firebase.json`, `.firebaserc.template`, README cloud section. copied over base tree when `firebase:true` (V45).
 - `lib/tab-key.js` — `tabKey(p, mode)`. server inlines via `.toString()` into client template.
 - `lib/port-alloc.js` — `allocatePort(projectsRoot)` scans sibling `.project-meta.json` for free port ≥ 5173.
 - `lib/template.js` — `replaceVars` + `copyTemplate` for scaffold copy w/ `<KEY>` substitution.
 - `lib/project-name.js` — `PROJECT_ID_RE`, `RESERVED_PROJECT_NAMES` primitives. server.js re-exports.
-- `lib/bootstrap-prompt.js` — `writeBootstrapPrompt(dir, name, flavor)`.
-- `lib/template-policy.js` — `effectiveTemplate(body)` (V21 + clone/onboard force).
+- `lib/bootstrap-prompt.js` — `writeBootstrapPrompt(dir, name, flavor, opts={templateId, firebase})` + `STACK` map (template id → human stack blurb for greenfield prompt).
+- `lib/template-policy.js` — `effectiveTemplate(body)` → enum (V43, allowlist + coerce + clone/onboard force) + `firebaseEnabled(body, template)` (V45).
 - `lib/gh-repos.js` — `makeGhRepos({exec, ttlMs, now})` cache + `filterReposByFolders(repos, folders)`.
 - `lib/onboard.js` — `bootstrapOnboard(dir, name)` + `listOrphanFolderNames(projectsRoot)`.
 - `lib/tab-reload-targets.js` — `isEmbedder(path)` + `tabsToReload(tabs, changedPath)`. inlined into client via `.toString()`.
@@ -87,7 +91,7 @@ module exports (test surface, not public API):
 - V13: project create → `mkdir` + `.project-meta.json` + `README.md` + `AGENTS.md` + `sudo systemctl enable --now ttyd@<name>` ! all atomic. partial fail → cleanup.
 - V14: WS upgrade `/ws/view-tree/<proj>` handled in-process (`viewTreeWss`). proxy upgrade only after non-match.
 - V15: tab state per project keyed by `mode + '\0' + path` (NUL separator — only byte forbidden in POSIX paths). localStorage `view-shell:tabs:<proj>` + `view-shell:active:<proj>`. ⊥ cross-project bleed. ⊥ collision w/ filenames containing mode-prefix string.
-- V16: HTML eye-icon tab uses `?raw=1`. RAW_MIME[.html] = `text/html; charset=utf-8`. ⊥ octet-stream fallback for `.html`.
+- V16: HTML eye-icon tab. project w/ `.project-meta.json`.`proxyTarget` → iframe = `<proxyPrefix>/<relpath>` (index.html at any depth → trailing slash, let upstream serve its own root). project w/o `proxyTarget` → `?raw=1`; RAW_MIME[.html] = `text/html; charset=utf-8`. ⊥ raw bytes of build-tool entry-point index.html (Vite source template refs absolute `/src/main.tsx`, browser can't transpile, assets 404 against wrong origin → white screen). ⊥ octet-stream fallback for `.html`.
 - V17: WSL2 self-loopback to `*.ts.net` URL fails (route lives on Windows tailscale virtual interface). test from Windows or peer.
 - V18: ⊥ orphan `node server.js` binding 8002 — systemd owns it. fix on EADDRINUSE: `pkill -f 'node.*server.js'` then `systemctl restart claude-hub.service`.
 - V19: project HTTP backends ! concurrent (`ThreadingHTTPServer` or async). stock `http.server.HTTPServer` single-threaded → `CLOSE_WAIT` pile, wedge.
@@ -104,7 +108,7 @@ module exports (test surface, not public API):
 - V30: (merged into V31).
 - V31: bootstrap prompt branches, written to `<project>/.claude-bootstrap.txt` and consumed by `ttyd-attach.sh` `tmux send-keys` (read + send + delete):
   - **scan-existing** (clone / onboard): Claude walks tree first turn and writes whichever of `README.md` (human-facing — purpose + "what is this & why") or `AGENTS.md` (agent-facing — tech stack, conventions, directory layout, debugging signposts) is missing. ⊥ overwrite per V29.
-  - **greenfield** (skip / create + vite or none): Claude greets, asks "what should we build here?".
+  - **greenfield** (skip / create + scaffold): Claude reads AGENTS.md+README.md, greets naming the scaffolded stack so it's oriented, asks "what should we build here?". prompt names the template stack (`writeBootstrapPrompt` opts `{templateId, firebase}` → §I `STACK` map); ⊥ blank greet w/ no idea it's a Phaser/R3F/Babylon project. template `none` / no opts → no stack line.
 - V32: `/api/gh/repos` runs `gh repo list --json nameWithOwner,description,isFork,isPrivate,updatedAt --limit 200`. result cached in-process w/ ≤ 10 min TTL. ⊥ shell-out per dialog open. response excludes any candidate whose basename matches an existing folder under `PROJECTS_ROOT` (managed or not). sort: `isFork=false` first then `isFork=true`; `updatedAt` desc within each group. ⊥ user's own forks dominate top of dropdown.
 - V33: dialog clone-source is a `<select>` populated async from `/api/gh/repos`. on fetch failure / empty / timeout → fall back to free-text `<input>`. ⊥ block dialog while waiting.
 - V34: cloning another user's repo = fork on github.com first, pick the fork from the dropdown. arbitrary-URL clone still possible via direct `POST /api/projects` w/ `source: 'owner/repo'` (power-user flow), but not via the dialog.
@@ -116,6 +120,10 @@ module exports (test surface, not public API):
 - V40: develop-pane terminal iframe ! translate touch-drag → synthetic `wheel` events on iframe document so xterm scrolls under finger drag. attach on iframe `load` (same-origin via proxy). deltaY = -(currentY - lastY). ⊥ stuck terminal scroll on mobile/tablet.
 - V41: ∀ WS `change` event → reload tabs where `info.path === path` ∨ tab doc is embedder (ext ∈ {`md`, `markdown`, `html`, `htm`}). HTML/MD transitively embed `<img>`/`<script>`/`<link>`; child-asset change ⇒ parent tab must cache-bust. ⊥ stale embedded asset until tab close+reopen. scroll preserved per V11.
 - V42: any `lib/*.js` function inlined into client via `.toString()` ! reference module-scope consts (closure dies on inline → `ReferenceError` at runtime). literals must live inside the function body. test must round-trip via `new Function(src)()` to prove self-containment.
+- V43: `template` ∈ enum `{none, vite, game-2d, game-3d, game-3d-complex}`. id == `templates/<id>/` dirname (1:1). unknown → coerce `vite`. clone/onboard force `none` (extends V21). every non-`none` template = vite project (`npm run dev`) → reuses `vite@<name>.service` (V25), port alloc (V22), proxy meta (V23). ⊥ new per-template systemd unit. browse/eye-icon (V16/V53) works unchanged via `proxyTarget`.
+- V44: `bootstrapTemplate(dir, name, templateId, {firebase})` generalizes bootstrapVite — copy `templates/<templateId>` → stamp `.project-meta.json` w/ V23 fields but `template: <templateId>` → optional firebase overlay (V45) → `npm install` → enable `vite@<name>`. cleanup-on-fail per V13. `vite` = the identity case.
+- V45: `firebase:bool` POST field. forced false when `template==='none'` ∨ clone ∨ onboard (no scaffold to inject). when true → `copyTemplate(templates/_firebase)` over project tree THEN `npm install firebase` (npm merges `package.json` — ⊥ JSON-merge via placeholder copy). overlay files per §I. dialog checkbox enabled iff template ≠ None.
+- V46: game + vite templates ship two static-deploy build scripts — `build:pages` (`vite build --base=/<NAME>/`, GH Pages) + `build:firebase` (`vite build --base=/`, Firebase Hosting). dev base stays `/<name>/` per V20 (proxy routing). ⊥ single base serving both hosts. GH Pages workflow + `firebase.json` shipped (latter via `_firebase` overlay).
 
 ## §T TASKS
 
@@ -173,6 +181,16 @@ module exports (test surface, not public API):
 | T50 | x | extract reload-target selector → `lib/tab-reload-targets.js` (`isEmbedder` + `tabsToReload`). server `handleChange` uses it; inlined into client via `.toString()`. tests cover direct match + embedder transitive reload | V41 |
 | T51 | x | inline `EMBED_EXT` const into `isEmbedder` body so `.toString()` round-trip stays self-contained; add Function-reconstruction test | V42 |
 | T52 | x | restructure view shell `<main>` into column flex w/ `.top-row` (tree+work-area) + `develop-splitter` + `develop-pane` siblings. drop V38 side-by-side orientation logic and `lib/orientation.js`. develop-pane spans full `<main>` width. structural HTML test asserts develop-pane sibling-of-top-row | V38 |
+| T53 | x | eye-icon render mode routes through proxy when project has `proxyTarget`. `renderViewShell` reads `.project-meta.json`, injects `PROXY_PREFIX` const. `openTab` render branch: if PROXY_PREFIX → iframe = `<prefix>/<relpath>` (index.html → trailing slash); else → `?raw=1`. view mode unchanged | V16 |
+| T54 | x | add `templates/game-2d/` (Phaser), `templates/game-3d/` (R3F+Three), `templates/game-3d-complex/` (Babylon). each vite, `<NAME>`/`<PORT>`, demo scene, mirror `templates/vite/` file set + `AGENTS.md.template`/`README.md.template` | I.files,V43 |
+| T55 | x | add `templates/_firebase/` overlay tree (`src/firebase.ts`, `.env.example`, `firebase.json`, `.firebaserc.template`, README cloud section) | I.files,V45 |
+| T56 | x | generalize `bootstrapVite` → `bootstrapTemplate(dir, name, templateId, {firebase})`; id→dir 1:1; stamp `meta.template=templateId`; firebase overlay + `npm install firebase` when flag set | V43,V44,V45 |
+| T57 | x | `lib/template-policy.js`: `effectiveTemplate(body)` enum allowlist + coerce-to-vite + clone/onboard force; add `firebaseEnabled(body, template)` | V43,V45 |
+| T58 | x | `handleCreateProject`: dispatch any non-`none` template → `bootstrapTemplate`; pass `firebase` flag; force `none`/false on clone/onboard | I.routes,V43,V45 |
+| T59 | x | `landing.html`: template radios → 5 options; `Firebase backend` checkbox enabled iff template ≠ None; payload `{template, firebase}` | I.routes,V43,V45 |
+| T60 | x | static-deploy: `build:pages`/`build:firebase` scripts in each template `package.json` + `.github/workflows/pages.yml.template` (game/vite trees); `firebase.json` via `_firebase` overlay | V46 |
+| T61 | x | tests: effective-template enum+coerce+firebase-forcing; `copyTemplate` each new tree + overlay; routes payload accept/validate | V43,V44,V45 |
+| T62 | x | README + AGENTS: game-template catalog + per-host (GH Pages vs Firebase Hosting) deploy steps | I.files |
 
 ## §B BUGS
 
@@ -189,3 +207,4 @@ module exports (test surface, not public API):
 | B9 | 2026-05-09 | browse tab not auto-reload when image/js referenced by an open `.md`/`.html` tab changes; `handleChange` filtered by exact path match only → user had to close+reopen tab | V41 |
 | B10 | 2026-05-09 | V41 fix shipped broken: `isEmbedder` referenced module-scope `const EMBED_EXT` that didn't survive `.toString()` inline → `ReferenceError` aborted `handleChange` for every embedder-mismatch tab → no reload at all on the-first-step/sparks.md edit | V42 |
 | B11 | 2026-05-10 | develop-pane nested inside `work-area` (sibling of viewer-pane) → terminal width clipped to area below the file-tabs row instead of spanning full `<main>`. classic side-by-side orientation logic (V38 v1) baked the nesting in | V38 (revised) |
+| B12 | 2026-05-14 | eye-icon on `lifebot/index.html` → white screen. Vite source-template index.html refs absolute `<script src="/src/main.tsx">`; iframe origin = claude-hub root, so request lands at `/src/main.tsx` (not under `/view/...`), 404; browser can't transpile TSX anyway → `<div id="root">` stays empty. raw bytes only work for self-contained static HTML; build-tool entry points need the project's running server | V16 (amended) |

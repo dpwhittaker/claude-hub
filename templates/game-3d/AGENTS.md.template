@@ -1,0 +1,36 @@
+# <NAME> — AGENTS.md
+
+Simple 3D game: react-three-fiber + Three.js + Vite + TypeScript. claude-hub conventions:
+
+- **Dev server** runs via `vite@<NAME>.service` (systemd, `Restart=always`). Don't `npm run dev` manually — the unit owns the port.
+- **Reverse-proxied** at `/<NAME>/` by claude-hub. `vite.config.ts` sets `base: '/<NAME>/'` and `server.port: <PORT>` to match `.project-meta.json`.
+- **Card metadata** comes from `README.md`: H1 = title, first paragraph = description, frontmatter `tags: [...]` = badges.
+
+## Stack
+
+- **`@react-three/fiber`** — declarative Three.js scene as JSX. The `<Canvas>` is the renderer.
+- **`@react-three/drei`** — helpers: `OrbitControls`, `KeyboardControls`, `Html` overlays, loaders (`useGLTF`).
+- **`@react-three/rapier`** — physics. Wrap bodies in `<Physics>`, use `<RigidBody>`.
+- **`zustand`** (`src/store.ts`) — game state OUTSIDE React render. Read per-frame via `getState()`/subscriptions, not props — re-rendering in the frame loop tanks FPS.
+
+## Perf rule
+
+Keep hot-path state (positions, input) in refs / the zustand store, not React `useState`. Drive frames with `useFrame`. Use React state only for HUD/menus.
+
+## What to do first
+
+1. Ask the user what to build.
+2. Update `README.md` (H1, first paragraph, tags).
+3. Edit `src/App.tsx`. HMR through the proxy works.
+4. Assets: put `.glb`/`.gltf` in `public/`, load with drei `useGLTF('/<NAME>/model.glb')`.
+
+## Deploy (static hosting)
+
+`npm run build:pages` (GitHub Pages, base `/<NAME>/`) or `npm run build:firebase` (Firebase Hosting, base `/`). Output in `dist/`.
+
+## Restarting the dev server
+
+```bash
+sudo systemctl restart vite@<NAME>.service
+journalctl -u vite@<NAME>.service -f
+```

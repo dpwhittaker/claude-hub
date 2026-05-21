@@ -1,0 +1,18 @@
+---
+tags: [WIP, game, 3d]
+---
+
+# <NAME>
+
+A 3D game. react-three-fiber + Three.js + Vite + TypeScript. Dev server at `/<NAME>/`.
+
+Replace this paragraph with a one-sentence card description after you know what you're building.
+
+## Run
+
+`vite@<NAME>.service` already runs `npm run dev` at boot. To restart manually:
+
+```bash
+sudo systemctl restart vite@<NAME>.service
+journalctl -u vite@<NAME>.service -f
+```

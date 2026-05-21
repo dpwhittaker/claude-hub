@@ -1,0 +1,33 @@
+# <NAME> — AGENTS.md
+
+Complex 3D game: Babylon.js + Havok physics + Vite + TypeScript. claude-hub conventions:
+
+- **Dev server** runs via `vite@<NAME>.service` (systemd, `Restart=always`). Don't `npm run dev` manually — the unit owns the port.
+- **Reverse-proxied** at `/<NAME>/` by claude-hub. `vite.config.ts` sets `base: '/<NAME>/'` and `server.port: <PORT>` to match `.project-meta.json`.
+- **Entry point** is `src/main.ts` — builds the `Engine` + `Scene` against `#renderCanvas`. Imperative API; no React. Use HTML/CSS for HUD/menus over the canvas.
+- **Card metadata** comes from `README.md`: H1 = title, first paragraph = description, frontmatter `tags: [...]` = badges.
+
+## Stack
+
+- **`@babylonjs/core`** — engine, scene graph, cameras, lights, meshes, materials.
+- **`@babylonjs/havok`** — Havok physics (WASM). Wired via `PhysicsAggregate`. `vite.config.ts` excludes it from pre-bundling so the `.wasm` resolves.
+- **`@babylonjs/loaders`** — glTF/GLB import (`SceneLoader` / `ImportMeshAsync`).
+- **`@babylonjs/inspector`** — live scene debugger. Press `i` to toggle (lazy-imported, kept out of the prod bundle).
+
+## What to do first
+
+1. Ask the user what to build.
+2. Update `README.md` (H1, first paragraph, tags).
+3. Edit `src/main.ts`. HMR through the proxy works.
+4. Assets: put `.glb`/`.gltf` in `public/`, load with `ImportMeshAsync('/<NAME>/model.glb', scene)`.
+
+## Deploy (static hosting)
+
+`npm run build:pages` (GitHub Pages, base `/<NAME>/`) or `npm run build:firebase` (Firebase Hosting, base `/`). Output in `dist/`. Ensure the Havok `.wasm` is served — it ships under `dist/assets/`.
+
+## Restarting the dev server
+
+```bash
+sudo systemctl restart vite@<NAME>.service
+journalctl -u vite@<NAME>.service -f
+```
