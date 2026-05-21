@@ -189,7 +189,7 @@ module exports (test surface, not public API):
 | T58 | x | `handleCreateProject`: dispatch any non-`none` template → `bootstrapTemplate`; pass `firebase` flag; force `none`/false on clone/onboard | I.routes,V43,V45 |
 | T59 | x | `landing.html`: template radios → 5 options; `Firebase backend` checkbox enabled iff template ≠ None; payload `{template, firebase}` | I.routes,V43,V45 |
 | T60 | x | static-deploy: `build:pages`/`build:firebase` scripts in each template `package.json` + `.github/workflows/pages.yml.template` (game/vite trees); `firebase.json` via `_firebase` overlay | V46 |
-| T61 | . | tests: effective-template enum+coerce+firebase-forcing; `copyTemplate` each new tree + overlay; routes payload accept/validate | V43,V44,V45 |
+| T61 | x | tests: effective-template enum+coerce+firebase-forcing; `copyTemplate` each new tree + overlay; routes payload accept/validate | V43,V44,V45 |
 | T62 | . | README + AGENTS: game-template catalog + per-host (GH Pages vs Firebase Hosting) deploy steps | I.files |
 
 ## §B BUGS
