@@ -1,0 +1,32 @@
+# <NAME> — AGENTS.md
+
+Phaser 3 + Vite + TypeScript 2D game. claude-hub conventions:
+
+- **Dev server** runs via `vite@<NAME>.service` (systemd, `Restart=always`). Don't `npm run dev` manually — the unit owns the port.
+- **Reverse-proxied** at `/<NAME>/` by claude-hub. `vite.config.ts` sets `base: '/<NAME>/'` and `server.port: <PORT>` to match `.project-meta.json`.
+- **Entry point** is `src/main.ts` — it constructs the `Phaser.Game` and registers scenes. No React.
+- **Card metadata** comes from `README.md`: H1 = title, first paragraph = description, frontmatter `tags: [...]` = badges.
+
+## What to do first
+
+1. Ask the user what to build.
+2. Update `README.md` (H1, first paragraph, tags).
+3. Edit `src/main.ts` / add scenes under `src/`. HMR through the proxy works.
+4. New deps: `npm install <pkg>` here; the unit reloads on file change.
+
+## Building blocks
+
+- Scenes: subclass `Phaser.Scene`, register in the `scene: [...]` array.
+- Physics: Arcade is wired (`physics.add.existing`). Switch to Matter for joints/complex bodies.
+- Assets: drop into `public/`, `this.load.image(...)` in a scene `preload()`.
+
+## Deploy (static hosting)
+
+`npm run build:pages` (GitHub Pages, base `/<NAME>/`) or `npm run build:firebase` (Firebase Hosting, base `/`). Output in `dist/`.
+
+## Restarting the dev server
+
+```bash
+sudo systemctl restart vite@<NAME>.service
+journalctl -u vite@<NAME>.service -f
+```
