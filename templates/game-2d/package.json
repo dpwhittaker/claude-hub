@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:pages": "tsc -b && vite build --base=/<NAME>/",
+    "build:firebase": "tsc -b && vite build --base=/",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
