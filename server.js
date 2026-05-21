@@ -1223,8 +1223,31 @@ function releaseWatcher(project, ws) {
 // Right pane: tab strip + per-tab iframe pointing at the existing file-view
 // endpoint with ?embed=1 (which suppresses the per-page header). README.md
 // (case-insensitive) opens in the initial tab if present.
+// Lookup the project's reverse-proxy prefix from its `.project-meta.json`,
+// matching the resolution rule in `buildStaticRoutes`. Returns null when the
+// project has no `proxyTarget` declared. The view shell injects this so the
+// HTML eye-icon (render mode) can target the live proxy URL for build-tool
+// projects whose on-disk `index.html` is a source template, not runnable
+// bytes (e.g. Vite: `<script src="/src/main.tsx">`).
+function readProjectProxyPrefix(project) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(
+      path.join(PROJECTS_ROOT, project, '.project-meta.json'), 'utf8'));
+    const target = typeof meta.proxyTarget === 'string' ? meta.proxyTarget.trim() : '';
+    if (!target) return null;
+    const prefix = typeof meta.proxyPrefix === 'string' && meta.proxyPrefix.startsWith('/')
+      ? meta.proxyPrefix
+      : '/' + project;
+    if (!/^\/[A-Za-z0-9_./-]+$/.test(prefix)) return null;
+    return prefix;
+  } catch {
+    return null;
+  }
+}
+
 function renderViewShell(project) {
   const safeProject = escapeHtml(project);
+  const proxyPrefix = readProjectProxyPrefix(project);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1408,6 +1431,11 @@ function renderViewShell(project) {
 </main>
 <script>
 const PROJECT = ${JSON.stringify(project)};
+// Reverse-proxy prefix for this project (e.g. "/lifebot"), or null when the
+// project has no proxyTarget. SPEC §V16 — eye-icon render mode routes through
+// the proxy when set, since build-tool index.html files (Vite etc.) are
+// source templates that can't run from raw bytes.
+const PROXY_PREFIX = ${JSON.stringify(proxyPrefix)};
 const TREE_PANE = document.getElementById('tree-pane');
 const TABS = document.getElementById('tabs');
 const FRAMES = document.getElementById('frames');
@@ -1755,11 +1783,32 @@ function openTab(filePath, mode) {
 
   const frame = document.createElement('iframe');
   // Encode each segment so spaces / unicode survive, but keep slashes
-  // between segments. ?embed=1 strips the per-file header for normal view;
-  // ?raw=1 returns raw bytes (text/html for .html), so iframe runs the page.
-  const segs = filePath.split('/').map(encodeURIComponent).join('/');
-  const qs = mode === 'render' ? '?raw=1' : '?embed=1';
-  frame.src = '/view/' + encodeURIComponent(PROJECT) + '/' + segs + qs;
+  // between segments. Render mode prefers the live proxy URL when the
+  // project declares a proxyTarget (build-tool entry points like Vite's
+  // index.html reference /src/main.tsx and cannot run from raw bytes);
+  // falls back to ?raw=1 for projects with no proxy. View mode always
+  // goes through /view/ with ?embed=1 (per-file header stripped).
+  if (mode === 'render' && PROXY_PREFIX) {
+    // index.html at any depth → trailing slash (let the upstream serve
+    // its own root index). Other paths pass through verbatim so e.g.
+    // public/foo.html lands on <proxyPrefix>/public/foo.html.
+    const lower = filePath.toLowerCase();
+    const isIndex = lower === 'index.html' || lower === 'index.htm'
+      || lower.endsWith('/index.html') || lower.endsWith('/index.htm');
+    let tail;
+    if (isIndex) {
+      const lastSlash = filePath.lastIndexOf('/');
+      tail = lastSlash < 0 ? '' : filePath.slice(0, lastSlash + 1);
+    } else {
+      tail = filePath;
+    }
+    const segs = tail.split('/').map(encodeURIComponent).join('/');
+    frame.src = PROXY_PREFIX + '/' + segs;
+  } else {
+    const segs = filePath.split('/').map(encodeURIComponent).join('/');
+    const qs = mode === 'render' ? '?raw=1' : '?embed=1';
+    frame.src = '/view/' + encodeURIComponent(PROJECT) + '/' + segs + qs;
+  }
   FRAMES.appendChild(frame);
   wireFrameScroll(frame, key);
 
