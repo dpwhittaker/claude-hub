@@ -184,9 +184,9 @@ module exports (test surface, not public API):
 | T53 | x | eye-icon render mode routes through proxy when project has `proxyTarget`. `renderViewShell` reads `.project-meta.json`, injects `PROXY_PREFIX` const. `openTab` render branch: if PROXY_PREFIX → iframe = `<prefix>/<relpath>` (index.html → trailing slash); else → `?raw=1`. view mode unchanged | V16 |
 | T54 | x | add `templates/game-2d/` (Phaser), `templates/game-3d/` (R3F+Three), `templates/game-3d-complex/` (Babylon). each vite, `<NAME>`/`<PORT>`, demo scene, mirror `templates/vite/` file set + `AGENTS.md.template`/`README.md.template` | I.files,V43 |
 | T55 | x | add `templates/_firebase/` overlay tree (`src/firebase.ts`, `.env.example`, `firebase.json`, `.firebaserc.template`, README cloud section) | I.files,V45 |
-| T56 | . | generalize `bootstrapVite` → `bootstrapTemplate(dir, name, templateId, {firebase})`; id→dir 1:1; stamp `meta.template=templateId`; firebase overlay + `npm install firebase` when flag set | V43,V44,V45 |
+| T56 | x | generalize `bootstrapVite` → `bootstrapTemplate(dir, name, templateId, {firebase})`; id→dir 1:1; stamp `meta.template=templateId`; firebase overlay + `npm install firebase` when flag set | V43,V44,V45 |
 | T57 | x | `lib/template-policy.js`: `effectiveTemplate(body)` enum allowlist + coerce-to-vite + clone/onboard force; add `firebaseEnabled(body, template)` | V43,V45 |
-| T58 | . | `handleCreateProject`: dispatch any non-`none` template → `bootstrapTemplate`; pass `firebase` flag; force `none`/false on clone/onboard | I.routes,V43,V45 |
+| T58 | x | `handleCreateProject`: dispatch any non-`none` template → `bootstrapTemplate`; pass `firebase` flag; force `none`/false on clone/onboard | I.routes,V43,V45 |
 | T59 | . | `landing.html`: template radios → 5 options; `Firebase backend` checkbox enabled iff template ≠ None; payload `{template, firebase}` | I.routes,V43,V45 |
 | T60 | . | static-deploy: `build:pages`/`build:firebase` scripts in each template `package.json` + `.github/workflows/pages.yml.template` (game/vite trees); `firebase.json` via `_firebase` overlay | V46 |
 | T61 | . | tests: effective-template enum+coerce+firebase-forcing; `copyTemplate` each new tree + overlay; routes payload accept/validate | V43,V44,V45 |
