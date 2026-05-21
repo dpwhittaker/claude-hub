@@ -686,7 +686,7 @@ async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {
     fs.rmSync(dir, { recursive: true, force: true });
     throw new Error(templateId + ' scaffold failed: ' + e.message, { cause: e });
   }
-  writeBootstrapPrompt(dir, name, 'greenfield');
+  writeBootstrapPrompt(dir, name, 'greenfield', { templateId, firebase });
   return port;
 }
 

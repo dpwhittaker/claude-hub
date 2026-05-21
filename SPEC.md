@@ -49,7 +49,7 @@ files:
 - `lib/port-alloc.js` — `allocatePort(projectsRoot)` scans sibling `.project-meta.json` for free port ≥ 5173.
 - `lib/template.js` — `replaceVars` + `copyTemplate` for scaffold copy w/ `<KEY>` substitution.
 - `lib/project-name.js` — `PROJECT_ID_RE`, `RESERVED_PROJECT_NAMES` primitives. server.js re-exports.
-- `lib/bootstrap-prompt.js` — `writeBootstrapPrompt(dir, name, flavor)`.
+- `lib/bootstrap-prompt.js` — `writeBootstrapPrompt(dir, name, flavor, opts={templateId, firebase})` + `STACK` map (template id → human stack blurb for greenfield prompt).
 - `lib/template-policy.js` — `effectiveTemplate(body)` → enum (V43, allowlist + coerce + clone/onboard force) + `firebaseEnabled(body, template)` (V45).
 - `lib/gh-repos.js` — `makeGhRepos({exec, ttlMs, now})` cache + `filterReposByFolders(repos, folders)`.
 - `lib/onboard.js` — `bootstrapOnboard(dir, name)` + `listOrphanFolderNames(projectsRoot)`.
@@ -108,7 +108,7 @@ module exports (test surface, not public API):
 - V30: (merged into V31).
 - V31: bootstrap prompt branches, written to `<project>/.claude-bootstrap.txt` and consumed by `ttyd-attach.sh` `tmux send-keys` (read + send + delete):
   - **scan-existing** (clone / onboard): Claude walks tree first turn and writes whichever of `README.md` (human-facing — purpose + "what is this & why") or `AGENTS.md` (agent-facing — tech stack, conventions, directory layout, debugging signposts) is missing. ⊥ overwrite per V29.
-  - **greenfield** (skip / create + vite or none): Claude greets, asks "what should we build here?".
+  - **greenfield** (skip / create + scaffold): Claude reads AGENTS.md+README.md, greets naming the scaffolded stack so it's oriented, asks "what should we build here?". prompt names the template stack (`writeBootstrapPrompt` opts `{templateId, firebase}` → §I `STACK` map); ⊥ blank greet w/ no idea it's a Phaser/R3F/Babylon project. template `none` / no opts → no stack line.
 - V32: `/api/gh/repos` runs `gh repo list --json nameWithOwner,description,isFork,isPrivate,updatedAt --limit 200`. result cached in-process w/ ≤ 10 min TTL. ⊥ shell-out per dialog open. response excludes any candidate whose basename matches an existing folder under `PROJECTS_ROOT` (managed or not). sort: `isFork=false` first then `isFork=true`; `updatedAt` desc within each group. ⊥ user's own forks dominate top of dropdown.
 - V33: dialog clone-source is a `<select>` populated async from `/api/gh/repos`. on fetch failure / empty / timeout → fall back to free-text `<input>`. ⊥ block dialog while waiting.
 - V34: cloning another user's repo = fork on github.com first, pick the fork from the dropdown. arbitrary-URL clone still possible via direct `POST /api/projects` w/ `source: 'owner/repo'` (power-user flow), but not via the dialog.
