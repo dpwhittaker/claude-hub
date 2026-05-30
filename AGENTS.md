@@ -78,7 +78,7 @@ sudo systemctl enable --now <unit>`. `services/ttyd-attach.sh` installs to
 | `services/ttyd@.service` | Templated. `systemctl enable --now ttyd@<name>` brings up `unix:/run/ttyd/<name>.sock` running `ttyd-attach.sh <name>` — joins or creates tmux session named `<name>` running `claude --continue` (omitted on first launch when no prior session exists, avoid exit-loop). |
 | `services/ttyd-develop.service` | Admin: fresh `claude` in `~/projects` per browser connection. No tmux. |
 | `services/ttyd-wsl.service` | Admin: raw `bash -l`. No claude, no tmux. |
-| `services/vite@.service` | Templated. `systemctl enable --now vite@<name>` runs `npm run dev` in `~/projects/<name>` under `Restart=always`. Enabled by claude-hub during Vite-template scaffold. |
+| `services/vite@.service` | Templated. `systemctl enable --now vite@<name>` runs `npm run dev` in `~/projects/<name>` under `Restart=always`. Enabled during any non-`none` template scaffold (`vite` / `game-2d` / `game-3d` / `game-3d-complex` all share this one unit). |
 
 `/run/ttyd/` shared across every ttyd instance. All three units carry `RuntimeDirectoryPreserve=yes` for that reason — without it, one instance stop = systemd wipes whole dir, orphans every other socket. Don't remove that line.
 
@@ -100,7 +100,8 @@ Dim dirs not recursed eagerly — lazy-load on first expand via `/api/view-tree/
 systemctl is-active claude-hub.service
 journalctl -u claude-hub.service -f
 
-# restart after editing server.js / landing.html
+# restart after editing server.js (node holds it in memory).
+# landing.html is read from disk per request — no restart needed.
 sudo systemctl restart claude-hub.service
 
 # probe routes locally
@@ -156,9 +157,16 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 3. `sudo systemctl enable --now ttyd@<name>.service` — only systemd touch needed for terminal access. `/term/<name>/` route resolves dynamically as soon as `/run/ttyd/<name>.sock` appears.
 4. (Optional) If project has live web app, set `proxyTarget` (and `stripPrefix` / `proxyPrefix` as needed) in `.project-meta.json`, point `openUrl` at prefix. claude-hub picks up on next request — no restart.
 
-## Things that have bitten past sessions
+## Gotchas
 
-See `SPEC.md` §B (bugs) + §V (invariants). Backprop new bugs via `/ck:spec bug: …`.
+- **Stale node process** — `server.js` lives in V8 memory; edits don't apply until `systemctl restart claude-hub.service`. `landing.html` is read per request, no restart needed.
+- **Game template = vite project** — `game-2d`/`game-3d`/`game-3d-complex` ride the one `vite@<name>.service`, not a per-template unit. New template? Make it a vite project or you'll need a new unit + meta changes.
+- **Greenfield bootstrap prompt is stack-aware** — `writeBootstrapPrompt(dir, name, 'greenfield', {templateId, firebase})` injects a `STACK[templateId]` blurb so a fresh session greets oriented. New template → add a `STACK` entry in `lib/bootstrap-prompt.js`.
+- **Vite base path splits** — dev base = `/<NAME>/` (proxy needs it, V20). Static deploy: `build:pages` bakes `/<NAME>/`, `build:firebase` bakes `/`. Don't unify.
+- **Firebase keys are public** — `VITE_FIREBASE_*` ship in the bundle by design. Gate access with Firestore/Storage security rules, not key secrecy.
+- **WSL2 self-loopback to `*.ts.net` fails** — route lives on the Windows tailscale virtual interface (V17). Test from a peer or from Windows.
+
+See `SPEC.md` §B (bugs) + §V (invariants) for full history. Backprop new bugs via `/ck:spec bug: …`.
 
 ## Sharing across devices
 
