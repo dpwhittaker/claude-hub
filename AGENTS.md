@@ -2,6 +2,10 @@
 
 Path-routed reverse proxy + landing page. Turn one local port into multi-project dashboard. Read from disk, no phone home. Read this before changing code, systemd units, or route conventions.
 
+## Workflow rule: commit + push every turn
+
+Every turn that changes code, config, assets, or docs ends with a commit and a push — don't wait to be asked. One commit per logical change; split unrelated WIP into separate commits before mixing. Run tests/lint first; if they fail, fix before committing. Restart the relevant systemd unit when the live site needs the change to take effect. Skip only when the turn produces no working-tree changes.
+
 ## What it is
 
 ```
