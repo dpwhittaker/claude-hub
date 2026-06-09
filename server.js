@@ -791,6 +791,385 @@ function serveLanding(res) {
   });
 }
 
+// PWA assets: manifest, service worker, icons. All static, all served from
+// /assets/<name>. Service worker MUST be served from the root scope so it can
+// control the whole site — see /sw.js handler below.
+const ASSETS_DIR = path.join(__dirname, 'assets');
+const ASSET_MIME = {
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+};
+const ASSET_FILE_RE = /^[A-Za-z0-9._-]+$/;
+
+// /p/<name>/ — dual-iframe shell. Mounts the project's Open view and its
+// Develop terminal side-by-side (one visible, one hidden) so a FAB tap toggles
+// without rerendering either side. ttyd stays connected (no xterm redraw,
+// scrollback intact), Vite/HMR socket stays alive. Lazy-mount the inactive
+// iframe on first toggle to halve cold-start cost.
+function readProjectOpenUrl(name) {
+  const metaPath = path.join(PROJECTS_ROOT, name, '.project-meta.json');
+  let meta = {};
+  try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch {}
+  return meta.openUrl || `/view/${name}/README.md`;
+}
+
+function handleShellRequest(res, name, initialView) {
+  if (!isViewableProject(name)) {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('unknown project');
+    return;
+  }
+  const openUrl = readProjectOpenUrl(name);
+  const termUrl = `/term/${name}/`;
+  const start = initialView === 'term' ? 'term' : 'open';
+  const html = renderShellHtml(name, openUrl, termUrl, start);
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-cache',
+  });
+  res.end(html);
+}
+
+function renderShellHtml(name, openUrl, termUrl, initialView) {
+  const data = JSON.stringify({
+    name, openUrl, termUrl, initial: initialView,
+  });
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>${escapeHtml(name)} · claude-hub</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0d1320">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  :root { color-scheme: dark; --bg:#050810; --fab:#0d1320; --fab-edge:#1f2937; --accent:#7dd3fc; --fg:#e2e8f0; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden; }
+  .pane {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    border: 0; background: var(--bg);
+    visibility: hidden; pointer-events: none;
+  }
+  .pane.active { visibility: visible; pointer-events: auto; }
+  /* Pane below active still consumes layout but is fully covered. Visibility
+     hidden keeps DOM + iframe document alive (no unload) and just blocks input
+     + paint. display:none would risk unloading some browsers' iframe state. */
+  #fab {
+    position: fixed;
+    right: max(14px, env(safe-area-inset-right, 0px));
+    bottom: max(14px, env(safe-area-inset-bottom, 0px));
+    z-index: 9999;
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    background: var(--fab);
+    border: 1px solid var(--fab-edge);
+    color: var(--accent);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+    display: grid; place-items: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: transform 0.12s, background 0.12s;
+    font: 600 11px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0;
+  }
+  #fab:hover, #fab:focus-visible { background: #131b2c; outline: none; }
+  #fab:active { transform: scale(0.92); }
+  #fab .label { display: block; }
+  #fab .hint { display: block; font-size: 8px; opacity: 0.6; margin-top: 2px; letter-spacing: 0.1em; }
+  /* Edge swipe hint dot — barely visible, just signals the FAB exists when
+     viewing terminal full-screen on a phone. */
+  @media (display-mode: standalone) {
+    #fab { width: 56px; height: 56px; }
+  }
+</style>
+</head>
+<body>
+<iframe id="pane-open" class="pane" title="Open" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+<iframe id="pane-term" class="pane" title="Develop" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+<button id="fab" type="button" aria-label="Switch view"><span class="label">TERM</span><span class="hint">SWAP</span></button>
+<script id="shell-data" type="application/json">${data}</script>
+<script>
+(function () {
+  const cfg = JSON.parse(document.getElementById('shell-data').textContent);
+  const panes = {
+    open: document.getElementById('pane-open'),
+    term: document.getElementById('pane-term'),
+  };
+  const sources = { open: cfg.openUrl, term: cfg.termUrl };
+  const mounted = { open: false, term: false };
+  const labels = { open: 'OPEN', term: 'TERM' };
+  const fab = document.getElementById('fab');
+  const fabLabel = fab.querySelector('.label');
+
+  function mount(view) {
+    if (mounted[view]) return;
+    panes[view].src = sources[view];
+    mounted[view] = true;
+  }
+
+  function applyView(view) {
+    const other = view === 'open' ? 'term' : 'open';
+    mount(view);
+    panes[view].classList.add('active');
+    panes[other].classList.remove('active');
+    fabLabel.textContent = labels[other];
+    document.title = cfg.name + ' · ' + labels[view].toLowerCase() + ' · claude-hub';
+    if (!mounted[other]) setTimeout(() => mount(other), 800);
+  }
+
+  // History model — shell adds at most one extra entry.
+  //   role 'entry' = the URL the user navigated in on. Back from here leaves
+  //                  the shell (cross-document nav → hub).
+  //   role 'swap'  = a pushed entry sitting on top of 'entry'. Back from here
+  //                  pops to the entry — popstate applies entry's view.
+  // FAB rules:
+  //   at 'entry' → pushState a 'swap' with the other view (stack grows by 1).
+  //   at 'swap'  → rotate: rewrite the entry-below to hold the CURRENT view,
+  //                then push a new 'swap' with the other view. Net: the two
+  //                shell entries swap positions, so back from the new swap
+  //                pops to the previously-visible view (not the original
+  //                entry view). Browser back is never overridden.
+  // Behavior:
+  //   Develop → back              → hub
+  //   Develop → FAB → back        → Develop (term)
+  //   Develop → FAB → FAB → back  → Open    (the prior FAB's view, by rotation)
+  function otherOf(v) { return v === 'open' ? 'term' : 'open'; }
+
+  const params = new URLSearchParams(location.search);
+  const initial = (params.get('view') === 'term' || params.get('view') === 'open')
+    ? params.get('view') : cfg.initial;
+  history.replaceState({ role: 'entry', view: initial }, '', '?view=' + initial);
+  applyView(initial);
+
+  // Rotation is two-step: history.back() then rebuild in popstate. Pendings
+  // capture (cur, next) across the async gap; subsequent FAB taps no-op
+  // until the rotation finishes.
+  let pendingRotate = null;
+
+  function swap() {
+    if (pendingRotate) return;
+    const cur = panes.open.classList.contains('active') ? 'open' : 'term';
+    const next = otherOf(cur);
+    const state = history.state || { role: 'entry', view: cur };
+    if (state.role === 'entry') {
+      history.pushState({ role: 'swap', view: next }, '', '?view=' + next);
+      applyView(next);
+      return;
+    }
+    // role === 'swap' → rotate.
+    pendingRotate = { cur, next };
+    history.back();
+  }
+
+  window.addEventListener('popstate', (e) => {
+    if (pendingRotate) {
+      const { cur, next } = pendingRotate;
+      pendingRotate = null;
+      // Cursor is now at the previous entry-below. Rewrite it to hold the
+      // view we were just on, then push a new top with the other view.
+      history.replaceState({ role: 'entry', view: cur }, '', '?view=' + cur);
+      history.pushState({ role: 'swap', view: next }, '', '?view=' + next);
+      applyView(next);
+      return;
+    }
+    const s = e.state;
+    // Null state = popping into a non-shell entry (browser handles the nav).
+    if (!s) return;
+    applyView(s.view);
+  });
+
+  // Keyboard: Ctrl/Cmd+\` toggles. Iframe focus swallows this when the
+  // terminal pane is active — keep it as a desktop niceity for the Open side.
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === '\`') {
+      e.preventDefault();
+      swap();
+    }
+  });
+
+  // ---------- FAB drag + flick ----------
+  // Pointer Events unify mouse + touch. A drag that moves more than DRAG_SLOP
+  // pixels suppresses the synthetic click so swap() doesn't fire on release.
+  // On pointerup we sample the last ~120ms of motion: above FLICK_THRESHOLD
+  // px/ms in either axis it's a flick — snap to the nearest corner whose
+  // sign matches the velocity. Position is persisted as a viewport-fractional
+  // coord so resizes (rotate / install / desktop) keep it on-screen.
+  const FAB_STORE_KEY = 'claude-hub:fab-pos';
+  const EDGE_MARGIN = 14;
+  const DRAG_SLOP = 5;
+  const FLICK_THRESHOLD = 0.45; // px/ms
+  const TRAIL_WINDOW_MS = 120;
+
+  function clampPos(x, y) {
+    const w = fab.offsetWidth, h = fab.offsetHeight;
+    const maxX = Math.max(EDGE_MARGIN, window.innerWidth - w - EDGE_MARGIN);
+    const maxY = Math.max(EDGE_MARGIN, window.innerHeight - h - EDGE_MARGIN);
+    return {
+      x: Math.max(EDGE_MARGIN, Math.min(maxX, x)),
+      y: Math.max(EDGE_MARGIN, Math.min(maxY, y)),
+    };
+  }
+
+  function placeFab(x, y, { animate = false, persist = true } = {}) {
+    const { x: cx, y: cy } = clampPos(x, y);
+    fab.style.transition = animate ? 'left 0.22s ease, top 0.22s ease, transform 0.12s' : '';
+    fab.style.left = cx + 'px';
+    fab.style.top = cy + 'px';
+    fab.style.right = 'auto';
+    fab.style.bottom = 'auto';
+    if (persist) {
+      try {
+        localStorage.setItem(FAB_STORE_KEY, JSON.stringify({
+          fx: cx / Math.max(1, window.innerWidth),
+          fy: cy / Math.max(1, window.innerHeight),
+        }));
+      } catch {}
+    }
+  }
+
+  function restoreFab() {
+    try {
+      const raw = localStorage.getItem(FAB_STORE_KEY);
+      if (!raw) return;
+      const p = JSON.parse(raw);
+      if (typeof p.fx === 'number' && typeof p.fy === 'number') {
+        placeFab(p.fx * window.innerWidth, p.fy * window.innerHeight, { persist: false });
+      }
+    } catch {}
+  }
+  restoreFab();
+  window.addEventListener('resize', restoreFab);
+
+  let dragState = null;
+  let suppressClick = false;
+
+  fab.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    const r = fab.getBoundingClientRect();
+    dragState = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: r.left,
+      originY: r.top,
+      moved: false,
+      trail: [{ x: e.clientX, y: e.clientY, t: performance.now() }],
+    };
+    try { fab.setPointerCapture(e.pointerId); } catch {}
+    fab.style.transition = '';
+  });
+
+  fab.addEventListener('pointermove', (e) => {
+    if (!dragState || e.pointerId !== dragState.pointerId) return;
+    const dx = e.clientX - dragState.startX;
+    const dy = e.clientY - dragState.startY;
+    if (!dragState.moved && Math.hypot(dx, dy) > DRAG_SLOP) dragState.moved = true;
+    if (!dragState.moved) return;
+    e.preventDefault();
+    placeFab(dragState.originX + dx, dragState.originY + dy, { persist: false });
+    dragState.trail.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+    if (dragState.trail.length > 12) dragState.trail.shift();
+  });
+
+  function finishDrag(e) {
+    if (!dragState || e.pointerId !== dragState.pointerId) return;
+    try { fab.releasePointerCapture(e.pointerId); } catch {}
+    const moved = dragState.moved;
+    if (!moved) { dragState = null; return; }
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 0);
+
+    // Flick detection from last TRAIL_WINDOW_MS of motion.
+    const now = performance.now();
+    const recent = dragState.trail.filter((p) => now - p.t <= TRAIL_WINDOW_MS);
+    let vx = 0, vy = 0;
+    if (recent.length >= 2) {
+      const a = recent[0], b = recent[recent.length - 1];
+      const dt = Math.max(1, b.t - a.t);
+      vx = (b.x - a.x) / dt;
+      vy = (b.y - a.y) / dt;
+    }
+    const flick = Math.abs(vx) > FLICK_THRESHOLD || Math.abs(vy) > FLICK_THRESHOLD;
+    if (flick) {
+      const r = fab.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      // Use velocity sign when it's significant on an axis; otherwise fall
+      // back to which half of the viewport the FAB currently sits in. This
+      // makes a purely-horizontal flick still pick a vertically-sensible
+      // corner (the side it was already on).
+      const halfThresh = FLICK_THRESHOLD / 2;
+      const goRight = vx > halfThresh ? true
+        : vx < -halfThresh ? false
+        : cx > window.innerWidth / 2;
+      const goDown = vy > halfThresh ? true
+        : vy < -halfThresh ? false
+        : cy > window.innerHeight / 2;
+      const w = fab.offsetWidth, h = fab.offsetHeight;
+      const tx = goRight ? window.innerWidth - w - EDGE_MARGIN : EDGE_MARGIN;
+      const ty = goDown ? window.innerHeight - h - EDGE_MARGIN : EDGE_MARGIN;
+      placeFab(tx, ty, { animate: true });
+    } else {
+      // Soft drop: clamp to viewport (already clamped during move) and persist.
+      const r = fab.getBoundingClientRect();
+      placeFab(r.left, r.top);
+    }
+    dragState = null;
+  }
+
+  fab.addEventListener('pointerup', finishDrag);
+  fab.addEventListener('pointercancel', finishDrag);
+
+  fab.addEventListener('click', (e) => {
+    if (suppressClick) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+    swap();
+  });
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>`;
+}
+
+function serveAsset(res, filename, cacheControl) {
+  if (!ASSET_FILE_RE.test(filename) || filename.startsWith('.')) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('bad asset name');
+    return;
+  }
+  const full = path.join(ASSETS_DIR, filename);
+  fs.readFile(full, (err, body) => {
+    if (err) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('asset not found');
+      return;
+    }
+    const ext = path.extname(filename).toLowerCase();
+    res.writeHead(200, {
+      'Content-Type': ASSET_MIME[ext] || 'application/octet-stream',
+      'Cache-Control': cacheControl,
+    });
+    res.end(body);
+  });
+}
+
 // ---------- File upload ----------
 // POST /api/upload/<project> — multipart/form-data with fields:
 //   path     — folder relative to project root (created if missing). Optional.
@@ -2678,6 +3057,48 @@ const server = http.createServer(async (req, res) => {
   if (urlPathOnly === '/' || urlPathOnly === '/index.html' || urlPathOnly === '/landing.html') {
     serveLanding(res);
     return;
+  }
+  // PWA glue. /sw.js MUST live at the root so its default scope is "/" — a
+  // service worker can only control paths at or below its own URL.
+  if (urlPathOnly === '/sw.js') {
+    // Service-Worker-Allowed not needed since we're already at root scope;
+    // no-cache so updates roll out immediately.
+    return serveAsset(res, 'sw.js', 'no-cache');
+  }
+  if (urlPathOnly === '/manifest.webmanifest') {
+    return serveAsset(res, 'manifest.webmanifest', 'no-cache');
+  }
+  if (urlPathOnly === '/favicon.ico' || urlPathOnly === '/favicon.png') {
+    return serveAsset(res, 'favicon-32.png', 'public, max-age=86400');
+  }
+  if (urlPathOnly === '/apple-touch-icon.png' || urlPathOnly === '/apple-touch-icon-precomposed.png') {
+    return serveAsset(res, 'apple-touch-icon.png', 'public, max-age=86400');
+  }
+  if (urlPathOnly.startsWith('/assets/')) {
+    return serveAsset(res, urlPathOnly.slice('/assets/'.length), 'public, max-age=86400');
+  }
+  // /p/<name>/ — dual-iframe shell for fast Develop↔Open toggle inside the PWA.
+  // Matches /p/<name>, /p/<name>/, or /p/<name>/?view=... only — anything
+  // deeper falls through to 404 (no shell sub-resources today).
+  {
+    const m = /^\/p\/([^/?]+)\/?$/.exec(urlPathOnly);
+    if (m) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { 'Content-Type': 'text/plain' });
+        res.end('method not allowed');
+        return;
+      }
+      let name;
+      try { name = decodeURIComponent(m[1]); } catch {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.end('bad project name');
+        return;
+      }
+      const query = new URLSearchParams(url.split('?')[1] || '');
+      const view = query.get('view');
+      handleShellRequest(res, name, view === 'term' ? 'term' : 'open');
+      return;
+    }
   }
   if (urlPathOnly === '/view' || urlPathOnly === '/view/' || urlPathOnly.startsWith('/view/')) {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
