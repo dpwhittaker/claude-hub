@@ -151,6 +151,8 @@ const TERM_INDEX_RE = /^\/term\/[A-Za-z0-9_.-]+\/?(?:\?.*)?$/;
 // parses) since ttyd's preact mount replaces body children, which would
 // strip a body-end script before it could run.
 const TOUCH_WHEEL_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${require('./lib/touch-wheel').installTouchWheel.toString()})(document);});</script>`;
+const { patchViewportMeta, installKeyboardFit } = require('./lib/keyboard-fit');
+const KEYBOARD_FIT_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${installKeyboardFit.toString()})(document);});</script>`;
 
 proxy.on('proxyRes', (proxyRes, req, res) => {
   const wantsInject = req.method === 'GET'
@@ -166,14 +168,17 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
   proxyRes.on('data', (c) => chunks.push(c));
   proxyRes.on('end', () => {
     let html = Buffer.concat(chunks).toString('utf8');
-    // Inject into <head> (runs before body parses) so ttyd's preact mount
-    // can't wipe us. Defer DOM work via DOMContentLoaded + setInterval.
+    // Patch viewport meta first so interactive-widget=resizes-content lands on
+    // Chrome/Android before layout. Then inject scripts into <head> (runs
+    // before body parses) so ttyd's preact mount can't wipe us.
+    html = patchViewportMeta(html);
+    const injectBlob = TOUCH_WHEEL_INJECT + KEYBOARD_FIT_INJECT;
     if (html.includes('</head>')) {
-      html = html.replace('</head>', TOUCH_WHEEL_INJECT + '</head>');
+      html = html.replace('</head>', injectBlob + '</head>');
     } else if (html.includes('</body>')) {
-      html = html.replace('</body>', TOUCH_WHEEL_INJECT + '</body>');
+      html = html.replace('</body>', injectBlob + '</body>');
     } else {
-      html += TOUCH_WHEEL_INJECT;
+      html += injectBlob;
     }
     const out = Buffer.from(html, 'utf8');
     const headers = { ...proxyRes.headers };
