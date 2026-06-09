@@ -846,7 +846,7 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>${escapeHtml(name)} · claude-hub</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#0d1320">
@@ -859,8 +859,14 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
   html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg);
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     overflow: hidden; }
+  /* --vvh tracks visualViewport.height so panes shrink with the on-screen
+     keyboard. position:absolute (not fixed) so the iframe element follows
+     html/body height — fixed positioning anchors to layout viewport on iOS
+     Safari and won't shrink. Fallback 100dvh for browsers without the JS
+     shim path. */
   .pane {
-    position: fixed; inset: 0; width: 100%; height: 100%;
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: var(--vvh, 100dvh);
     border: 0; background: var(--bg);
     visibility: hidden; pointer-events: none;
   }
@@ -953,6 +959,22 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
   //   Develop → FAB → back        → Develop (term)
   //   Develop → FAB → FAB → back  → Open    (the prior FAB's view, by rotation)
   function otherOf(v) { return v === 'open' ? 'term' : 'open'; }
+
+  // Mobile keyboard fix — track visualViewport.height in --vvh so panes
+  // (position:absolute, height:var(--vvh)) shrink when the soft keyboard
+  // opens. interactive-widget=resizes-content covers Chrome/Android; this
+  // shim is the iOS Safari path. Mirrors lib/keyboard-fit.js but writes a
+  // CSS var instead of html/body height because panes can't inherit through
+  // position:fixed on the iframe.
+  (function installVvhShim() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const apply = () => {
+      document.documentElement.style.setProperty('--vvh', vv.height + 'px');
+    };
+    vv.addEventListener('resize', apply);
+    apply();
+  })();
 
   const params = new URLSearchParams(location.search);
   const initial = (params.get('view') === 'term' || params.get('view') === 'open')
