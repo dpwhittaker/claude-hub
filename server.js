@@ -791,6 +791,260 @@ function serveLanding(res) {
   });
 }
 
+// ---------- File upload ----------
+// POST /api/upload/<project> — multipart/form-data with fields:
+//   path     — folder relative to project root (created if missing). Optional.
+//   filename — override saved name. Optional; defaults to client filename.
+//   file     — the file bytes (required).
+// Query: ?overwrite=1 — replace existing file. Default refuses with 409.
+const UPLOAD_MAX_BYTES = 500 * 1024 * 1024; // 500 MB
+
+const UPLOAD_DIALOG_PATH = path.join(__dirname, 'upload-dialog.js');
+
+function serveUploadDialogAsset(res) {
+  fs.readFile(UPLOAD_DIALOG_PATH, (err, body) => {
+    if (err) {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('asset error: ' + err.message);
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/javascript; charset=utf-8',
+      'Cache-Control': 'no-cache',
+    });
+    res.end(body);
+  });
+}
+
+// Parse a multipart/form-data body. Hand-rolled because the only dep we'd
+// otherwise need (busboy) is overkill for one-file uploads.
+function parseMultipart(body, boundary) {
+  const delim = Buffer.from('\r\n--' + boundary);
+  // Prepend \r\n so the first boundary (which has no leading newline) matches.
+  const buf = Buffer.concat([Buffer.from('\r\n'), body]);
+  const parts = [];
+  let idx = 0;
+  while (true) {
+    const start = buf.indexOf(delim, idx);
+    if (start < 0) break;
+    const after = start + delim.length;
+    // "--" terminator (last boundary).
+    if (buf[after] === 0x2d && buf[after + 1] === 0x2d) break;
+    // Expect \r\n after boundary, then headers, then \r\n\r\n, then content.
+    if (buf[after] !== 0x0d || buf[after + 1] !== 0x0a) break;
+    const headerStart = after + 2;
+    const headerEnd = buf.indexOf('\r\n\r\n', headerStart);
+    if (headerEnd < 0) break;
+    const headers = buf.slice(headerStart, headerEnd).toString('utf8');
+    const contentStart = headerEnd + 4;
+    const next = buf.indexOf(delim, contentStart);
+    if (next < 0) break;
+    parts.push({ headers, content: buf.slice(contentStart, next) });
+    idx = next;
+  }
+  return parts;
+}
+
+function parsePartDisposition(headers) {
+  const m = /content-disposition:\s*form-data\s*;\s*([^\r\n]+)/i.exec(headers);
+  if (!m) return null;
+  const out = {};
+  const re = /([a-zA-Z0-9_*-]+)\s*=\s*"((?:\\.|[^"\\])*)"/g;
+  let mm;
+  while ((mm = re.exec(m[1])) !== null) {
+    out[mm[1].toLowerCase()] = mm[2].replace(/\\"/g, '"');
+  }
+  return out;
+}
+
+async function readBodyCapped(req, maxBytes) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > maxBytes) {
+      const err = new Error('upload too large');
+      err.tooLarge = true;
+      throw err;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function readMultipartParts(req, res) {
+  const ct = req.headers['content-type'] || '';
+  const bm = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(ct);
+  if (!bm) {
+    sendJson(res, 400, { error: 'expected multipart/form-data' });
+    return null;
+  }
+  const boundary = (bm[1] || bm[2]).trim();
+  let body;
+  try {
+    body = await readBodyCapped(req, UPLOAD_MAX_BYTES);
+  } catch (e) {
+    if (e.tooLarge) sendJson(res, 413, { error: 'upload too large (max ' + UPLOAD_MAX_BYTES + ' bytes)' });
+    else sendJson(res, 400, { error: 'read error: ' + e.message });
+    return null;
+  }
+  return parseMultipart(body, boundary);
+}
+
+function extractUploadFields(parts) {
+  let relPath = '';
+  let filename = null;
+  let fileBuf = null;
+  for (const p of parts) {
+    const disp = parsePartDisposition(p.headers);
+    if (!disp || !disp.name) continue;
+    if (disp.name === 'path') {
+      relPath = p.content.toString('utf8').trim();
+    } else if (disp.name === 'filename') {
+      const v = p.content.toString('utf8').trim();
+      if (v) filename = v;
+    } else if (disp.name === 'file') {
+      if (filename == null && disp.filename) filename = disp.filename;
+      fileBuf = p.content;
+    }
+  }
+  return { relPath, filename, fileBuf };
+}
+
+function sanitizeFilename(name) {
+  let n = name || '';
+  n = n.replace(/^.*[\\/]/, '');
+  if (!n || n === '.' || n === '..' || n.includes('\0')) return null;
+  return n;
+}
+
+// Writes file to <rootDir>/<relPath>/<filename>, mkdir-p'ing the dir.
+// scope is the human-facing label used in error messages ("project root" /
+// "projects root"). Returns final path relative to rootDir on success.
+function writeUploadToDir(res, rootDir, scope, relPath, filename, fileBuf, overwrite) {
+  relPath = (relPath || '').replace(/^\/+|\/+$/g, '');
+  if (relPath.split('/').some((seg) => seg === '..')) {
+    return sendJson(res, 403, { error: `path escapes ${scope}` });
+  }
+  const targetDir = relPath ? path.resolve(rootDir, relPath) : rootDir;
+  if (targetDir !== rootDir && !targetDir.startsWith(rootDir + path.sep)) {
+    return sendJson(res, 403, { error: `path escapes ${scope}` });
+  }
+  const targetFile = path.join(targetDir, filename);
+  if (!targetFile.startsWith(rootDir + path.sep)) {
+    return sendJson(res, 403, { error: `path escapes ${scope}` });
+  }
+
+  if (fs.existsSync(targetDir)) {
+    if (!fs.statSync(targetDir).isDirectory()) {
+      return sendJson(res, 400, { error: 'target path is not a directory' });
+    }
+  } else {
+    try { fs.mkdirSync(targetDir, { recursive: true }); } catch (e) {
+      return sendJson(res, 500, { error: 'mkdir failed: ' + e.message });
+    }
+  }
+
+  const finalRel = relPath ? `${relPath}/${filename}` : filename;
+  if (!overwrite && fs.existsSync(targetFile)) {
+    return sendJson(res, 409, { error: 'file exists', path: finalRel });
+  }
+  try {
+    fs.writeFileSync(targetFile, fileBuf);
+  } catch (e) {
+    return sendJson(res, 500, { error: 'write failed: ' + e.message });
+  }
+  return { finalRel };
+}
+
+async function handleUpload(req, res, projectRaw, query) {
+  let project;
+  try { project = decodeURIComponent(projectRaw); } catch {
+    return sendJson(res, 400, { error: 'bad project name' });
+  }
+  if (!isViewableProject(project)) {
+    return sendJson(res, 404, { error: 'unknown project' });
+  }
+  const parts = await readMultipartParts(req, res);
+  if (!parts) return;
+  const { relPath, filename: rawFilename, fileBuf } = extractUploadFields(parts);
+  if (!fileBuf) return sendJson(res, 400, { error: 'missing "file" part' });
+  const filename = sanitizeFilename(rawFilename || 'upload.bin');
+  if (!filename) return sendJson(res, 400, { error: 'bad filename' });
+
+  const projectRoot = path.join(PROJECTS_ROOT, project);
+  const result = writeUploadToDir(
+    res, projectRoot, 'project root', relPath, filename, fileBuf,
+    query.get('overwrite') === '1',
+  );
+  if (!result) return;
+  const finalRel = result.finalRel;
+  const viewUrl = `/view/${encodeURIComponent(project)}/${finalRel.split('/').map(encodeURIComponent).join('/')}`;
+  sendJson(res, 200, { ok: true, project, path: finalRel, size: fileBuf.length, viewUrl });
+}
+
+// Upload anywhere under PROJECTS_ROOT. Top-level treeview picker uses this so
+// users can drop a file into any folder, not just a single project's root.
+async function handleUploadAnywhere(req, res, query) {
+  const parts = await readMultipartParts(req, res);
+  if (!parts) return;
+  const { relPath, filename: rawFilename, fileBuf } = extractUploadFields(parts);
+  if (!fileBuf) return sendJson(res, 400, { error: 'missing "file" part' });
+  const filename = sanitizeFilename(rawFilename || 'upload.bin');
+  if (!filename) return sendJson(res, 400, { error: 'bad filename' });
+
+  // Must target at least one segment — uploading directly into ~/projects/
+  // itself would litter the root, and there's no view URL for that case.
+  const cleanRel = (relPath || '').replace(/^\/+|\/+$/g, '');
+  if (!cleanRel) {
+    return sendJson(res, 400, { error: 'path is required (pick a folder under ~/projects)' });
+  }
+
+  const result = writeUploadToDir(
+    res, PROJECTS_ROOT, 'projects root', cleanRel, filename, fileBuf,
+    query.get('overwrite') === '1',
+  );
+  if (!result) return;
+  const finalRel = result.finalRel; // e.g. "claude-hub/uploads/file.txt"
+  const firstSeg = finalRel.split('/')[0];
+  const viewUrl = isViewableProject(firstSeg)
+    ? `/view/${finalRel.split('/').map(encodeURIComponent).join('/')}`
+    : null;
+  sendJson(res, 200, { ok: true, path: finalRel, size: fileBuf.length, viewUrl });
+}
+
+// Lazy directory listing rooted at PROJECTS_ROOT. Used by the top-level
+// upload treeview to expand one level at a time without walking the whole
+// tree up-front (which would be punishing inside node_modules etc.).
+const BROWSE_HIDDEN_DIRS = new Set(['node_modules', '.git', '.serve', 'dist', 'build', '.next', '.cache']);
+
+function handleBrowseDirs(req, res, query) {
+  const raw = (query.get('path') || '').trim();
+  const cleaned = raw.split('/').filter((s) => s && s !== '.').join('/');
+  if (cleaned.split('/').some((seg) => seg === '..')) {
+    return sendJson(res, 403, { error: 'path escapes projects root' });
+  }
+  const abs = cleaned ? path.resolve(PROJECTS_ROOT, cleaned) : PROJECTS_ROOT;
+  if (abs !== PROJECTS_ROOT && !abs.startsWith(PROJECTS_ROOT + path.sep)) {
+    return sendJson(res, 403, { error: 'path escapes projects root' });
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(abs, { withFileTypes: true });
+  } catch (e) {
+    return sendJson(res, 404, { error: 'not found: ' + e.message });
+  }
+  const dirs = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    if (e.name.startsWith('.')) continue;
+    if (BROWSE_HIDDEN_DIRS.has(e.name)) continue;
+    dirs.push({ name: e.name });
+  }
+  dirs.sort((a, b) => a.name.localeCompare(b.name));
+  sendJson(res, 200, { path: cleaned, dirs });
+}
+
 // ---------- /view/<project>/<path> read-only file browser ----------
 const PROJECTS_ROOT = process.env.PROJECTS_ROOT || path.join(process.env.HOME || '/', 'projects');
 // Publish PROJECTS_ROOT + CLAUDE_BIN so ttyd-attach.sh and any other child
@@ -1415,6 +1669,13 @@ function renderViewShell(project) {
   <span class="sep">·</span>
   <span style="color: var(--muted);" id="path-hint">browse</span>
   <span class="spacer"></span>
+  <button id="upload-btn" class="header-btn" type="button" title="Upload file" aria-label="Upload file">
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M8 11V2"/>
+      <path d="M4 6l4-4 4 4"/>
+      <path d="M2 13h12"/>
+    </svg>
+  </button>
   <button id="develop-toggle" class="header-btn" type="button" title="Toggle develop pane" aria-label="Toggle develop pane">
     <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/>
@@ -2057,6 +2318,18 @@ function scheduleTreeWSReconnect() {
   treeWSBackoff = Math.min(treeWSBackoff * 2, 30000);
 }
 </script>
+<script src="/static/upload-dialog.js"></script>
+<script>
+(function () {
+  const btn = document.getElementById('upload-btn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    // The /ws/view-tree socket auto-refreshes after the file lands, so no
+    // explicit tree reload is needed.
+    window.UploadDialog.open({ project: PROJECT, path: '', lockProject: true });
+  });
+})();
+</script>
 </body>
 </html>`;
 }
@@ -2089,14 +2362,41 @@ function renderDirectory(project, relPath, absPath) {
     const url = `/view/${encodeURIComponent(project)}${relPath ? '/' + relPath : ''}/${encodeURIComponent(f)}`;
     items.push(`<li><a href="${url}"><span class="file-icon">·</span>${escapeHtml(f)}</a></li>`);
   }
-  const body =
+  const list =
     items.length > 0
       ? `<ul class="dir">${items.join('')}</ul>`
       : '<div class="empty">empty directory</div>';
+  const uploadUi = `
+<style>
+  .upload-bar { margin: 0 0 16px; }
+  .upload-btn { background: rgba(125,211,252,0.1); color: var(--accent);
+    border: 1px solid transparent; border-radius: 8px; padding: 8px 14px;
+    font-family: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+  .upload-btn:hover { background: rgba(125,211,252,0.2); }
+</style>
+<div class="upload-bar"><button type="button" class="upload-btn" id="upload-here">⬆ Upload file here</button></div>
+<script src="/static/upload-dialog.js"></script>
+<script>
+(function () {
+  const btn = document.getElementById('upload-here');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    window.UploadDialog.open({
+      project: ${JSON.stringify(project)},
+      path: ${JSON.stringify(relPath)},
+      lockProject: true,
+    });
+  });
+  window.addEventListener('upload-complete', () => {
+    // Flat listing has no live updates — reload to surface the new file.
+    setTimeout(() => location.reload(), 500);
+  });
+})();
+</script>`;
   return viewerShell(
     `${project}${relPath ? '/' + relPath : ''}`,
     renderBreadcrumb(project, relPath),
-    body,
+    uploadUi + list,
   );
 }
 
@@ -2324,6 +2624,42 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(405, { 'Content-Type': 'text/plain' });
     res.end('method not allowed');
     return;
+  }
+  const uploadMatch = /^\/api\/upload\/([^/]+)$/.exec(apiPath);
+  if (uploadMatch) {
+    if (req.method === 'POST') {
+      const query = new URLSearchParams(url.split('?')[1] || '');
+      return handleUpload(req, res, uploadMatch[1], query);
+    }
+    res.writeHead(405, { 'Content-Type': 'text/plain' });
+    res.end('method not allowed');
+    return;
+  }
+  if (apiPath === '/api/upload-anywhere') {
+    if (req.method === 'POST') {
+      const query = new URLSearchParams(url.split('?')[1] || '');
+      return handleUploadAnywhere(req, res, query);
+    }
+    res.writeHead(405, { 'Content-Type': 'text/plain' });
+    res.end('method not allowed');
+    return;
+  }
+  if (apiPath === '/api/browse-dirs') {
+    if (req.method === 'GET') {
+      const query = new URLSearchParams(url.split('?')[1] || '');
+      return handleBrowseDirs(req, res, query);
+    }
+    res.writeHead(405, { 'Content-Type': 'text/plain' });
+    res.end('method not allowed');
+    return;
+  }
+  if (apiPath === '/static/upload-dialog.js') {
+    if (req.method !== 'GET') {
+      res.writeHead(405, { 'Content-Type': 'text/plain' });
+      res.end('method not allowed');
+      return;
+    }
+    return serveUploadDialogAsset(res);
   }
 
   // Bare prefix without trailing slash — redirect so relative-path resolution

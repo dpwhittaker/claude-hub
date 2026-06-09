@@ -313,6 +313,13 @@
         </span>
       </button>
 
+      <button class="add-card" id="upload-file" title="Upload a file into any project">
+        <span class="stack">
+          <span>⬆</span>
+          <span class="label">Upload file</span>
+        </span>
+      </button>
+
     </div>
     <footer>
       claude-hub · localhost only by default
@@ -678,6 +685,11 @@
     if (new URLSearchParams(location.search).get('new') === '1') {
       addBtn.click();
     }
+
+    document.getElementById('upload-file').addEventListener('click', () => {
+      window.UploadDialog.open({ anywhere: true });
+    });
   </script>
+  <script src="/static/upload-dialog.js"></script>
 </body>
 </html>
