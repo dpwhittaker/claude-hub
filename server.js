@@ -1040,6 +1040,7 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
   const DRAG_SLOP = 5;
   const FLICK_THRESHOLD = 0.45; // px/ms
   const TRAIL_WINDOW_MS = 120;
+  const LONG_PRESS_MS = 550;
 
   function clampPos(x, y) {
     const w = fab.offsetWidth, h = fab.offsetHeight;
@@ -1083,6 +1084,29 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
 
   let dragState = null;
   let suppressClick = false;
+  let longPressTimer = null;
+
+  // Long-press → hard-refresh the Open iframe. Append a one-shot cache-bust
+  // query so HTTP cache + any service worker that keys on the full URL both
+  // miss. Mount first if lazy. Re-assigning .src is preferred over
+  // contentWindow.location.reload() because it works across origins and
+  // forces a navigation rather than a soft reload.
+  function bustedOpenUrl() {
+    const sep = sources.open.includes('?') ? '&' : '?';
+    return sources.open + sep + '__r=' + Date.now();
+  }
+  function reloadOpenPane() {
+    mount('open');
+    panes.open.src = bustedOpenUrl();
+    if ('vibrate' in navigator) { try { navigator.vibrate(20); } catch {} }
+  }
+
+  function cancelLongPress() {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
 
   fab.addEventListener('pointerdown', (e) => {
     if (e.button !== undefined && e.button !== 0) return;
@@ -1098,13 +1122,25 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
     };
     try { fab.setPointerCapture(e.pointerId); } catch {}
     fab.style.transition = '';
+    cancelLongPress();
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      if (!dragState || dragState.moved) return;
+      reloadOpenPane();
+      suppressClick = true;
+      dragState = null;
+      try { fab.releasePointerCapture(e.pointerId); } catch {}
+    }, LONG_PRESS_MS);
   });
 
   fab.addEventListener('pointermove', (e) => {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
-    if (!dragState.moved && Math.hypot(dx, dy) > DRAG_SLOP) dragState.moved = true;
+    if (!dragState.moved && Math.hypot(dx, dy) > DRAG_SLOP) {
+      dragState.moved = true;
+      cancelLongPress();
+    }
     if (!dragState.moved) return;
     e.preventDefault();
     placeFab(dragState.originX + dx, dragState.originY + dy, { persist: false });
@@ -1114,6 +1150,7 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
 
   function finishDrag(e) {
     if (!dragState || e.pointerId !== dragState.pointerId) return;
+    cancelLongPress();
     try { fab.releasePointerCapture(e.pointerId); } catch {}
     const moved = dragState.moved;
     if (!moved) { dragState = null; return; }
