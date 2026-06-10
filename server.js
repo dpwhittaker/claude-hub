@@ -1199,7 +1199,16 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
   fab.addEventListener('pointercancel', finishDrag);
 
   fab.addEventListener('click', (e) => {
-    if (suppressClick) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+    if (suppressClick) {
+      // Consume one synthesized click — drag-release and long-press both
+      // arm this. Resetting here (instead of a 0ms timeout) keeps the flag
+      // sticky across the gap between pointerup and click on touch, and
+      // prevents a stuck-true state if no click ever follows the long-press.
+      suppressClick = false;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
     swap();
   });
 
