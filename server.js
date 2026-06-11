@@ -942,22 +942,10 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
     if (!mounted[other]) setTimeout(() => mount(other), 800);
   }
 
-  // History model — shell adds at most one extra entry.
-  //   role 'entry' = the URL the user navigated in on. Back from here leaves
-  //                  the shell (cross-document nav → hub).
-  //   role 'swap'  = a pushed entry sitting on top of 'entry'. Back from here
-  //                  pops to the entry — popstate applies entry's view.
-  // FAB rules:
-  //   at 'entry' → pushState a 'swap' with the other view (stack grows by 1).
-  //   at 'swap'  → rotate: rewrite the entry-below to hold the CURRENT view,
-  //                then push a new 'swap' with the other view. Net: the two
-  //                shell entries swap positions, so back from the new swap
-  //                pops to the previously-visible view (not the original
-  //                entry view). Browser back is never overridden.
-  // Behavior:
-  //   Develop → back              → hub
-  //   Develop → FAB → back        → Develop (term)
-  //   Develop → FAB → FAB → back  → Open    (the prior FAB's view, by rotation)
+  // History model: FAB never touches history. Back button always pops the
+  // shell's single entry → returns to whatever loaded the shell (the hub).
+  // URL ?view= is kept in sync via replaceState so a refresh preserves the
+  // visible pane without growing the back stack.
   function otherOf(v) { return v === 'open' ? 'term' : 'open'; }
 
   // Mobile keyboard fix — track visualViewport.height in --vvh so panes
@@ -979,45 +967,15 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
   const params = new URLSearchParams(location.search);
   const initial = (params.get('view') === 'term' || params.get('view') === 'open')
     ? params.get('view') : cfg.initial;
-  history.replaceState({ role: 'entry', view: initial }, '', '?view=' + initial);
+  history.replaceState(null, '', '?view=' + initial);
   applyView(initial);
 
-  // Rotation is two-step: history.back() then rebuild in popstate. Pendings
-  // capture (cur, next) across the async gap; subsequent FAB taps no-op
-  // until the rotation finishes.
-  let pendingRotate = null;
-
   function swap() {
-    if (pendingRotate) return;
     const cur = panes.open.classList.contains('active') ? 'open' : 'term';
     const next = otherOf(cur);
-    const state = history.state || { role: 'entry', view: cur };
-    if (state.role === 'entry') {
-      history.pushState({ role: 'swap', view: next }, '', '?view=' + next);
-      applyView(next);
-      return;
-    }
-    // role === 'swap' → rotate.
-    pendingRotate = { cur, next };
-    history.back();
+    history.replaceState(null, '', '?view=' + next);
+    applyView(next);
   }
-
-  window.addEventListener('popstate', (e) => {
-    if (pendingRotate) {
-      const { cur, next } = pendingRotate;
-      pendingRotate = null;
-      // Cursor is now at the previous entry-below. Rewrite it to hold the
-      // view we were just on, then push a new top with the other view.
-      history.replaceState({ role: 'entry', view: cur }, '', '?view=' + cur);
-      history.pushState({ role: 'swap', view: next }, '', '?view=' + next);
-      applyView(next);
-      return;
-    }
-    const s = e.state;
-    // Null state = popping into a non-shell entry (browser handles the nav).
-    if (!s) return;
-    applyView(s.view);
-  });
 
   // Keyboard: Ctrl/Cmd+\` toggles. Iframe focus swallows this when the
   // terminal pane is active — keep it as a desktop niceity for the Open side.
