@@ -153,6 +153,10 @@ const TERM_INDEX_RE = /^\/term\/[A-Za-z0-9_.-]+\/?(?:\?.*)?$/;
 const TOUCH_WHEEL_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${require('./lib/touch-wheel').installTouchWheel.toString()})(document);});</script>`;
 const { patchViewportMeta, installKeyboardFit } = require('./lib/keyboard-fit');
 const KEYBOARD_FIT_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${installKeyboardFit.toString()})(document);});</script>`;
+// xterm.js scroll lives inside the terminal canvas — the outer document never
+// scrolls. ttyd still reserves a scrollbar gutter in some browser/OS combos
+// (visible on the right edge of the term pane in split mode). Hide it.
+const SCROLLBAR_HIDE_INJECT = '<style>html,body{scrollbar-width:none;-ms-overflow-style:none;overflow:hidden}html::-webkit-scrollbar,body::-webkit-scrollbar{display:none;width:0;height:0}</style>';
 
 proxy.on('proxyRes', (proxyRes, req, res) => {
   const wantsInject = req.method === 'GET'
@@ -172,7 +176,7 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
     // Chrome/Android before layout. Then inject scripts into <head> (runs
     // before body parses) so ttyd's preact mount can't wipe us.
     html = patchViewportMeta(html);
-    const injectBlob = TOUCH_WHEEL_INJECT + KEYBOARD_FIT_INJECT;
+    const injectBlob = SCROLLBAR_HIDE_INJECT + TOUCH_WHEEL_INJECT + KEYBOARD_FIT_INJECT;
     if (html.includes('</head>')) {
       html = html.replace('</head>', injectBlob + '</head>');
     } else if (html.includes('</body>')) {
