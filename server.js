@@ -871,6 +871,11 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
     visibility: hidden; pointer-events: none;
   }
   .pane.active { visibility: visible; pointer-events: auto; }
+  /* Split mode (landscape tablet/desktop): both panes visible side-by-side.
+     Develop on the left, Open on the right. A 1px divider helps the eye. */
+  body.split #pane-term { width: 50%; left: 0; border-right: 1px solid var(--fab-edge); box-sizing: border-box; }
+  body.split #pane-open { width: 50%; left: 50%; }
+  body.split .pane { visibility: visible; pointer-events: auto; }
   /* Pane below active still consumes layout but is fully covered. Visibility
      hidden keeps DOM + iframe document alive (no unload) and just blocks input
      + paint. display:none would risk unloading some browsers' iframe state. */
@@ -922,9 +927,17 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
   };
   const sources = { open: cfg.openUrl, term: cfg.termUrl };
   const mounted = { open: false, term: false };
-  const labels = { open: 'OPEN', term: 'TERM' };
+  const labels = { open: 'OPEN', term: 'TERM', split: 'SPLIT' };
   const fab = document.getElementById('fab');
   const fabLabel = fab.querySelector('.label');
+
+  // Landscape tablet/desktop → 3-state cycle (split → term → open → split).
+  // Anything narrower or portrait → 2-state binary (open ↔ term). matchMedia
+  // re-evaluates on rotate/resize so the cycle adapts live.
+  const splitMq = window.matchMedia('(min-width: 900px) and (orientation: landscape)');
+  function isSplitCapable() { return splitMq.matches; }
+
+  let currentView = null;
 
   function mount(view) {
     if (mounted[view]) return;
@@ -933,13 +946,34 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
   }
 
   function applyView(view) {
-    const other = view === 'open' ? 'term' : 'open';
-    mount(view);
-    panes[view].classList.add('active');
-    panes[other].classList.remove('active');
-    fabLabel.textContent = labels[other];
-    document.title = cfg.name + ' · ' + labels[view].toLowerCase() + ' · claude-hub';
-    if (!mounted[other]) setTimeout(() => mount(other), 800);
+    if (view === 'split' && !isSplitCapable()) view = 'open';
+    if (view === 'split') {
+      mount('open'); mount('term');
+      document.body.classList.add('split');
+      panes.open.classList.add('active');
+      panes.term.classList.add('active');
+    } else {
+      const other = view === 'open' ? 'term' : 'open';
+      document.body.classList.remove('split');
+      mount(view);
+      panes[view].classList.add('active');
+      panes[other].classList.remove('active');
+      if (!mounted[other]) setTimeout(() => mount(other), 800);
+    }
+    const nextLabel = labels[nextView(view)];
+    fabLabel.textContent = nextLabel;
+    document.title = cfg.name + ' · ' + (view === 'split' ? 'split' : labels[view].toLowerCase()) + ' · claude-hub';
+    currentView = view;
+  }
+
+  function nextView(cur) {
+    if (isSplitCapable()) {
+      // split → term → open → split
+      if (cur === 'split') return 'term';
+      if (cur === 'term') return 'open';
+      return 'split';
+    }
+    return cur === 'open' ? 'term' : 'open';
   }
 
   // History model: FAB never touches history. Back button always pops the
@@ -965,17 +999,33 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
   })();
 
   const params = new URLSearchParams(location.search);
-  const initial = (params.get('view') === 'term' || params.get('view') === 'open')
-    ? params.get('view') : cfg.initial;
+  const qv = params.get('view');
+  const valid = qv === 'term' || qv === 'open' || qv === 'split';
+  // Default to split on landscape tablet/desktop, else cfg.initial.
+  const initial = valid ? qv : (isSplitCapable() ? 'split' : cfg.initial);
   history.replaceState(null, '', '?view=' + initial);
   applyView(initial);
 
   function swap() {
-    const cur = panes.open.classList.contains('active') ? 'open' : 'term';
-    const next = otherOf(cur);
+    const next = nextView(currentView);
     history.replaceState(null, '', '?view=' + next);
     applyView(next);
   }
+
+  // Rotation / window resize across the split-capable boundary: if we drop
+  // out of split-capable layout while in 'split', fall back to 'open' so the
+  // user isn't left with a half-pane on a phone. If we re-enter split-capable
+  // and the URL says split, restore it. Otherwise leave the current view.
+  splitMq.addEventListener('change', () => {
+    if (!isSplitCapable() && currentView === 'split') {
+      const fallback = 'open';
+      history.replaceState(null, '', '?view=' + fallback);
+      applyView(fallback);
+    } else {
+      // Refresh fab label since nextView() depends on isSplitCapable().
+      fabLabel.textContent = labels[nextView(currentView)];
+    }
+  });
 
   // Keyboard: Ctrl/Cmd+\` toggles. Iframe focus swallows this when the
   // terminal pane is active — keep it as a desktop niceity for the Open side.
