@@ -153,10 +153,12 @@ const TERM_INDEX_RE = /^\/term\/[A-Za-z0-9_.-]+\/?(?:\?.*)?$/;
 const TOUCH_WHEEL_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${require('./lib/touch-wheel').installTouchWheel.toString()})(document);});</script>`;
 const { patchViewportMeta, installKeyboardFit } = require('./lib/keyboard-fit');
 const KEYBOARD_FIT_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${installKeyboardFit.toString()})(document);});</script>`;
-// xterm.js scroll lives inside the terminal canvas — the outer document never
-// scrolls. ttyd still reserves a scrollbar gutter in some browser/OS combos
-// (visible on the right edge of the term pane in split mode). Hide it.
-const SCROLLBAR_HIDE_INJECT = '<style>html,body{scrollbar-width:none;-ms-overflow-style:none;overflow:hidden}html::-webkit-scrollbar,body::-webkit-scrollbar{display:none;width:0;height:0}</style>';
+// xterm.js's .xterm-viewport sets overflow-y:scroll, so a scrollbar is always
+// painted on the right edge of the term pane even when scrollback fits. Hide
+// the bar without disabling scroll (touch-wheel + wheel events still drive
+// xterm's internal scrollback). Also zero the outer document scrollbar in
+// case any browser/OS combo reserves a gutter there.
+const SCROLLBAR_HIDE_INJECT = '<style>html,body{scrollbar-width:none;-ms-overflow-style:none;overflow:hidden}html::-webkit-scrollbar,body::-webkit-scrollbar{display:none;width:0;height:0}.xterm-viewport{scrollbar-width:none;-ms-overflow-style:none}.xterm-viewport::-webkit-scrollbar{display:none;width:0;height:0}</style>';
 
 proxy.on('proxyRes', (proxyRes, req, res) => {
   const wantsInject = req.method === 'GET'
