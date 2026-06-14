@@ -1007,8 +1007,16 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
   const params = new URLSearchParams(location.search);
   const qv = params.get('view');
   const valid = qv === 'term' || qv === 'open' || qv === 'split';
-  // Default to split on landscape tablet/desktop, else cfg.initial.
-  const initial = valid ? qv : (isSplitCapable() ? 'split' : cfg.initial);
+  // Landscape tablet/desktop always lands on split — even when the hub link
+  // carried ?view=open or ?view=term — so picking either button from the
+  // landing page lands the same place. ?view=split is also honored.
+  // Narrow/portrait honors ?view= as before.
+  let initial;
+  if (isSplitCapable()) {
+    initial = 'split';
+  } else {
+    initial = valid && qv !== 'split' ? qv : cfg.initial;
+  }
   history.replaceState(null, '', '?view=' + initial);
   applyView(initial);
 
