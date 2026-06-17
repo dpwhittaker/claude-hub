@@ -2019,6 +2019,8 @@ function renderViewShell(project) {
   }
   header.bar .header-btn:hover { color: var(--accent); border-color: var(--accent); }
   header.bar .header-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(125,211,252,0.12); }
+  header.bar .header-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  header.bar .header-btn:disabled:hover { color: var(--muted); border-color: var(--edge); background: transparent; }
   main { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
   .top-row { flex: 1 1 auto; display: flex; min-height: 0; min-width: 0; }
   /* Left pane */
@@ -2147,6 +2149,13 @@ function renderViewShell(project) {
     <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M8 11V2"/>
       <path d="M4 6l4-4 4 4"/>
+      <path d="M2 13h12"/>
+    </svg>
+  </button>
+  <button id="download-btn" class="header-btn" type="button" title="Download active file" aria-label="Download active file" disabled>
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M8 2v9"/>
+      <path d="M4 7l4 4 4-4"/>
       <path d="M2 13h12"/>
     </svg>
   </button>
@@ -2580,7 +2589,15 @@ function setActive(key) {
   PATH_HINT.textContent = info ? (info.path + (info.mode === 'render' ? ' · live' : '')) : 'browse';
   EMPTY.hidden = tabs.size > 0;
   if (info) info.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  refreshDownloadBtn();
   saveTabs();
+}
+
+function refreshDownloadBtn() {
+  const btn = document.getElementById('download-btn');
+  if (!btn) return;
+  const info = activeKey ? tabs.get(activeKey) : null;
+  btn.disabled = !info;
 }
 
 function closeTab(key) {
@@ -2596,6 +2613,7 @@ function closeTab(key) {
       activeKey = null;
       PATH_HINT.textContent = 'browse';
       EMPTY.hidden = false;
+      refreshDownloadBtn();
     }
   }
   saveTabs();
@@ -2802,6 +2820,24 @@ function scheduleTreeWSReconnect() {
     // explicit tree reload is needed.
     window.UploadDialog.open({ project: PROJECT, path: '', lockProject: true });
   });
+
+  const dl = document.getElementById('download-btn');
+  if (dl) {
+    dl.addEventListener('click', () => {
+      const info = activeKey ? tabs.get(activeKey) : null;
+      if (!info) return;
+      // Build /view/<project>/<path>?download=1. Hidden anchor with download
+      // attr keeps the current page intact (vs assigning location.href).
+      const parts = info.path.split('/').map(encodeURIComponent).join('/');
+      const a = document.createElement('a');
+      a.href = '/view/' + encodeURIComponent(PROJECT) + '/' + parts + '?download=1';
+      a.download = info.path.split('/').pop() || 'download';
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
+  }
 })();
 </script>
 </body>
@@ -2926,7 +2962,7 @@ function renderCode(project, relPath, content, lang, embed = false) {
   );
 }
 
-function serveRaw(res, absPath, ext) {
+function serveRaw(res, absPath, ext, downloadName) {
   const mime = RAW_MIME[ext] || 'application/octet-stream';
   fs.readFile(absPath, (err, data) => {
     if (err) {
@@ -2934,11 +2970,19 @@ function serveRaw(res, absPath, ext) {
       res.end('read error: ' + err.message);
       return;
     }
-    res.writeHead(200, {
+    const headers = {
       'Content-Type': mime,
       'Content-Length': data.length,
       'Cache-Control': 'no-cache',
-    });
+    };
+    if (downloadName) {
+      // RFC 5987 — filename* handles non-ASCII; plain filename= keeps legacy
+      // browsers happy. Sanitize quotes/CR/LF out of the fallback name.
+      const safe = downloadName.replace(/["\r\n]/g, '_');
+      headers['Content-Disposition'] =
+        `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`;
+    }
+    res.writeHead(200, headers);
     res.end(data);
   });
 }
@@ -3035,10 +3079,14 @@ function handleViewRequest(req, res, urlPath) {
   const qs = req.url.split('?')[1] || '';
   const wantRaw = qs.includes('raw=1');
   const wantEmbed = qs.includes('embed=1');
+  const wantDownload = qs.includes('download=1');
 
-  // Raw delivery path: bypass render. Used for ?raw=1 or any binary.
-  if (wantRaw || BINARY_EXTS.has(ext)) {
-    serveRaw(res, absPath, ext);
+  // Raw delivery path: bypass render. Used for ?raw=1, ?download=1, or any
+  // binary. ?download=1 also adds a Content-Disposition: attachment header
+  // so the browser saves rather than displays.
+  if (wantRaw || wantDownload || BINARY_EXTS.has(ext)) {
+    const name = wantDownload ? path.basename(absPath) : undefined;
+    serveRaw(res, absPath, ext, name);
     return;
   }
 
