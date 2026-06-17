@@ -2823,15 +2823,37 @@ function scheduleTreeWSReconnect() {
 
   const dl = document.getElementById('download-btn');
   if (dl) {
-    dl.addEventListener('click', () => {
+    dl.addEventListener('click', async () => {
       const info = activeKey ? tabs.get(activeKey) : null;
       if (!info) return;
-      // Build /view/<project>/<path>?download=1. Hidden anchor with download
-      // attr keeps the current page intact (vs assigning location.href).
       const parts = info.path.split('/').map(encodeURIComponent).join('/');
+      const url = '/view/' + encodeURIComponent(PROJECT) + '/' + parts + '?download=1';
+      const name = info.path.split('/').pop() || 'download';
+      // File System Access API → real OS Save-As dialog (Chrome/Edge desktop
+      // and Chrome Android 121+). The <a download> path lands silently in the
+      // Downloads folder. Try the picker first, fall back on no-support or
+      // SecurityError (cross-origin iframe etc.).
+      if (typeof window.showSaveFilePicker === 'function') {
+        try {
+          const handle = await window.showSaveFilePicker({ suggestedName: name });
+          const r = await fetch(url);
+          if (!r.ok) throw new Error('fetch ' + r.status);
+          const w = await handle.createWritable();
+          if (r.body && typeof r.body.pipeTo === 'function') {
+            await r.body.pipeTo(w);
+          } else {
+            await w.write(await r.blob());
+            await w.close();
+          }
+          return;
+        } catch (e) {
+          if (e && e.name === 'AbortError') return; // user cancelled
+          // Anything else → fall through to anchor download.
+        }
+      }
       const a = document.createElement('a');
-      a.href = '/view/' + encodeURIComponent(PROJECT) + '/' + parts + '?download=1';
-      a.download = info.path.split('/').pop() || 'download';
+      a.href = url;
+      a.download = name;
       a.rel = 'noopener';
       document.body.appendChild(a);
       a.click();
