@@ -845,8 +845,13 @@ function handleShellRequest(res, name, initialView) {
 }
 
 function renderShellHtml(name, openUrl, termUrl, initialView) {
+  // browseUrl = the /view/<name>/ shell. In split-capable layouts the right
+  // pane shows this instead of the live openUrl — the user can still get
+  // the live preview via the eye-icon inside browse, and gains the
+  // tree/tabs/git-status view at the same time.
+  const browseUrl = '/view/' + encodeURIComponent(name) + '/';
   const data = JSON.stringify({
-    name, openUrl, termUrl, initial: initialView,
+    name, openUrl, browseUrl, termUrl, initial: initialView,
   });
   return `<!doctype html>
 <html lang="en">
@@ -931,17 +936,24 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
     open: document.getElementById('pane-open'),
     term: document.getElementById('pane-term'),
   };
-  const sources = { open: cfg.openUrl, term: cfg.termUrl };
-  const mounted = { open: false, term: false };
-  const labels = { open: 'OPEN', term: 'TERM', split: 'SPLIT' };
-  const fab = document.getElementById('fab');
-  const fabLabel = fab.querySelector('.label');
-
   // Landscape tablet/desktop → 3-state cycle (split → term → open → split).
   // Anything narrower or portrait → 2-state binary (open ↔ term). matchMedia
   // re-evaluates on rotate/resize so the cycle adapts live.
   const splitMq = window.matchMedia('(min-width: 900px) and (orientation: landscape)');
   function isSplitCapable() { return splitMq.matches; }
+
+  // The right pane shows the Browse view in split-capable layouts (so the
+  // user sees tree + tabs + git-status alongside the terminal) and the live
+  // openUrl on phones. Stored mutably so a rotation event can swap the src
+  // of an already-mounted pane.
+  function openSrcForLayout() {
+    return isSplitCapable() ? cfg.browseUrl : cfg.openUrl;
+  }
+  const sources = { open: openSrcForLayout(), term: cfg.termUrl };
+  const mounted = { open: false, term: false };
+  const labels = { open: 'OPEN', term: 'TERM', split: 'SPLIT' };
+  const fab = document.getElementById('fab');
+  const fabLabel = fab.querySelector('.label');
 
   let currentView = null;
 
@@ -1031,12 +1043,19 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
   // user isn't left with a half-pane on a phone. If we re-enter split-capable
   // and the URL says split, restore it. Otherwise leave the current view.
   splitMq.addEventListener('change', () => {
+    // Right-pane URL flips between live Open (phone) and Browse (landscape).
+    // If the pane is already mounted with the wrong src, re-assign so it
+    // navigates to the new target without forcing a reload of the term pane.
+    const nextOpenSrc = openSrcForLayout();
+    if (sources.open !== nextOpenSrc) {
+      sources.open = nextOpenSrc;
+      if (mounted.open) panes.open.src = nextOpenSrc;
+    }
     if (!isSplitCapable() && currentView === 'split') {
       const fallback = 'open';
       history.replaceState(null, '', '?view=' + fallback);
       applyView(fallback);
     } else {
-      // Refresh fab label since nextView() depends on isSplitCapable().
       fabLabel.textContent = labels[nextView(currentView)];
     }
   });
@@ -1735,7 +1754,79 @@ function makeDimRules(projectRoot) {
   };
 }
 
-function buildFileTree(rootAbs, rules) {
+// Returns a Set of project-relative paths git considers dirty in the working
+// tree — modified, added, deleted, renamed, or untracked-and-not-ignored. Used
+// to colour the file tree yellow. Renames produce a single entry for the new
+// path; we discard the original path since the tree view shows the new file
+// only. Empty Set if git fails or the project isn't a repo.
+function computeGitUncommitted(projectRoot) {
+  if (!fs.existsSync(path.join(projectRoot, '.git'))) return new Set();
+  try {
+    const out = execFileSync(
+      'git', ['-C', projectRoot, 'status', '--porcelain', '-z'],
+      { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
+    );
+    const set = new Set();
+    let i = 0;
+    while (i < out.length) {
+      const end = out.indexOf('\0', i);
+      if (end < 0) break;
+      const entry = out.slice(i, end);
+      i = end + 1;
+      if (entry.length < 3) continue;
+      const xy = entry.slice(0, 2);
+      const p = entry.slice(3);
+      // Renames/copies emit "XY new\0old\0"; skip the old path.
+      if (xy[0] === 'R' || xy[0] === 'C') {
+        const e2 = out.indexOf('\0', i);
+        if (e2 >= 0) i = e2 + 1;
+      }
+      set.add(p);
+    }
+    return set;
+  } catch { return new Set(); }
+}
+
+// Returns paths touched in the most recent N commits, oldest-first. The result
+// arr[0] = HEAD's files, arr[1] = HEAD~1, etc. Spawns N+1 git processes (cheap
+// enough at N=4 and cached by the caller).
+function computeGitRecentCommits(projectRoot, n) {
+  if (!fs.existsSync(path.join(projectRoot, '.git'))) return [];
+  try {
+    const shas = execFileSync(
+      'git', ['-C', projectRoot, 'log', '-' + n, '--pretty=format:%H'],
+      { encoding: 'utf8', timeout: 5000 },
+    ).split('\n').map((s) => s.trim()).filter(Boolean);
+    return shas.map((sha) => {
+      try {
+        const out = execFileSync(
+          'git', ['-C', projectRoot, 'show', '--name-only', '--pretty=format:', sha],
+          { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
+        );
+        return out.split('\n').map((s) => s.trim()).filter(Boolean);
+      } catch { return []; }
+    });
+  } catch { return []; }
+}
+
+// Build path → tag map. uncommitted beats commit-N (a tracked file the user
+// is editing should look yellow, not cyan); commit 0 beats commit 1+ when the
+// same file appears in multiple recent commits.
+function computeGitStatus(projectRoot) {
+  const map = {};
+  for (const p of computeGitUncommitted(projectRoot)) map[p] = 'uncommitted';
+  const recent = computeGitRecentCommits(projectRoot, 4);
+  recent.forEach((paths, idx) => {
+    if (idx > 3) return;
+    const tag = 'c' + idx;
+    for (const p of paths) {
+      if (!(p in map)) map[p] = tag;
+    }
+  });
+  return map;
+}
+
+function buildFileTree(rootAbs, rules, gitStatus) {
   let count = 0;
   function walk(dir, relPath) {
     if (count >= VIEW_TREE_MAX_NODES) return [];
@@ -1766,6 +1857,7 @@ function buildFileTree(rootAbs, rules) {
         files.push({
           name: e.name, type: 'file', path: childRel,
           dim: isDim || undefined,
+          gitStatus: gitStatus ? gitStatus[childRel] : undefined,
         });
       }
     }
@@ -1780,6 +1872,7 @@ function handleViewTree(req, res, project) {
   if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
   const projectRoot = path.join(PROJECTS_ROOT, project);
   const rules = makeDimRules(projectRoot);
+  const gitStatus = computeGitStatus(projectRoot);
   const qs = req.url.split('?')[1] || '';
   const params = new URLSearchParams(qs);
   const subPath = params.get('path');
@@ -1817,16 +1910,17 @@ function handleViewTree(req, res, project) {
         files.push({
           name: e.name, type: 'file', path: childRel,
           dim: childDim || undefined,
+          gitStatus: gitStatus[childRel],
         });
       }
     }
     dirs.sort((a, b) => a.name.localeCompare(b.name));
     files.sort((a, b) => a.name.localeCompare(b.name));
-    return sendJson(res, 200, { project, path: decoded, entries: [...dirs, ...files] });
+    return sendJson(res, 200, { project, path: decoded, entries: [...dirs, ...files], gitStatus });
   }
 
-  const tree = buildFileTree(projectRoot, rules);
-  sendJson(res, 200, { project, tree });
+  const tree = buildFileTree(projectRoot, rules, gitStatus);
+  sendJson(res, 200, { project, tree, gitStatus });
 }
 
 // ---------- /ws/view-tree/<project> live tree updates ----------
@@ -1881,6 +1975,26 @@ function getOrCreateWatcher(project) {
   const dimRefresh = setInterval(() => { dimRules = makeDimRules(projectRoot); }, 30_000);
   if (typeof dimRefresh.unref === 'function') dimRefresh.unref();
 
+  // Git-status broadcasting: any change to .git/HEAD, .git/index, or
+  // .git/refs/** means the commit graph or staging area moved, which can
+  // shift the tree's yellow/cyan classes. Any change to a tracked file can
+  // shift the uncommitted set. Both lanes feed the same debounced push so
+  // a rebase or `git add` only triggers one git invocation, not dozens.
+  let gitStatusTimer = null;
+  function scheduleGitStatusPush() {
+    if (gitStatusTimer) clearTimeout(gitStatusTimer);
+    gitStatusTimer = setTimeout(() => {
+      gitStatusTimer = null;
+      const map = computeGitStatus(projectRoot);
+      const msg = JSON.stringify({ type: 'git-status', gitStatus: map });
+      for (const ws of clients) {
+        if (ws.readyState === ws.OPEN) {
+          try { ws.send(msg); } catch {}
+        }
+      }
+    }, 250);
+  }
+
   watcher.on('error', (e) => {
     console.warn('[view-tree-ws] watcher error', project, '-', e.message);
   });
@@ -1888,9 +2002,17 @@ function getOrCreateWatcher(project) {
     if (!filename) return;
     const rel = String(filename).split(path.sep).join('/');
     if (!rel || rel === '.') return;
+    // .git internals: HEAD / index / refs movement → recompute git status,
+    // but skip the tree-add/change/delete machinery.
+    if (rel === '.git/HEAD' || rel === '.git/index' || rel.startsWith('.git/refs/')) {
+      scheduleGitStatusPush();
+      return;
+    }
     if (dimRules.pathIsDim(rel)) return;
     const segs = rel.split('/');
     if (segs.some((s) => VIEW_TREE_HIDDEN_DIRS.has(s) || s === '.git')) return;
+    // Tracked-file mutation can also shift the uncommitted set.
+    scheduleGitStatusPush();
     // Coalesce duplicate events: stat after a short delay so add+remove or
     // multi-fire renames settle to a single message.
     if (pending.has(rel)) clearTimeout(pending.get(rel));
@@ -1943,7 +2065,9 @@ function getOrCreateWatcher(project) {
     }, 50));
   });
 
-  entry = { watcher, clients, pending, dimRefresh };
+  entry = { watcher, clients, pending, dimRefresh, cancelGitTimer: () => {
+    if (gitStatusTimer) { clearTimeout(gitStatusTimer); gitStatusTimer = null; }
+  } };
   projectWatchers.set(project, entry);
   return entry;
 }
@@ -1956,6 +2080,7 @@ function releaseWatcher(project, ws) {
     for (const t of entry.pending.values()) clearTimeout(t);
     entry.pending.clear();
     clearInterval(entry.dimRefresh);
+    if (entry.cancelGitTimer) entry.cancelGitTimer();
     try { entry.watcher.close(); } catch {}
     projectWatchers.delete(project);
   }
@@ -2055,7 +2180,17 @@ function renderViewShell(project) {
     padding: 2px 4px 2px 14px; border-radius: 4px;
     cursor: pointer; color: var(--fg);
   }
-  .tree .file.active { background: var(--bg-2); color: var(--accent); }
+  /* Active row — contrast comes from background only so git-* foreground
+     colours stay readable on the selected file. */
+  .tree .file.active { background: rgba(125,211,252,0.18); }
+  /* Git status classes — shared with tab labels. Uncommitted dirty work is
+     yellow; HEAD/HEAD~1/HEAD~2/HEAD~3 fade from bright cyan to muted. Tab
+     and file rules co-located so behaviour stays in sync. */
+  .tree .file.git-uncommitted, .tab.git-uncommitted { color: #fde68a; }
+  .tree .file.git-c0, .tab.git-c0 { color: #67e8f9; }
+  .tree .file.git-c1, .tab.git-c1 { color: hsl(190, 55%, 70%); }
+  .tree .file.git-c2, .tab.git-c2 { color: hsl(190, 35%, 62%); }
+  .tree .file.git-c3, .tab.git-c3 { color: hsl(190, 22%, 56%); }
   .tree .dir-name { color: var(--accent); }
   .tree .file-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tree .file-action {
@@ -2094,12 +2229,16 @@ function renderViewShell(project) {
     transition: background 0.1s, color 0.1s;
   }
   .tab:hover { background: var(--bg-2); color: var(--fg); }
-  .tab.active { background: var(--bg-0); color: var(--accent); border-top-color: var(--accent); }
+  /* Active tab: keep the cyan top border as the affordance, but contrast
+     comes from background only — foreground stays whatever the file's
+     git-* class painted, so the user can still see status while it's
+     selected. */
+  .tab.active { background: rgba(125,211,252,0.14); border-top-color: var(--accent); }
   .tab .mode-tag {
     font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase;
     color: var(--muted); padding: 1px 5px; border: 1px solid var(--edge); border-radius: 4px;
   }
-  .tab.active .mode-tag { color: var(--accent); border-color: var(--accent); }
+  .tab.active .mode-tag { border-color: var(--accent); }
   .tab .close {
     border: none; background: transparent; color: inherit;
     font-size: 0.95rem; line-height: 1; padding: 2px 4px;
@@ -2212,6 +2351,35 @@ const DEVELOP_TOGGLE = document.getElementById('develop-toggle');
 const tabs = new Map();
 let activeKey = null;
 
+// Map of project-relative path -> git tag ('uncommitted' | 'c0' | 'c1' | 'c2' |
+// 'c3'). Seeded by the initial /api/view-tree fetch and replaced wholesale on
+// each {type:'git-status'} push from the watcher. Tree rows and tab labels
+// pull their git-* class from this map; whenever the map changes we re-walk
+// .file and .tab elements and swap classes.
+let CURRENT_GIT_STATUS = {};
+const GIT_CLASSES = ['git-uncommitted', 'git-c0', 'git-c1', 'git-c2', 'git-c3'];
+
+function gitClassFor(p) {
+  const tag = CURRENT_GIT_STATUS[p];
+  return tag ? 'git-' + tag : null;
+}
+
+function applyGitClass(el, p) {
+  if (!el) return;
+  el.classList.remove(...GIT_CLASSES);
+  const cls = gitClassFor(p);
+  if (cls) el.classList.add(cls);
+}
+
+function applyGitStatusToAll() {
+  for (const el of TREE_PANE.querySelectorAll('.file')) {
+    applyGitClass(el, el.dataset.path);
+  }
+  for (const [, info] of tabs) {
+    applyGitClass(info.tab, info.path);
+  }
+}
+
 const TABS_KEY = 'view-shell:tabs:' + PROJECT;
 const ACTIVE_KEY = 'view-shell:active:' + PROJECT;
 const TREE_WIDTH_KEY = 'view-shell:tree-width';
@@ -2303,6 +2471,7 @@ function renderNode(n) {
     const fileEl = document.createElement('div');
     fileEl.className = 'file' + (n.dim ? ' dim' : '');
     fileEl.dataset.path = n.path;
+    applyGitClass(fileEl, n.path);
     const nameSpan = document.createElement('span');
     nameSpan.className = 'file-name';
     nameSpan.textContent = n.name;
@@ -2519,6 +2688,7 @@ function openTab(filePath, mode) {
   tab.dataset.key = key;
   tab.dataset.path = filePath;
   tab.dataset.mode = mode;
+  applyGitClass(tab, filePath);
   const label = document.createElement('span');
   label.textContent = filePath.split('/').pop();
   label.title = filePath + (mode === 'render' ? ' (rendered)' : '');
@@ -2745,6 +2915,7 @@ window.addEventListener('mouseup', () => {
 fetch('/api/view-tree/' + encodeURIComponent(PROJECT))
   .then((r) => r.json())
   .then((data) => {
+    CURRENT_GIT_STATUS = data.gitStatus || {};
     TREE_PANE.innerHTML = '';
     const root = data.tree || [];
     if (root.length === 0) {
@@ -2801,6 +2972,10 @@ function connectTreeWS() {
     if (msg.type === 'add') handleAdd(msg.path, msg.kind);
     else if (msg.type === 'delete') handleDelete(msg.path);
     else if (msg.type === 'change') handleChange(msg.path);
+    else if (msg.type === 'git-status') {
+      CURRENT_GIT_STATUS = msg.gitStatus || {};
+      applyGitStatusToAll();
+    }
   });
   treeWS.addEventListener('close', scheduleTreeWSReconnect);
   treeWS.addEventListener('error', () => { try { treeWS.close(); } catch {} });
