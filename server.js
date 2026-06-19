@@ -2191,7 +2191,16 @@ function renderViewShell(project) {
   .tree .file.git-c1, .tab.git-c1 { color: hsl(190, 55%, 70%); }
   .tree .file.git-c2, .tab.git-c2 { color: hsl(190, 35%, 62%); }
   .tree .file.git-c3, .tab.git-c3 { color: hsl(190, 22%, 56%); }
-  .tree .dir-name { color: var(--accent); }
+  /* Folder rollup — aggregates highest-precedence descendant status. Green
+     (uncommitted descendant) is distinct from the file-level yellow so a
+     glance separates "this folder has dirty work" from "this file is the
+     dirty one". Cyan shades mirror the file scale. */
+  .tree .tree-details.git-uncommitted > summary .dir-name { color: #86efac; }
+  .tree .tree-details.git-c0 > summary .dir-name { color: #67e8f9; }
+  .tree .tree-details.git-c1 > summary .dir-name { color: hsl(190, 55%, 70%); }
+  .tree .tree-details.git-c2 > summary .dir-name { color: hsl(190, 35%, 62%); }
+  .tree .tree-details.git-c3 > summary .dir-name { color: hsl(190, 22%, 56%); }
+  .tree .dir-name { color: var(--fg); }
   .tree .file-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tree .file-action {
     border: none; background: transparent; color: var(--muted);
@@ -2371,12 +2380,43 @@ function applyGitClass(el, p) {
   if (cls) el.classList.add(cls);
 }
 
+const GIT_RANK = { uncommitted: 5, c0: 4, c1: 3, c2: 2, c3: 1 };
+
+function tagFromClasses(el) {
+  for (const c of GIT_CLASSES) {
+    if (el.classList.contains(c)) return c.slice(4);
+  }
+  return null;
+}
+
 function applyGitStatusToAll() {
   for (const el of TREE_PANE.querySelectorAll('.file')) {
     applyGitClass(el, el.dataset.path);
   }
   for (const [, info] of tabs) {
     applyGitClass(info.tab, info.path);
+  }
+  // Directory aggregate: a folder takes the highest-precedence git status of
+  // any descendant. uncommitted (green) beats c0..c3 (cyan, brightest = HEAD).
+  // Deepest-first so parents read already-computed child <details> classes.
+  const dirs = Array.from(TREE_PANE.querySelectorAll('.tree-details'));
+  dirs.sort((a, b) =>
+    (b.dataset.path || '').split('/').length - (a.dataset.path || '').split('/').length,
+  );
+  for (const det of dirs) {
+    let best = null;
+    const children = det.querySelectorAll(
+      ':scope > ul > li > .file, :scope > ul > li > .tree-details',
+    );
+    for (const ch of children) {
+      const tag = ch.classList.contains('file')
+        ? CURRENT_GIT_STATUS[ch.dataset.path]
+        : tagFromClasses(ch);
+      if (!tag) continue;
+      if (!best || GIT_RANK[tag] > GIT_RANK[best]) best = tag;
+    }
+    det.classList.remove(...GIT_CLASSES);
+    if (best) det.classList.add('git-' + best);
   }
 }
 
@@ -2570,6 +2610,7 @@ function handleAdd(p, kind) {
     ? { type: 'dir', name, path: p, children: [] }
     : { type: 'file', name, path: p };
   insertSorted(ul, renderNode(node), kind, name);
+  applyGitStatusToAll();
 }
 
 function handleDelete(p) {
@@ -2579,6 +2620,7 @@ function handleDelete(p) {
     const li = fileEl.closest('li');
     if (li) li.remove();
     closeTabsForPath(p);
+    applyGitStatusToAll();
     return;
   }
   const det = TREE_PANE.querySelector('details.tree-details[data-path="' + CSS.escape(p) + '"]');
@@ -2586,6 +2628,7 @@ function handleDelete(p) {
     closeTabsUnderPath(p);
     const li = det.closest('li');
     if (li) li.remove();
+    applyGitStatusToAll();
   }
 }
 
@@ -2922,6 +2965,7 @@ fetch('/api/view-tree/' + encodeURIComponent(PROJECT))
       TREE_PANE.innerHTML = '<div class="tree-empty">empty project</div>';
     } else {
       buildTree(root, TREE_PANE);
+      applyGitStatusToAll();
     }
     const saved = loadSavedTabs();
     if (saved.length > 0) {
