@@ -153,6 +153,12 @@ const TERM_INDEX_RE = /^\/term\/[A-Za-z0-9_.-]+\/?(?:\?.*)?$/;
 const TOUCH_WHEEL_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${require('./lib/touch-wheel').installTouchWheel.toString()})(document);});</script>`;
 const { patchViewportMeta, installKeyboardFit } = require('./lib/keyboard-fit');
 const KEYBOARD_FIT_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${installKeyboardFit.toString()})(document);});</script>`;
+// OSC 52 → navigator.clipboard. Runs synchronously at <head> parse time (no
+// DOMContentLoaded gate) so it wraps window.WebSocket BEFORE ttyd's bundle
+// constructs its socket. tmux `set-clipboard on` emits OSC 52 on mouse
+// selections; this turns those into actual host clipboard writes.
+const { installOsc52Bridge } = require('./lib/osc52');
+const OSC52_INJECT = `<script>(${installOsc52Bridge.toString()})(window);</script>`;
 // xterm.js's .xterm-viewport sets overflow-y:scroll, so a scrollbar is always
 // painted on the right edge of the term pane even when scrollback fits. Hide
 // the bar without disabling scroll (touch-wheel + wheel events still drive
@@ -178,7 +184,7 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
     // Chrome/Android before layout. Then inject scripts into <head> (runs
     // before body parses) so ttyd's preact mount can't wipe us.
     html = patchViewportMeta(html);
-    const injectBlob = SCROLLBAR_HIDE_INJECT + TOUCH_WHEEL_INJECT + KEYBOARD_FIT_INJECT;
+    const injectBlob = OSC52_INJECT + SCROLLBAR_HIDE_INJECT + TOUCH_WHEEL_INJECT + KEYBOARD_FIT_INJECT;
     if (html.includes('</head>')) {
       html = html.replace('</head>', injectBlob + '</head>');
     } else if (html.includes('</body>')) {

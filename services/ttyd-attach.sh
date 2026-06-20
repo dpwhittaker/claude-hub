@@ -46,6 +46,14 @@ if ! tmux has-session -t "$PROJECT" 2>/dev/null; then
     # Forward terminal focus-in/out escape sequences instead of swallowing
     # them — Claude Code uses this to detect when the browser tab loses focus.
     tmux set-option        -t "$PROJECT" -g focus-events on
+    # OSC 52 clipboard bridge. With set-clipboard on, tmux emits
+    # \e]52;c;<base64>\a whenever a mouse-mode selection is copied;
+    # claude-hub's WebSocket shim catches that on the browser side and
+    # writes it to navigator.clipboard. terminal-overrides forces the Ms
+    # capability so xterm-style terminfos that omit it still trigger
+    # tmux's emit path.
+    tmux set-option        -t "$PROJECT" -g set-clipboard on
+    tmux set-option        -ga terminal-overrides ',xterm*:Ms=\E]52;%p1%s;%p2%s\007'
 
     # On a fresh project, send claude a bootstrap message a few seconds after
     # launch so it greets the user, reads AGENTS.md, and populates the
