@@ -2892,6 +2892,9 @@ const EYE_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" str
   + '</svg>';
 
 function isHtmlFile(name) { return /\\.html?$/i.test(name); }
+function isSvgFile(name) { return /\\.svg$/i.test(name); }
+// Files the eye-icon can render in an iframe instead of showing source.
+function isRenderable(name) { return isHtmlFile(name) || isSvgFile(name); }
 
 function renderNode(n) {
   const li = document.createElement('li');
@@ -2919,11 +2922,11 @@ function renderNode(n) {
     nameSpan.textContent = n.name;
     fileEl.appendChild(nameSpan);
     fileEl.addEventListener('click', () => openTab(n.path, 'view'));
-    if (isHtmlFile(n.name)) {
+    if (isRenderable(n.name)) {
       const eyeBtn = document.createElement('button');
       eyeBtn.type = 'button';
       eyeBtn.className = 'file-action';
-      eyeBtn.title = 'Render in iframe';
+      eyeBtn.title = isSvgFile(n.name) ? 'Render SVG' : 'Render in iframe';
       eyeBtn.setAttribute('aria-label', 'Render ' + n.name + ' in iframe');
       eyeBtn.innerHTML = EYE_SVG;
       eyeBtn.addEventListener('click', (e) => {
@@ -3156,12 +3159,14 @@ function openTab(filePath, mode) {
 
   const frame = document.createElement('iframe');
   // Encode each segment so spaces / unicode survive, but keep slashes
-  // between segments. Render mode prefers the live proxy URL when the
-  // project declares a proxyTarget (build-tool entry points like Vite's
+  // between segments. Render mode for HTML prefers the live proxy URL when
+  // the project declares a proxyTarget (build-tool entry points like Vite's
   // index.html reference /src/main.tsx and cannot run from raw bytes);
-  // falls back to ?raw=1 for projects with no proxy. View mode always
+  // falls back to ?raw=1 for projects with no proxy. SVG render is always
+  // ?raw=1 — the browser renders the image/svg+xml bytes natively, and an
+  // .svg is a source file, not a proxy app entry point. View mode always
   // goes through /view/ with ?embed=1 (per-file header stripped).
-  if (mode === 'render' && PROXY_PREFIX) {
+  if (mode === 'render' && PROXY_PREFIX && isHtmlFile(filePath)) {
     // index.html at any depth → trailing slash (let the upstream serve
     // its own root index). Other paths pass through verbatim so e.g.
     // public/foo.html lands on <proxyPrefix>/public/foo.html.

@@ -99,7 +99,7 @@ module exports (test surface, not public API):
 - V13: project create → `mkdir` + `.project-meta.json` + `README.md` + `AGENTS.md` + `sudo systemctl enable --now ttyd@<name>` ! all atomic. partial fail → cleanup.
 - V14: WS upgrade `/ws/view-tree/<proj>` handled in-process (`viewTreeWss`). proxy upgrade only after non-match.
 - V15: tab state per project keyed by `mode + '\0' + path` (NUL separator — only byte forbidden in POSIX paths). localStorage `view-shell:tabs:<proj>` + `view-shell:active:<proj>`. ⊥ cross-project bleed. ⊥ collision w/ filenames containing mode-prefix string.
-- V16: HTML eye-icon tab. project w/ `.project-meta.json`.`proxyTarget` → iframe = `<proxyPrefix>/<relpath>` (index.html at any depth → trailing slash, let upstream serve its own root). project w/o `proxyTarget` → `?raw=1`; RAW_MIME[.html] = `text/html; charset=utf-8`. ⊥ raw bytes of build-tool entry-point index.html (Vite source template refs absolute `/src/main.tsx`, browser can't transpile, assets 404 against wrong origin → white screen). ⊥ octet-stream fallback for `.html`.
+- V16: eye-icon tab. gate = `isRenderable(name)` = `isHtmlFile ∨ isSvgFile`. HTML: project w/ `.project-meta.json`.`proxyTarget` → iframe = `<proxyPrefix>/<relpath>` (index.html at any depth → trailing slash, let upstream serve its own root); project w/o `proxyTarget` → `?raw=1`; RAW_MIME[.html] = `text/html; charset=utf-8`. ⊥ raw bytes of build-tool entry-point index.html (Vite source template refs absolute `/src/main.tsx`, browser can't transpile, assets 404 against wrong origin → white screen). ⊥ octet-stream fallback for `.html`. SVG: render ALWAYS `?raw=1` even w/ `proxyTarget` (proxy branch gated by `isHtmlFile(filePath)`) — RAW_MIME[.svg] = `image/svg+xml`, served inline (no Content-Disposition), browser renders natively; `.svg` is a source file, ⊥ proxy app entry point.
 - V17: WSL2 self-loopback to `*.ts.net` URL fails (route lives on Windows tailscale virtual interface). test from Windows or peer.
 - V18: ⊥ orphan `node server.js` binding 8002 — systemd owns it. fix on EADDRINUSE: `pkill -f 'node.*server.js'` then `systemctl restart claude-hub.service`.
 - V19: project HTTP backends ! concurrent (`ThreadingHTTPServer` or async). stock `http.server.HTTPServer` single-threaded → `CLOSE_WAIT` pile, wedge.
@@ -214,6 +214,7 @@ module exports (test surface, not public API):
 | T69 | x | renderViewShell: tab strip in develop pane (label + ×) + trailing +; one iframe per session (display:none inactive) — switch is instant + state preserved; close-last auto-spawns; initial focus = lastActive (or first); PUT /active on switch | V47,V49 |
 | T70 | x | tests: lib/term-sessions roundtrip + allocateTabId gap-fill + parseTermKey edge cases; routes GET/PUT/405 (POST/DELETE skipped — real sudo) | V47,V49 |
 | T71 | x | `templates/jekyll/` (Ruby/minima) + `services/jekyll@.service` + `bootstrapJekyll`/`scaffoldProject` dispatch + template-policy enum/firebase-off + landing radio + STACK blurb + tests + docs | I.files,V43,V52 |
+| T72 | x | eye-icon renders `.svg`: `isSvgFile`/`isRenderable` in view shell, gate proxy-render branch to `isHtmlFile` so svg → `?raw=1` (image/svg+xml inline); tests | V16 |
 
 ## §B BUGS
 
