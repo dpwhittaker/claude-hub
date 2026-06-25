@@ -33,6 +33,10 @@ routes (proxy):
 - `WS /ws/view-tree/<proj>` → live tree updates `{type: add|delete|change, path, kind?}`
 - `GET /api/gh/repos` → `{repos: [{nameWithOwner, description, isFork, isPrivate, updatedAt}]}`. sort: non-forks first then forks; within each group `updatedAt` desc. 503 on `gh` failure. cached in-process, 10 min TTL. response excludes candidates whose basename matches an existing folder under `PROJECTS_ROOT` (managed or not).
 - `GET /api/projects/orphans` → `{folders: [string]}`. dirs under `PROJECTS_ROOT` that exist but lack `.project-meta.json` and don't start with `.`.
+- `GET /api/term-sessions/<proj>` → `{sessions: [{id, uuid}], lastActive: id|null}`. lists current develop-pane tabs in id order (numeric, not lexical).
+- `POST /api/term-sessions/<proj>` → `{id, uuid}`. allocates next free `sN`, stamps fresh uuid into `<proj>/.develop-sessions.json`, `sudo systemctl enable --now ttyd@<proj>__<id>.service`, waits ≤ 5s for the socket. on enable failure → 500 + rolls back the map entry.
+- `DELETE /api/term-sessions/<proj>/<id>` → `sudo systemctl disable --now ttyd@<proj>__<id>.service`, `tmux kill-session -t <proj>__<id>`, drops `sessions[<id>]` and clears `lastActive` if it matched.
+- `PUT /api/term-sessions/<proj>/active` body `{id}` → writes `lastActive`. 404 if id not in map. ⊥ broadcast — other live devices stay on whatever tab they're on (V49).
 
 files:
 - `services/claude-hub.service` — proxy unit
@@ -54,6 +58,8 @@ files:
 - `lib/gh-repos.js` — `makeGhRepos({exec, ttlMs, now})` cache + `filterReposByFolders(repos, folders)`.
 - `lib/onboard.js` — `bootstrapOnboard(dir, name)` + `listOrphanFolderNames(projectsRoot)`.
 - `lib/tab-reload-targets.js` — `isEmbedder(path)` + `tabsToReload(tabs, changedPath)`. inlined into client via `.toString()`.
+- `lib/term-sessions.js` — `readSessionsMap`, `writeSessionsMap`, `allocateTabId`, `parseTermKey`, `joinTermKey`, `TAB_ID_RE`, `TERM_KEY_SEP`. develop-pane tab map io + key parse.
+- `<project>/.develop-sessions.json` — `{sessions: {sN: uuid}, lastActive: sN|null}`. sole source of truth for develop-pane tabs; read by `ttyd-attach.sh` to launch `claude --session-id <uuid>` (first start) / `claude --resume <uuid>` (restart).
 - `eslint.config.js` — flat config (`@eslint/js` recommended + node globals).
 - `.github/workflows/ci.yml` — push/PR trigger; `npm ci` + `npm run lint` + `npm test` on Node 22.
 - `<project>/.project-meta.json` — sentinel. fields: `name, createdAt, openUrl?, proxyTarget?, proxyPrefix?, stripPrefix?, extraUnits?, template?`
@@ -79,7 +85,7 @@ module exports (test surface, not public API):
 - V1: ∀ req → URL path validated before disk access. file paths ! `startsWith(projectRoot + sep)` else 400.
 - V2: project name ! match `PROJECT_ID_RE` & ∉ `RESERVED_PROJECT_NAMES` & ! starts with `.` else 404.
 - V3: `/view/*` methods ∈ `{GET, HEAD}` else 405.
-- V4: `ttyd-attach.sh` ! pass `--continue` unless `~/.claude/projects/<encoded>/*.jsonl` exists. ⊥ exit-loop.
+- V4: `ttyd-attach.sh` per-tab path (`<project>__<tabId>`) launches `claude --session-id <uuid>` first time / `--resume <uuid>` thereafter (uuid from `.develop-sessions.json` — see V48). legacy bare-key path keeps the original `--continue` gate (only passes `--continue` when `~/.claude/projects/<encoded>/*.jsonl` exists). either path ⊥ exit-loop.
 - V5: every ttyd unit ! carry `RuntimeDirectoryPreserve=yes`. ⊥ shared `/run/ttyd/` wipe.
 - V6: file render size ≤ 2 MB, else 413 + suggest `?raw=1`.
 - V7: tree node count ≤ 5000 per walk. dim dirs not recursed eagerly.
@@ -124,6 +130,11 @@ module exports (test surface, not public API):
 - V44: `bootstrapTemplate(dir, name, templateId, {firebase})` generalizes bootstrapVite — copy `templates/<templateId>` → stamp `.project-meta.json` w/ V23 fields but `template: <templateId>` → optional firebase overlay (V45) → `npm install` → enable `vite@<name>`. cleanup-on-fail per V13. `vite` = the identity case.
 - V45: `firebase:bool` POST field. forced false when `template==='none'` ∨ clone ∨ onboard (no scaffold to inject). when true → `copyTemplate(templates/_firebase)` over project tree THEN `npm install firebase` (npm merges `package.json` — ⊥ JSON-merge via placeholder copy). overlay files per §I. dialog checkbox enabled iff template ≠ None.
 - V46: game + vite templates ship two static-deploy build scripts — `build:pages` (`vite build --base=/<NAME>/`, GH Pages) + `build:firebase` (`vite build --base=/`, Firebase Hosting). dev base stays `/<name>/` per V20 (proxy routing). ⊥ single base serving both hosts. GH Pages workflow + `firebase.json` shipped (latter via `_firebase` overlay).
+- V47: develop pane = N tabs, each tab = `ttyd@<proj>__sN.service` + tmux session named `<proj>__sN` + claude conversation identified by uuid. id format `sN` (positive integer, no leading zero). `<proj>/.develop-sessions.json` `{sessions:{sN:uuid}, lastActive:sN}` is sole source of truth. `allocateTabId` reuses gaps (smallest unused) so labels stay compact. project create stamps `s1` with a fresh uuid before enabling the unit.
+- V48: `ttyd-attach.sh` splits its arg on first `__` → `<project>__<tabId>`. tabId = `sN` → read `.develop-sessions.json`, look up uuid, launch `claude --resume <uuid>` iff `~/.claude/projects/<encoded>/<uuid>.jsonl` exists else `claude --session-id <uuid>`. no separator → legacy bare-key path (kept for admin units `develop`/`wsl` and any unmigrated project). bootstrap-prompt only fires on s1 (or legacy bare) so secondary tabs start clean.
+- V49: PUT `/active` writes server-side only; ⊥ broadcast to other live connections. switching tabs on one device must not yank others. new connections read `lastActive` on load → start there. ⊥ localStorage for active id (cross-device coherence).
+- V50: server startup migrates legacy `ttyd@<project>.service` units (no `__`) to `ttyd@<project>__s1.service`. extracts existing claude uuid from latest `~/.claude/projects/<encoded>/*.jsonl` (else fresh uuid), writes map, `tmux rename-session <project> → <project>__s1` (preserves live process + convo), disables old unit, enables new. idempotent — skips when `.develop-sessions.json` already exists. admin keys `develop`/`wsl` exempt.
+- V51: project DELETE enumerates `ttyd@<project>__*.service` via `systemctl list-units` (all states), disables every child + legacy bare unit in one batch, kills every matching tmux session, then removes the directory. ⊥ orphan ttyd units after a delete.
 
 ## §T TASKS
 
@@ -191,6 +202,14 @@ module exports (test surface, not public API):
 | T60 | x | static-deploy: `build:pages`/`build:firebase` scripts in each template `package.json` + `.github/workflows/pages.yml.template` (game/vite trees); `firebase.json` via `_firebase` overlay | V46 |
 | T61 | x | tests: effective-template enum+coerce+firebase-forcing; `copyTemplate` each new tree + overlay; routes payload accept/validate | V43,V44,V45 |
 | T62 | x | README + AGENTS: game-template catalog + per-host (GH Pages vs Firebase Hosting) deploy steps | I.files |
+| T63 | x | `lib/term-sessions.js` — sessions map io + `allocateTabId` (gap-fill) + `parseTermKey`/`joinTermKey` | I.files,V47 |
+| T64 | x | `ttyd-attach.sh` — parse `<project>__<tabId>`, lookup uuid, `claude --session-id` (first) / `--resume` (restart); s1-only bootstrap-prompt | V48 |
+| T65 | x | server: `GET/POST/DELETE /api/term-sessions/<proj>` + `PUT /active`; sudo enable/disable ttyd@<proj>__sN.service; rollback map on enable fail | I.routes,V47,V49 |
+| T66 | x | server: startup `migrateLegacyTermUnits()` — extract uuid from jsonl mtime sort, rename tmux, swap systemd unit; idempotent; admin units exempt | V50 |
+| T67 | x | server: `handleDeleteProject` enumerates `ttyd@<proj>__*` + bare unit, batch disable + tmux kill each | V51 |
+| T68 | x | server: project create stamps `.develop-sessions.json` w/ `{s1:uuid, lastActive:'s1'}` + enables `ttyd@<proj>__s1.service` instead of bare; `lookupActiveTermKey(name)` shared helper for card/shell termUrl | V47 |
+| T69 | x | renderViewShell: tab strip in develop pane (label + ×) + trailing +; one iframe per session (display:none inactive) — switch is instant + state preserved; close-last auto-spawns; initial focus = lastActive (or first); PUT /active on switch | V47,V49 |
+| T70 | x | tests: lib/term-sessions roundtrip + allocateTabId gap-fill + parseTermKey edge cases; routes GET/PUT/405 (POST/DELETE skipped — real sudo) | V47,V49 |
 
 ## §B BUGS
 

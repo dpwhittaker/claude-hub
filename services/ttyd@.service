@@ -16,7 +16,12 @@ RuntimeDirectoryMode=0755
 # ttyd-wsl. Without preserve=yes, when any single instance stops systemd
 # wipes the entire directory, killing every other instance's socket.
 RuntimeDirectoryPreserve=yes
-WorkingDirectory=/home/USER/projects/%i
+# Per-tab instance names take the form `<project>__<tabId>` (e.g.
+# claude-hub__s1), so the path-from-%i form (`/home/USER/projects/%i`) no
+# longer corresponds to an on-disk directory. The actual chdir into the
+# project happens inside ttyd-attach.sh's `tmux new-session -c`, so just
+# pin WorkingDirectory to the user's home to give ttyd itself a stable cwd.
+WorkingDirectory=/home/david
 # ttyd flags:
 #   -i /run/ttyd/%i.sock   listen on a Unix socket instead of TCP
 #   -W                     writable (allow keystrokes from the browser)

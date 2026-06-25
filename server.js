@@ -43,6 +43,8 @@ const { effectiveTemplate, firebaseEnabled } = require('./lib/template-policy');
 const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const { installTouchWheel } = require('./lib/touch-wheel');
 const { isEmbedder, tabsToReload } = require('./lib/tab-reload-targets');
+const termSessionsLib = require('./lib/term-sessions');
+const crypto = require('node:crypto');
 
 const PORT = Number(process.env.PROXY_PORT) || 8002;
 const LANDING_PATH = path.join(__dirname, 'landing.html');
@@ -443,12 +445,27 @@ function listManagedProjects() {
       tags: Array.isArray(tags) ? tags : [],
       openUrl,
       createdAt: meta.createdAt || null,
-      termUrl: `/term/${name}/`,
+      termUrl: `/term/${lookupActiveTermKey(name)}/`,
       browseUrl: `/view/${name}/`,
     });
   }
   out.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
   return out;
+}
+
+// Resolve the term key for a project (e.g. for the PWA shell / card link).
+// Reads .develop-sessions.json — lastActive if set, else the smallest id;
+// falls back to the bare project name when no map exists (lets unmigrated
+// projects keep working until migrateLegacyTermUnits runs).
+function lookupActiveTermKey(name) {
+  const dir = path.join(PROJECTS_ROOT, name);
+  const map = termSessionsLib.readSessionsMap(dir);
+  const ids = Object.keys(map.sessions).sort(
+    (a, b) => Number(a.slice(1)) - Number(b.slice(1)),
+  );
+  if (ids.length === 0) return name;
+  const id = (map.lastActive && map.sessions[map.lastActive]) ? map.lastActive : ids[0];
+  return termSessionsLib.joinTermKey(name, id);
 }
 
 function waitForSocket(sockPath, timeoutMs) {
@@ -510,11 +527,14 @@ function handleDeleteProject(req, res, name) {
   }
 
   (async () => {
-    // Every managed project runs a systemd-managed ttyd@<name>.service per
-    // V13/V36; tear it down unconditionally before touching extraUnits or
-    // the project directory.
+    // Every develop tab is its own ttyd@<name>__sN.service + tmux session.
+    // Enumerate the live set before deleting so leftover tabs don't outlive
+    // the project. The bare ttyd@<name>.service is the legacy single-session
+    // unit (pre-migration); tear it down too if still present.
+    const childUnits = await listProjectTabUnits(name);
+    const allUnits = [`ttyd@${name}.service`, ...childUnits];
     try {
-      await execFileP('sudo', ['-n', 'systemctl', 'disable', '--now', `ttyd@${name}.service`], { timeout: 30000 });
+      await execFileP('sudo', ['-n', 'systemctl', 'disable', '--now', ...allUnits], { timeout: 30000 });
     } catch (e) {
       return sendJson(res, 500, { error: 'systemctl disable failed for ttyd@: ' + e.message });
     }
@@ -525,15 +545,124 @@ function handleDeleteProject(req, res, name) {
         return sendJson(res, 500, { error: 'systemctl disable failed for extraUnits: ' + e.message });
       }
     }
-    // Best-effort: kill any lingering tmux session for this project, ignoring
-    // "no such session" errors.
-    try { await execFileP('tmux', ['kill-session', '-t', name], { timeout: 5000 }); } catch {}
+    // Best-effort: kill any lingering tmux session(s) for this project.
+    // Bare `<name>` + every `<name>__sN`; ignore "no such session" errors.
+    const tmuxNames = [name, ...childUnits.map((u) => u.replace(/^ttyd@/, '').replace(/\.service$/, ''))];
+    for (const t of tmuxNames) {
+      try { await execFileP('tmux', ['kill-session', '-t', t], { timeout: 5000 }); } catch {}
+    }
     fs.rm(real, { recursive: true, force: true }, (rmErr) => {
       if (rmErr) return sendJson(res, 500, { error: 'rm failed: ' + rmErr.message });
       refreshStaticRoutes();
       sendJson(res, 200, { name, deleted: true });
     });
   })();
+}
+
+// ---------- per-project develop-pane tab sessions ----------
+// Each tab in the develop pane is a `ttyd@<project>__sN.service` instance
+// fronting a tmux session of the same name. The map from tab id → claude
+// conversation uuid lives in `<project>/.develop-sessions.json`; ttyd-attach.sh
+// reads it to launch `claude --resume <uuid>` (or `--session-id <uuid>` on
+// first start). lastActive is read by new browser connections to choose which
+// tab to focus on load; never broadcast (other live devices stay put).
+
+const TAB_ID_RE = termSessionsLib.TAB_ID_RE;
+
+async function listProjectTabUnits(project) {
+  // `systemctl list-units --all` so we catch units that exist on disk but
+  // aren't currently active (failed, inactive). Returns just the names.
+  let out;
+  try {
+    out = (await execFileP('systemctl', ['list-units', `ttyd@${project}__*.service`, '--all', '--no-legend', '--plain'], { timeout: 10000 })).stdout || '';
+  } catch {
+    return [];
+  }
+  const units = [];
+  for (const line of out.split('\n')) {
+    const m = /^(ttyd@[^\s]+\.service)\s/.exec(line);
+    if (m) units.push(m[1]);
+  }
+  return units;
+}
+
+function handleListTermSessions(_req, res, project) {
+  if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
+  const dir = path.join(PROJECTS_ROOT, project);
+  const map = termSessionsLib.readSessionsMap(dir);
+  const sessions = Object.entries(map.sessions)
+    .map(([id, uuid]) => ({
+      id,
+      uuid,
+      title: termSessionsLib.readSessionTitle(dir, uuid),
+    }))
+    .sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)));
+  sendJson(res, 200, { sessions, lastActive: map.lastActive });
+}
+
+async function handleCreateTermSession(req, res, project) {
+  if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
+  const dir = path.join(PROJECTS_ROOT, project);
+  const map = termSessionsLib.readSessionsMap(dir);
+  const id = termSessionsLib.allocateTabId(map.sessions);
+  const uuid = crypto.randomUUID();
+  map.sessions[id] = uuid;
+  map.lastActive = id;
+  try {
+    termSessionsLib.writeSessionsMap(dir, map);
+  } catch (e) {
+    return sendJson(res, 500, { error: 'write sessions map failed: ' + e.message });
+  }
+  const unit = `ttyd@${termSessionsLib.joinTermKey(project, id)}.service`;
+  try {
+    await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', unit], { timeout: 30000 });
+  } catch (e) {
+    delete map.sessions[id];
+    map.lastActive = null;
+    try { termSessionsLib.writeSessionsMap(dir, map); } catch {}
+    return sendJson(res, 500, { error: 'systemctl enable failed: ' + e.message });
+  }
+  const sockPath = ttydSocketPath(termSessionsLib.joinTermKey(project, id));
+  await waitForSocket(sockPath, 5000);
+  sendJson(res, 200, { id, uuid });
+}
+
+async function handleDeleteTermSession(_req, res, project, id) {
+  if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
+  if (!TAB_ID_RE.test(id)) return sendJson(res, 400, { error: 'invalid tab id' });
+  const dir = path.join(PROJECTS_ROOT, project);
+  const unit = `ttyd@${termSessionsLib.joinTermKey(project, id)}.service`;
+  try {
+    await execFileP('sudo', ['-n', 'systemctl', 'disable', '--now', unit], { timeout: 30000 });
+  } catch (e) {
+    // Disable-on-already-disabled is fine; only fail loudly on hard errors.
+    if (!/not loaded|does not exist|No such/i.test(e.message)) {
+      return sendJson(res, 500, { error: 'systemctl disable failed: ' + e.message });
+    }
+  }
+  try { await execFileP('tmux', ['kill-session', '-t', termSessionsLib.joinTermKey(project, id)], { timeout: 5000 }); } catch {}
+  const map = termSessionsLib.readSessionsMap(dir);
+  delete map.sessions[id];
+  if (map.lastActive === id) map.lastActive = null;
+  try { termSessionsLib.writeSessionsMap(dir, map); } catch {}
+  sendJson(res, 200, { id, deleted: true });
+}
+
+function handleSetActiveTermSession(req, res, project) {
+  if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
+  readJsonBody(req, res, 4096, (body, err) => {
+    if (err) return;
+    if (!body || typeof body.id !== 'string' || !TAB_ID_RE.test(body.id)) {
+      return sendJson(res, 400, { error: 'invalid id' });
+    }
+    const dir = path.join(PROJECTS_ROOT, project);
+    const map = termSessionsLib.readSessionsMap(dir);
+    if (!map.sessions[body.id]) return sendJson(res, 404, { error: 'unknown tab id' });
+    map.lastActive = body.id;
+    try { termSessionsLib.writeSessionsMap(dir, map); }
+    catch (e) { return sendJson(res, 500, { error: 'write failed: ' + e.message }); }
+    sendJson(res, 200, { lastActive: body.id });
+  });
 }
 
 // Optional git identity overrides for the "create new GitHub repo" flow.
@@ -769,25 +898,34 @@ function handleCreateProject(req, res) {
       return sendJson(res, status, { error: e.message });
     }
 
-    // V13/V36: every project gets a systemd-managed ttyd@<name>.service.
-    // Enable + start, then wait for /run/ttyd/<name>.sock to appear so the
-    // first /term/<name>/ proxy hit doesn't race the unit's binding.
+    // V13/V47: every new project gets its first develop tab — s1 — wired up
+    // immediately. Stamp the sessions map with a fresh uuid so ttyd-attach.sh
+    // can launch `claude --session-id <uuid>` on first attach, then enable
+    // the unit + wait for the socket so the first /term/<name>__s1/ hit
+    // doesn't race binding.
+    const firstUuid = crypto.randomUUID();
     try {
-      await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', `ttyd@${name}.service`], { timeout: 30000 });
+      termSessionsLib.writeSessionsMap(dir, { sessions: { s1: firstUuid }, lastActive: 's1' });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'write sessions map failed: ' + e.message });
+    }
+    const firstKey = termSessionsLib.joinTermKey(name, 's1');
+    try {
+      await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', `ttyd@${firstKey}.service`], { timeout: 30000 });
     } catch (e) {
       return sendJson(res, 500, { error: 'systemctl enable ttyd@ failed: ' + e.message });
     }
-    const sockPath = ttydSocketPath(name);
+    const sockPath = ttydSocketPath(firstKey);
     const sockBound = await waitForSocket(sockPath, 5000);
     if (!sockBound) {
       return sendJson(res, 500, {
-        error: `ttyd@${name}.service started but /run/ttyd/${name}.sock did not appear within 5s`,
+        error: `ttyd@${firstKey}.service started but /run/ttyd/${firstKey}.sock did not appear within 5s`,
       });
     }
     refreshStaticRoutes();
     sendJson(res, 200, {
       name,
-      termUrl: `/term/${name}/`,
+      termUrl: `/term/${firstKey}/`,
       browseUrl: `/view/${name}/`,
     });
   });
@@ -840,7 +978,7 @@ function handleShellRequest(res, name, initialView) {
     return;
   }
   const openUrl = readProjectOpenUrl(name);
-  const termUrl = `/term/${name}/`;
+  const termUrl = `/term/${lookupActiveTermKey(name)}/`;
   const start = initialView === 'term' ? 'term' : 'open';
   const html = renderShellHtml(name, openUrl, termUrl, start);
   res.writeHead(200, {
@@ -888,6 +1026,41 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
     visibility: hidden; pointer-events: none;
   }
   .pane.active { visibility: visible; pointer-events: auto; }
+  /* Term pane = tab strip + iframes (one per tmux session). Visually one
+     pane; mechanically a div that wraps the per-session ttyd iframes plus
+     the tab strip up top. */
+  #pane-term { display: flex; flex-direction: column; }
+  .term-tabs {
+    display: flex; align-items: stretch; flex: 0 0 auto;
+    background: #0d1320; border-bottom: 1px solid var(--fab-edge);
+    overflow-x: auto; scrollbar-width: thin;
+  }
+  .term-tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 6px 6px 12px; font-size: 0.78rem;
+    color: #94a3b8; cursor: pointer; white-space: nowrap;
+    border-right: 1px solid var(--fab-edge);
+    border-top: 2px solid transparent;
+  }
+  .term-tab:hover { background: #131b2c; color: var(--fg); }
+  .term-tab.active { background: rgba(125,211,252,0.14); border-top-color: var(--accent); color: var(--fg); }
+  .term-tab .close {
+    border: none; background: transparent; color: inherit;
+    font-size: 0.95rem; line-height: 1; padding: 2px 4px;
+    border-radius: 4px; cursor: pointer; opacity: 0.6;
+  }
+  .term-tab .close:hover { opacity: 1; background: rgba(252,165,165,0.15); color: #fca5a5; }
+  .term-add {
+    border: none; background: transparent; color: #94a3b8;
+    font-size: 1.05rem; line-height: 1; padding: 0 12px; cursor: pointer;
+  }
+  .term-add:hover { color: var(--accent); background: #131b2c; }
+  .term-frames { flex: 1 1 auto; position: relative; min-height: 0; background: var(--bg); }
+  .term-frames iframe {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    border: 0; background: var(--bg); display: none;
+  }
+  .term-frames iframe.active { display: block; }
   /* Split mode (landscape tablet/desktop): both panes visible side-by-side.
      Develop on the left, Open on the right. A 1px divider helps the eye. */
   body.split #pane-term { width: 50%; left: 0; border-right: 1px solid var(--fab-edge); box-sizing: border-box; }
@@ -932,7 +1105,10 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
 </head>
 <body>
 <iframe id="pane-open" class="pane" title="Open" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
-<iframe id="pane-term" class="pane" title="Develop" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+<div id="pane-term" class="pane" role="region" aria-label="Develop terminals">
+  <div class="term-tabs" id="term-tabs"></div>
+  <div class="term-frames" id="term-frames"></div>
+</div>
 <button id="fab" type="button" aria-label="Switch view"><span class="label">TERM</span><span class="hint">SWAP</span></button>
 <script id="shell-data" type="application/json">${data}</script>
 <script>
@@ -963,9 +1139,140 @@ function renderShellHtml(name, openUrl, termUrl, initialView) {
 
   let currentView = null;
 
+  // ---------- term-tab strip (V47) ----------
+  // Mirrors the develop-pane logic in renderViewShell: one iframe per tmux
+  // session, switch is instant + state preserved, close-last auto-spawns,
+  // lastActive persisted server-side (no broadcast).
+  const TERM_TABS_EL = document.getElementById('term-tabs');
+  const TERM_FRAMES_EL = document.getElementById('term-frames');
+  const termTabs = new Map();
+  let activeTermId = null;
+  function projectTermKey(id) { return cfg.name + '__' + id; }
+  function formatTermLabel(id, title) {
+    if (!title) return id;
+    const trimmed = title.trim();
+    if (!trimmed) return id;
+    return trimmed.length > 24 ? trimmed.slice(0, 23) + '…' : trimmed;
+  }
+  function applyTermLabel(info, id, title) {
+    info.title = title || null;
+    info.tab.querySelector('.label').textContent = formatTermLabel(id, title);
+    info.tab.title = title ? id + ' — ' + title : 'Tab ' + id;
+  }
+  function setActiveTerm(id) {
+    if (!termTabs.has(id)) return;
+    activeTermId = id;
+    for (const [tid, info] of termTabs) {
+      const isActive = tid === id;
+      info.tab.classList.toggle('active', isActive);
+      info.iframe.classList.toggle('active', isActive);
+    }
+    fetch('/api/term-sessions/' + encodeURIComponent(cfg.name) + '/active', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
+  }
+  function buildTermTab(id) {
+    const tab = document.createElement('div');
+    tab.className = 'term-tab';
+    tab.dataset.id = id;
+    tab.innerHTML = '<span class="label"></span><button type="button" class="close" title="Close tab" aria-label="Close tab">×</button>';
+    tab.addEventListener('click', (e) => {
+      if (e.target.closest('.close')) return;
+      setActiveTerm(id);
+    });
+    tab.querySelector('.close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTermTab(id);
+    });
+    return tab;
+  }
+  function buildTermIframe(id) {
+    const iframe = document.createElement('iframe');
+    iframe.title = 'Develop terminal ' + id;
+    iframe.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen');
+    iframe.src = '/term/' + encodeURIComponent(projectTermKey(id)) + '/';
+    return iframe;
+  }
+  function addTermTab(id, opts) {
+    const tab = buildTermTab(id);
+    const iframe = buildTermIframe(id);
+    const info = { tab, iframe, title: null };
+    termTabs.set(id, info);
+    applyTermLabel(info, id, (opts && opts.title) || null);
+    TERM_ADD_BTN.before(tab);
+    TERM_FRAMES_EL.appendChild(iframe);
+    if (opts && opts.activate) setActiveTerm(id);
+  }
+  async function refreshTermLabels() {
+    try {
+      const r = await fetch('/api/term-sessions/' + encodeURIComponent(cfg.name));
+      if (!r.ok) return;
+      const data = await r.json();
+      for (const s of data.sessions || []) {
+        const info = termTabs.get(s.id);
+        if (info) applyTermLabel(info, s.id, s.title);
+      }
+    } catch {}
+  }
+  async function createTermTab() {
+    try {
+      const r = await fetch('/api/term-sessions/' + encodeURIComponent(cfg.name), { method: 'POST' });
+      if (!r.ok) throw new Error('POST failed: ' + r.status);
+      const body = await r.json();
+      addTermTab(body.id, { activate: true });
+    } catch (e) { console.warn('createTermTab failed:', e); }
+  }
+  async function closeTermTab(id) {
+    if (!termTabs.has(id)) return;
+    try {
+      const r = await fetch('/api/term-sessions/' + encodeURIComponent(cfg.name) + '/' + encodeURIComponent(id), { method: 'DELETE' });
+      if (!r.ok) throw new Error('DELETE failed: ' + r.status);
+    } catch (e) { console.warn('closeTermTab failed:', e); return; }
+    const info = termTabs.get(id);
+    info.tab.remove();
+    info.iframe.remove();
+    termTabs.delete(id);
+    if (activeTermId === id) {
+      activeTermId = null;
+      const next = termTabs.keys().next();
+      if (!next.done) setActiveTerm(next.value);
+    }
+    if (termTabs.size === 0) createTermTab();
+  }
+  const TERM_ADD_BTN = document.createElement('button');
+  TERM_ADD_BTN.type = 'button';
+  TERM_ADD_BTN.className = 'term-add';
+  TERM_ADD_BTN.title = 'New terminal tab';
+  TERM_ADD_BTN.setAttribute('aria-label', 'New terminal tab');
+  TERM_ADD_BTN.textContent = '+';
+  TERM_ADD_BTN.addEventListener('click', createTermTab);
+  TERM_TABS_EL.appendChild(TERM_ADD_BTN);
+  async function initTermTabs() {
+    let data;
+    try {
+      const r = await fetch('/api/term-sessions/' + encodeURIComponent(cfg.name));
+      if (!r.ok) throw new Error('GET failed: ' + r.status);
+      data = await r.json();
+    } catch (e) { console.warn('initTermTabs failed:', e); return; }
+    const sessions = data.sessions || [];
+    if (sessions.length === 0) { await createTermTab(); return; }
+    for (const s of sessions) addTermTab(s.id, { title: s.title });
+    const initialId = (data.lastActive && termTabs.has(data.lastActive))
+      ? data.lastActive : sessions[0].id;
+    setActiveTerm(initialId);
+    if (!window.__termLabelPoll) {
+      window.__termLabelPoll = setInterval(refreshTermLabels, 30000);
+    }
+  }
+
   function mount(view) {
     if (mounted[view]) return;
-    panes[view].src = sources[view];
+    if (view === 'term') {
+      initTermTabs();
+    } else {
+      panes[view].src = sources[view];
+    }
     mounted[view] = true;
   }
 
@@ -2281,9 +2588,41 @@ function renderViewShell(project) {
     background: var(--bg-0);
     border-top: 1px solid var(--edge);
   }
-  section.develop-pane iframe {
-    flex: 1 1 auto; width: 100%; border: none; background: var(--bg-0);
+  /* Term-tabs strip — sits above the iframes inside the develop pane. */
+  .term-tabs {
+    display: flex; align-items: stretch; flex: 0 0 auto;
+    background: var(--bg-1); border-bottom: 1px solid var(--edge);
+    overflow-x: auto; scrollbar-width: thin;
   }
+  .term-tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 6px 6px 12px; font-size: 0.78rem;
+    color: var(--muted); cursor: pointer; white-space: nowrap;
+    border-right: 1px solid var(--edge);
+    border-top: 2px solid transparent;
+    transition: background 0.1s, color 0.1s;
+  }
+  .term-tab:hover { background: var(--bg-2); color: var(--fg); }
+  .term-tab.active { background: rgba(125,211,252,0.14); border-top-color: var(--accent); color: var(--fg); }
+  .term-tab .close {
+    border: none; background: transparent; color: inherit;
+    font-size: 0.95rem; line-height: 1; padding: 2px 4px;
+    border-radius: 4px; cursor: pointer; opacity: 0.6;
+  }
+  .term-tab .close:hover { opacity: 1; background: rgba(252,165,165,0.15); color: #fca5a5; }
+  .term-add {
+    border: none; background: transparent; color: var(--muted);
+    font-size: 1.05rem; line-height: 1; padding: 0 12px; cursor: pointer;
+    transition: color 0.1s, background 0.1s;
+  }
+  .term-add:hover { color: var(--accent); background: var(--bg-2); }
+  .term-frames { flex: 1 1 auto; position: relative; min-height: 0; background: var(--bg-0); }
+  .term-frames iframe {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    border: none; background: var(--bg-0);
+    display: none;
+  }
+  .term-frames iframe.active { display: block; }
   section.develop-pane[hidden], .splitter.develop-splitter[hidden] { display: none; }
   .splitter.develop-splitter {
     flex: 0 0 5px; cursor: row-resize;
@@ -2338,7 +2677,8 @@ function renderViewShell(project) {
   </div>
   <div class="splitter develop-splitter" id="develop-splitter" title="Drag to resize" hidden></div>
   <section class="develop-pane" id="develop-pane" hidden>
-    <iframe id="develop-frame" title="Develop terminal"></iframe>
+    <div class="term-tabs" id="term-tabs"></div>
+    <div class="term-frames" id="term-frames"></div>
   </section>
 </main>
 <script>
@@ -2358,7 +2698,8 @@ const MAIN = document.getElementById('main');
 const WORK_AREA = document.getElementById('work-area');
 const DEVELOP_PANE = document.getElementById('develop-pane');
 const DEVELOP_SPLITTER = document.getElementById('develop-splitter');
-const DEVELOP_FRAME = document.getElementById('develop-frame');
+const TERM_TABS_EL = document.getElementById('term-tabs');
+const TERM_FRAMES_EL = document.getElementById('term-frames');
 const DEVELOP_TOGGLE = document.getElementById('develop-toggle');
 
 // Tab state. Map<key, { path, mode, tab, frame }>. Composite key lets the
@@ -2899,27 +3240,180 @@ function loadDevHeight() {
 const _h0 = loadDevHeight();
 if (Number.isFinite(_h0)) setDevelopHeight(_h0);
 
+// Term-tabs state (V47/V48). Map<tabId, {tab, iframe, uuid}>. Server is the
+// source of truth via /api/term-sessions/<project>; this map mirrors the
+// live DOM. Switching tabs PUTs lastActive but does NOT broadcast — other
+// devices stay on whatever tab they're on.
+const termTabs = new Map();
+let activeTermId = null;
+let termTabsInitialised = false;
+
+function termKey(id) { return PROJECT + '__' + id; }
+
+function setActiveTerm(id) {
+  if (!termTabs.has(id)) return;
+  activeTermId = id;
+  for (const [tid, info] of termTabs) {
+    const isActive = tid === id;
+    info.tab.classList.toggle('active', isActive);
+    info.iframe.classList.toggle('active', isActive);
+  }
+  // Persist lastActive — server-side only, no broadcast.
+  fetch('/api/term-sessions/' + encodeURIComponent(PROJECT) + '/active', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  }).catch(() => {});
+}
+
+function formatTermLabel(id, title) {
+  if (!title) return id;
+  const trimmed = title.trim();
+  if (!trimmed) return id;
+  return trimmed.length > 24 ? trimmed.slice(0, 23) + '…' : trimmed;
+}
+
+function applyTermLabel(info, id, title) {
+  info.title = title || null;
+  info.tab.querySelector('.label').textContent = formatTermLabel(id, title);
+  info.tab.title = title ? id + ' — ' + title : 'Tab ' + id;
+}
+
+function buildTermTab(id, title) {
+  const tab = document.createElement('div');
+  tab.className = 'term-tab';
+  tab.dataset.id = id;
+  tab.innerHTML = '<span class="label"></span><button type="button" class="close" title="Close tab" aria-label="Close tab">×</button>';
+  tab.addEventListener('click', (e) => {
+    if (e.target.closest('.close')) return;
+    setActiveTerm(id);
+  });
+  tab.querySelector('.close').addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeTermTab(id);
+  });
+  return tab;
+}
+
+function buildTermIframe(id) {
+  const iframe = document.createElement('iframe');
+  iframe.title = 'Develop terminal ' + id;
+  iframe.src = '/term/' + encodeURIComponent(termKey(id)) + '/';
+  iframe.addEventListener('load', () => {
+    try {
+      const doc = iframe.contentDocument;
+      if (doc) installTouchWheel(doc);
+    } catch {}
+  });
+  return iframe;
+}
+
+function addTermTab(id, opts) {
+  const tab = buildTermTab(id);
+  const iframe = buildTermIframe(id);
+  const info = { tab, iframe, title: null };
+  termTabs.set(id, info);
+  applyTermLabel(info, id, (opts && opts.title) || null);
+  TERM_ADD_BTN.before(tab);
+  TERM_FRAMES_EL.appendChild(iframe);
+  if (opts && opts.activate) setActiveTerm(id);
+}
+
+async function refreshTermLabels() {
+  try {
+    const r = await fetch('/api/term-sessions/' + encodeURIComponent(PROJECT));
+    if (!r.ok) return;
+    const data = await r.json();
+    for (const s of data.sessions || []) {
+      const info = termTabs.get(s.id);
+      if (info) applyTermLabel(info, s.id, s.title);
+    }
+  } catch {}
+}
+
+async function createTermTab() {
+  let body;
+  try {
+    const r = await fetch('/api/term-sessions/' + encodeURIComponent(PROJECT), { method: 'POST' });
+    if (!r.ok) throw new Error('POST failed: ' + r.status);
+    body = await r.json();
+  } catch (e) {
+    console.warn('createTermTab failed:', e);
+    return;
+  }
+  addTermTab(body.id, { activate: true });
+}
+
+async function closeTermTab(id) {
+  if (!termTabs.has(id)) return;
+  try {
+    const r = await fetch('/api/term-sessions/' + encodeURIComponent(PROJECT) + '/' + encodeURIComponent(id), {
+      method: 'DELETE',
+    });
+    if (!r.ok) throw new Error('DELETE failed: ' + r.status);
+  } catch (e) {
+    console.warn('closeTermTab failed:', e);
+    return;
+  }
+  const info = termTabs.get(id);
+  info.tab.remove();
+  info.iframe.remove();
+  termTabs.delete(id);
+  if (activeTermId === id) {
+    activeTermId = null;
+    const next = termTabs.keys().next();
+    if (!next.done) setActiveTerm(next.value);
+  }
+  // Spec: closing last tab spawns a fresh one.
+  if (termTabs.size === 0) createTermTab();
+}
+
+const TERM_ADD_BTN = document.createElement('button');
+TERM_ADD_BTN.type = 'button';
+TERM_ADD_BTN.className = 'term-add';
+TERM_ADD_BTN.title = 'New terminal tab';
+TERM_ADD_BTN.setAttribute('aria-label', 'New terminal tab');
+TERM_ADD_BTN.textContent = '+';
+TERM_ADD_BTN.addEventListener('click', createTermTab);
+TERM_TABS_EL.appendChild(TERM_ADD_BTN);
+
+async function initTermTabs() {
+  if (termTabsInitialised) return;
+  termTabsInitialised = true;
+  let data;
+  try {
+    const r = await fetch('/api/term-sessions/' + encodeURIComponent(PROJECT));
+    if (!r.ok) throw new Error('GET failed: ' + r.status);
+    data = await r.json();
+  } catch (e) {
+    console.warn('initTermTabs failed:', e);
+    termTabsInitialised = false;
+    return;
+  }
+  const sessions = data.sessions || [];
+  if (sessions.length === 0) {
+    await createTermTab();
+    return;
+  }
+  for (const s of sessions) addTermTab(s.id, { title: s.title });
+  const initialId = (data.lastActive && termTabs.has(data.lastActive))
+    ? data.lastActive : sessions[0].id;
+  setActiveTerm(initialId);
+  // Poll for AI-generated title updates while the develop pane is open.
+  // Claude writes one ai-title record per assistant turn; latest wins.
+  if (!window.__termLabelPoll) {
+    window.__termLabelPoll = setInterval(refreshTermLabels, 30000);
+  }
+}
+
 function showDevelop(show) {
   DEVELOP_PANE.hidden = !show;
   DEVELOP_SPLITTER.hidden = !show;
   DEVELOP_TOGGLE.classList.toggle('active', show);
-  if (show && !DEVELOP_FRAME.src) {
-    DEVELOP_FRAME.src = '/term/' + encodeURIComponent(PROJECT) + '/';
-  }
+  if (show) initTermTabs();
   try { localStorage.setItem(DEVELOP_VISIBLE_KEY, show ? '1' : '0'); } catch {}
 }
 DEVELOP_TOGGLE.addEventListener('click', () => showDevelop(DEVELOP_PANE.hidden));
-
-// V40: translate touch-drag → wheel events inside the terminal iframe so
-// xterm scrolls under finger drag on phones/tablets. Same-origin via proxy.
-// (Bare /term/<key>/ pages get the same handler injected by the proxy on
-// HTML response — see termIndexInjection in server.js.)
-DEVELOP_FRAME.addEventListener('load', () => {
-  try {
-    const doc = DEVELOP_FRAME.contentDocument;
-    if (doc) installTouchWheel(doc);
-  } catch {}
-});
 
 const initVisible = (() => {
   try { return localStorage.getItem(DEVELOP_VISIBLE_KEY) === '1'; } catch { return false; }
@@ -3388,6 +3882,32 @@ const server = http.createServer(async (req, res) => {
     res.end('method not allowed');
     return;
   }
+  const termSessionsList = /^\/api\/term-sessions\/([^/]+)$/.exec(apiPath);
+  if (termSessionsList) {
+    const proj = decodeURIComponent(termSessionsList[1]);
+    if (req.method === 'GET') return handleListTermSessions(req, res, proj);
+    if (req.method === 'POST') return handleCreateTermSession(req, res, proj);
+    res.writeHead(405, { 'Content-Type': 'text/plain' });
+    res.end('method not allowed');
+    return;
+  }
+  const termSessionsActive = /^\/api\/term-sessions\/([^/]+)\/active$/.exec(apiPath);
+  if (termSessionsActive) {
+    const proj = decodeURIComponent(termSessionsActive[1]);
+    if (req.method === 'PUT') return handleSetActiveTermSession(req, res, proj);
+    res.writeHead(405, { 'Content-Type': 'text/plain' });
+    res.end('method not allowed');
+    return;
+  }
+  const termSessionsItem = /^\/api\/term-sessions\/([^/]+)\/([^/]+)$/.exec(apiPath);
+  if (termSessionsItem) {
+    const proj = decodeURIComponent(termSessionsItem[1]);
+    const id = decodeURIComponent(termSessionsItem[2]);
+    if (req.method === 'DELETE') return handleDeleteTermSession(req, res, proj, id);
+    res.writeHead(405, { 'Content-Type': 'text/plain' });
+    res.end('method not allowed');
+    return;
+  }
   if (apiPath === '/api/gh/repos') {
     if (req.method === 'GET') return handleGhRepos(req, res);
     res.writeHead(405, { 'Content-Type': 'text/plain' });
@@ -3550,6 +4070,70 @@ server.on('upgrade', async (req, socket, head) => {
 
 refreshStaticRoutes();
 
+// Migrate legacy single-session ttyd@<project>.service units to the new
+// multi-tab schema (V47). For each such unit we synthesise tab id "s1",
+// reuse the existing claude conversation by extracting its uuid from the
+// latest jsonl in ~/.claude/projects/<encoded>/, rename the live tmux
+// session (if any) to <project>__s1, then atomic-swap the systemd unit.
+// Idempotent: skips projects whose .develop-sessions.json already exists.
+async function migrateLegacyTermUnits() {
+  let stdout;
+  try {
+    stdout = (await execFileP('systemctl', ['list-units', 'ttyd@*.service', '--all', '--no-legend', '--plain'], { timeout: 10000 })).stdout || '';
+  } catch {
+    return;
+  }
+  const ADMIN_KEYS = new Set(['develop', 'wsl']);
+  for (const line of stdout.split('\n')) {
+    const m = /^ttyd@([^.\s]+)\.service\s/.exec(line);
+    if (!m) continue;
+    const key = m[1];
+    if (key.includes(termSessionsLib.TERM_KEY_SEP)) continue; // already migrated
+    if (ADMIN_KEYS.has(key)) continue;
+    const project = key;
+    const dir = path.join(PROJECTS_ROOT, project);
+    if (!fs.existsSync(dir)) continue;
+    const existing = termSessionsLib.readSessionsMap(dir);
+    if (Object.keys(existing.sessions).length > 0) continue;
+
+    // Find existing claude convo uuid for this project, if any.
+    const encoded = '-' + dir.replace(/^\//, '').replace(/\//g, '-');
+    const sessionsDir = path.join(os.homedir(), '.claude', 'projects', encoded);
+    let uuid = null;
+    try {
+      const files = fs.readdirSync(sessionsDir)
+        .filter((f) => f.endsWith('.jsonl'))
+        .map((f) => ({ f, m: fs.statSync(path.join(sessionsDir, f)).mtimeMs }))
+        .sort((a, b) => b.m - a.m);
+      if (files.length > 0) uuid = files[0].f.replace(/\.jsonl$/, '');
+    } catch {}
+    if (!uuid) uuid = crypto.randomUUID();
+
+    const newKey = termSessionsLib.joinTermKey(project, 's1');
+    termSessionsLib.writeSessionsMap(dir, { sessions: { s1: uuid }, lastActive: 's1' });
+
+    // Rename live tmux session if present. Best-effort.
+    try {
+      await execFileP('tmux', ['has-session', '-t', project], { timeout: 3000 });
+      try { await execFileP('tmux', ['rename-session', '-t', project, newKey], { timeout: 3000 }); } catch {}
+    } catch {}
+
+    // Swap systemd units. Best-effort — leaves the new map in place even on
+    // sudo failure so the migration completes on the next restart attempt.
+    try {
+      await execFileP('sudo', ['-n', 'systemctl', 'disable', '--now', `ttyd@${project}.service`], { timeout: 30000 });
+    } catch (e) {
+      console.warn(`migrate: disable ttyd@${project} failed: ${e.message}`);
+    }
+    try {
+      await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', `ttyd@${newKey}.service`], { timeout: 30000 });
+    } catch (e) {
+      console.warn(`migrate: enable ttyd@${newKey} failed: ${e.message}`);
+    }
+    console.log(`migrated ttyd@${project} → ttyd@${newKey} (uuid ${uuid})`);
+  }
+}
+
 // Only auto-listen when invoked as the entry point (`node server.js`). Tests
 // require this file in-process and call `server.listen` themselves on a
 // random port to avoid collisions with the systemd-managed instance.
@@ -3559,6 +4143,7 @@ if (require.main === module) {
     for (const r of STATIC_ROUTES) {
       console.log(`  ${r.prefix}/* → ${r.target}${r.stripPrefix ? ' (prefix stripped)' : ''}`);
     }
+    migrateLegacyTermUnits().catch((e) => console.warn('migrateLegacyTermUnits failed:', e.message));
   });
 }
 
