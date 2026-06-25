@@ -44,7 +44,7 @@ unless you opt in (see "Sharing across devices" below).
 
 ![Develop terminal](docs/img/develop.png)
 
-**New project dialog** — the `+` card opens this. Pick a name, pick a GitHub mode (skip, clone existing, or `gh repo create`), pick a template, and optionally tick **Firebase backend** (Auth + Firestore + Hosting). Templates: **Vite** (React + TS, default), **2D Game** (Phaser), **Simple 3D** (react-three-fiber + Three), **Complex 3D** (Babylon.js + Havok) — all auto-disabled when cloning since the repo brings its own structure. Game templates are still Vite projects (one `vite@` unit) and ship `build:pages` / `build:firebase` scripts for static deploy to GitHub Pages or Firebase Hosting. claude-hub does the rest: scaffold, `npm install`, autostart the dev server through the proxy, spin up a ttyd terminal, drop you into a fresh Claude session ready to plan:
+**New project dialog** — the `+` card opens this. Pick a name, pick a GitHub mode (skip, clone existing, or `gh repo create`), pick a template, and optionally tick **Firebase backend** (Auth + Firestore + Hosting). Templates: **Vite** (React + TS, default), **2D Game** (Phaser), **Simple 3D** (react-three-fiber + Three), **Complex 3D** (Babylon.js + Havok), and **Jekyll** (a Ruby/minima Markdown site) — all auto-disabled when cloning since the repo brings its own structure. The Vite/game templates share one `vite@` unit and ship `build:pages` / `build:firebase` scripts for static deploy to GitHub Pages or Firebase Hosting; **Jekyll** is the one non-Vite template — Ruby/Bundler with its own `jekyll@` unit and a local preview that mirrors GitHub Pages, with **Firebase auto-disabled** (no `package.json` to wire it into). claude-hub does the rest: scaffold, `npm install`, autostart the dev server through the proxy, spin up a ttyd terminal, drop you into a fresh Claude session ready to plan:
 
 ![New project dialog](docs/img/new-project.png)
 
@@ -111,6 +111,26 @@ already used by `ttyd@`. Add to `/etc/sudoers.d/claude-hub`:
 
 ```
 david ALL=(root) NOPASSWD: /bin/systemctl enable --now vite@*.service, /bin/systemctl disable --now vite@*.service
+```
+
+For **Jekyll**-template projects you need Ruby + Bundler
+(`apt install ruby-full` on Debian/Ubuntu, then `gem install bundler`) and the
+per-project Jekyll preview unit:
+
+```bash
+sudo bash -c 'sed "s|/home/USER|$HOME|g; s|^User=david|User='"$USER"'|" services/jekyll@.service > /etc/systemd/system/jekyll@.service'
+sudo systemctl daemon-reload
+```
+
+`jekyll@<name>.service` is enabled + started by claude-hub during scaffold. It
+runs the project's `serve-local.sh` (`bundle exec jekyll serve`) under
+`Restart=always`. Unlike Vite projects, ports are allocated from the **4000s**
+(so they never collide with the Vite 5173+ range), and the port + `/<name>`
+baseurl are baked into `serve-local.sh` at scaffold time. Add the matching sudo
+grant:
+
+```
+david ALL=(root) NOPASSWD: /bin/systemctl enable --now jekyll@*.service, /bin/systemctl disable --now jekyll@*.service
 ```
 
 ## Sharing across devices (Tailscale)

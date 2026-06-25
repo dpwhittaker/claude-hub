@@ -34,6 +34,18 @@ test('clone/onboard force none even for a game template (V43)', () => {
   assert.equal(effectiveTemplate({ template: 'game-2d', github: { mode: 'onboard' } }), 'none');
 });
 
+test('jekyll passes through on non-clone, forced none on clone/onboard (V52)', () => {
+  assert.equal(effectiveTemplate({ template: 'jekyll' }), 'jekyll');
+  assert.equal(effectiveTemplate({ template: 'jekyll', github: { mode: 'create' } }), 'jekyll');
+  assert.equal(effectiveTemplate({ template: 'jekyll', github: { mode: 'clone' } }), 'none');
+  assert.equal(effectiveTemplate({ template: 'jekyll', github: { mode: 'onboard' } }), 'none');
+});
+
+test('firebaseEnabled forced false for jekyll — no package.json to merge into (V52)', () => {
+  assert.equal(firebaseEnabled({ firebase: true }, 'jekyll'), false);
+  assert.equal(firebaseEnabled({ firebase: false }, 'jekyll'), false);
+});
+
 test('firebaseEnabled true only when scaffolding + flag set (V45)', () => {
   assert.equal(firebaseEnabled({ firebase: true }, 'game-3d'), true);
   assert.equal(firebaseEnabled({ firebase: true }, 'vite'), true);

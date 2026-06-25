@@ -82,7 +82,8 @@ sudo systemctl enable --now <unit>`. `services/ttyd-attach.sh` installs to
 | `services/ttyd@.service` | Templated. `systemctl enable --now ttyd@<name>` brings up `unix:/run/ttyd/<name>.sock` running `ttyd-attach.sh <name>` — joins or creates tmux session named `<name>` running `claude --continue` (omitted on first launch when no prior session exists, avoid exit-loop). |
 | `services/ttyd-develop.service` | Admin: fresh `claude` in `~/projects` per browser connection. No tmux. |
 | `services/ttyd-wsl.service` | Admin: raw `bash -l`. No claude, no tmux. |
-| `services/vite@.service` | Templated. `systemctl enable --now vite@<name>` runs `npm run dev` in `~/projects/<name>` under `Restart=always`. Enabled during any non-`none` template scaffold (`vite` / `game-2d` / `game-3d` / `game-3d-complex` all share this one unit). |
+| `services/vite@.service` | Templated. `systemctl enable --now vite@<name>` runs `npm run dev` in `~/projects/<name>` under `Restart=always`. Enabled during any vite-family template scaffold (`vite` / `game-2d` / `game-3d` / `game-3d-complex` all share this one unit). |
+| `services/jekyll@.service` | Templated. `systemctl enable --now jekyll@<name>` runs `~/projects/<name>/serve-local.sh` (`bundle exec jekyll serve`) under `Restart=always`, system PATH (Ruby/bundler, no nvm). Enabled only for the `jekyll` template — the one non-vite family. |
 
 `/run/ttyd/` shared across every ttyd instance. All three units carry `RuntimeDirectoryPreserve=yes` for that reason — without it, one instance stop = systemd wipes whole dir, orphans every other socket. Don't remove that line.
 
@@ -117,26 +118,31 @@ curl -s   http://127.0.0.1:8002/api/view-tree/<project> | jq .
 ## Project creation
 
 Default template = **Vite (React + TypeScript)**. `POST /api/projects` body
-field `template: 'none' | 'vite' | 'game-2d' | 'game-3d' | 'game-3d-complex'`
+field `template: 'none' | 'vite' | 'game-2d' | 'game-3d' | 'game-3d-complex' | 'jekyll'`
 (default `'vite'`; unknown coerced to `'vite'`; forced to `'none'` when
 `github.mode ∈ {clone, onboard}`). Optional `firebase: bool` opt-in (forced
-false on `none`/clone/onboard). Clone source on the dialog comes from
+false on `none`/clone/onboard/`jekyll`). Clone source on the dialog comes from
 `GET /api/gh/repos` (cached 10 min) — only the user's own repos are listed.
 Cloning someone else's repo = fork on github.com first; the fork appears in
 the dropdown. `POST /api/projects` still accepts an arbitrary `source` slug
 or URL for power-user direct calls.
 
-**Template catalog** — every non-`none` template is a Vite project, so they
-all share one `vite@<name>.service` (no per-template systemd unit):
+**Template catalog** — every vite-family template shares one
+`vite@<name>.service` (no per-template unit). `jekyll` is the one exception: a
+Ruby/Bundler project with its own `jekyll@<name>.service`.
 
-| `template` | Stack | Entry |
-|---|---|---|
-| `vite` | React + TypeScript | `src/main.tsx` |
-| `game-2d` | Phaser 3 (2D engine) | `src/main.ts` |
-| `game-3d` | react-three-fiber + Three + rapier + zustand ("Simple 3D") | `src/App.tsx` |
-| `game-3d-complex` | Babylon.js + Havok + inspector ("Complex 3D") | `src/main.ts` |
+| `template` | Stack | Entry | Unit |
+|---|---|---|---|
+| `vite` | React + TypeScript | `src/main.tsx` | `vite@` |
+| `game-2d` | Phaser 3 (2D engine) | `src/main.ts` | `vite@` |
+| `game-3d` | react-three-fiber + Three + rapier + zustand ("Simple 3D") | `src/App.tsx` | `vite@` |
+| `game-3d-complex` | Babylon.js + Havok + inspector ("Complex 3D") | `src/main.ts` | `vite@` |
+| `jekyll` | Jekyll + minima (Ruby, Markdown site) | `README.md` (`permalink: /`) | `jekyll@` |
 
-Scaffold (`bootstrapTemplate`):
+`scaffoldProject(dir, name, template, {firebase})` dispatches: `jekyll` →
+`bootstrapJekyll`, everything else → `bootstrapTemplate`.
+
+Vite-family scaffold (`bootstrapTemplate`):
 
 1. `templates/<template>/` copied with `<NAME>` + `<PORT>` placeholders replaced (`template` id == dir name, 1:1).
 2. Free port ≥ 5173 allocated by scanning sibling projects' `.project-meta.json` `proxyTarget`.
@@ -144,6 +150,14 @@ Scaffold (`bootstrapTemplate`):
 4. `.project-meta.json` stamped: `template: '<template>'`, `proxyTarget`, `proxyPrefix: /<name>`, `stripPrefix: false`, `openUrl: /<name>/`, `extraUnits: ['vite@<name>.service']`.
 5. `npm install` (+ `npm install firebase` when overlaid), 5 min timeout, in scaffolded dir.
 6. `sudo systemctl enable --now vite@<name>.service`.
+
+Jekyll scaffold (`bootstrapJekyll`, V52):
+
+1. `templates/jekyll/` copied with `<NAME>`/`<PORT>` replaced; `serve-local.sh` `chmod +x` (copyTemplate writes 0644).
+2. Free port allocated from the **4000s** (`allocatePort(root, 4000)`) so jekyll ports never collide with the vite 5173+ range.
+3. `.project-meta.json` stamped like above but `extraUnits: ['jekyll@<name>.service']`.
+4. `BUNDLE_GEMFILE=Gemfile.local bundle install` into a project-local `vendor/bundle` (`.bundle/config`), 5 min timeout. No firebase (not an npm project).
+5. `sudo systemctl enable --now jekyll@<name>.service`.
 
 `template: 'none'` skips all of this — bare `AGENTS.md` + `README.md` + sentinel only.
 
@@ -164,7 +178,8 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 ## Gotchas
 
 - **Stale node process** — `server.js` lives in V8 memory; edits don't apply until `systemctl restart claude-hub.service`. `landing.html` is read per request, no restart needed.
-- **Game template = vite project** — `game-2d`/`game-3d`/`game-3d-complex` ride the one `vite@<name>.service`, not a per-template unit. New template? Make it a vite project or you'll need a new unit + meta changes.
+- **Game template = vite project** — `game-2d`/`game-3d`/`game-3d-complex` ride the one `vite@<name>.service`, not a per-template unit. New template? Make it a vite project (reuse `vite@`) — or, like `jekyll`, give it its own scaffolder + `<kind>@<name>.service` and dispatch it in `scaffoldProject`.
+- **Jekyll template is the non-vite exception** — `jekyll` is Ruby/Bundler, scaffolded by `bootstrapJekyll` (not `bootstrapTemplate`), runs under `jekyll@<name>.service`, ports allocated from the 4000s (not 5173+), no firebase. `serve-local.sh` carries the baked `--baseurl /<name>` + port; the unit just execs it. README.md (`permalink: /`) is the site index.
 - **Greenfield bootstrap prompt is stack-aware** — `writeBootstrapPrompt(dir, name, 'greenfield', {templateId, firebase})` injects a `STACK[templateId]` blurb so a fresh session greets oriented. New template → add a `STACK` entry in `lib/bootstrap-prompt.js`.
 - **Vite base path splits** — dev base = `/<NAME>/` (proxy needs it, V20). Static deploy: `build:pages` bakes `/<NAME>/`, `build:firebase` bakes `/`. Don't unify.
 - **Firebase keys are public** — `VITE_FIREBASE_*` ship in the bundle by design. Gate access with Firestore/Storage security rules, not key secrecy.

@@ -1,0 +1,37 @@
+# <NAME> — AGENTS.md
+
+Jekyll + minima Markdown site. claude-hub conventions:
+
+- **Local preview** runs via `jekyll@<NAME>.service` (systemd, `Restart=always`)
+  → `serve-local.sh`, which runs `bundle exec jekyll serve --baseurl /<NAME>` on
+  port `<PORT>`. Don't run `jekyll serve` by hand — the unit owns the port.
+- **Reverse-proxied** at `/<NAME>/` by claude-hub (`stripPrefix: false`, so the
+  `/<NAME>` baseurl is required — already wired into `serve-local.sh`).
+- **Card metadata** comes from `README.md`: H1 = title, first paragraph =
+  description, frontmatter `tags: [...]` = badges. `README.md` is also the site
+  index (`permalink: /`).
+- **`Gemfile.local`, not `Gemfile`**: GitHub Pages' build looks for a file named
+  literally `Gemfile`, so `Gemfile.local` is invisible to the deploy and only
+  drives the local preview. Bundler installs into a project-local
+  `vendor/bundle` (see `.bundle/config`).
+
+## What to do first
+
+1. Ask the user what to build.
+2. Update `README.md` (H1, first paragraph, tags).
+3. Add Markdown pages. Set the site `title` / `description` / `theme` in
+   `_config.yml`.
+
+## Deploy (GitHub Pages)
+
+Pages builds this natively with its own `github-pages` gem (ignores
+`Gemfile.local`). For a project Pages site served under a subpath, set
+`baseurl: "/<repo>"` in `_config.yml` — the local preview gets its baseurl from
+`serve-local.sh` instead, so the two don't fight.
+
+## Restarting the preview
+
+```bash
+sudo systemctl restart jekyll@<NAME>.service
+journalctl -u jekyll@<NAME>.service -f
+```

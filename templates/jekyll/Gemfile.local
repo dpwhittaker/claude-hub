@@ -1,0 +1,18 @@
+# Local-only Gemfile for previewing the site the way GitHub Pages renders it.
+#
+# Deliberately named *.local: GitHub Pages' build looks for a file literally
+# named "Gemfile", so this one is invisible to the deploy and can never change
+# how the live site is built. Use it only for the local preview server.
+#
+#   BUNDLE_GEMFILE=Gemfile.local bundle install
+#   ./serve-local.sh
+source "https://rubygems.org"
+
+gem "jekyll", "~> 4.3"
+gem "minima", "~> 2.5"
+gem "webrick", "~> 1.8"   # Jekyll's dev server needs this on Ruby 3+
+
+group :jekyll_plugins do
+  gem "jekyll-feed", "~> 0.17"
+  gem "jekyll-seo-tag", "~> 2.8"
+end

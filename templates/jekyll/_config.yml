@@ -1,0 +1,18 @@
+title: <NAME>
+description: >-
+  A Jekyll + Markdown site scaffolded by claude-hub. Replace this with a real
+  description once you know what you're building.
+theme: minima
+show_excerpts: false
+
+# README.md renders as the site index (it carries `permalink: /` in its front
+# matter); there is no index.html. Keep agent-facing + local-preview tooling
+# out of the built site.
+exclude:
+  - AGENTS.md
+  - .project-meta.json
+  - README.original.md
+  - Gemfile.local
+  - Gemfile.local.lock
+  - serve-local.sh
+  - vendor

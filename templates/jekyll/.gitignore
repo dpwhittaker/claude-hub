@@ -1,0 +1,9 @@
+_site/
+.jekyll-cache/
+.jekyll-metadata
+.sass-cache/
+Gemfile.local.lock
+vendor/
+.bundle/
+node_modules/
+.develop-sessions.json

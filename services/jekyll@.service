@@ -1,0 +1,20 @@
+[Unit]
+Description=Jekyll local preview for project %i
+After=network.target
+
+[Service]
+Type=simple
+# EDIT BEFORE INSTALLING: User= must match the account that owns the repo.
+User=david
+WorkingDirectory=/home/USER/projects/%i
+# serve-local.sh carries the project's baked-in port + /%i baseurl (both filled
+# at scaffold time), so the unit just execs it. Ruby/bundler live on the system
+# PATH — no nvm needed (unlike vite@.service).
+ExecStart=/home/USER/projects/%i/serve-local.sh
+Restart=always
+RestartSec=3
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=LANG=C.UTF-8
+
+[Install]
+WantedBy=multi-user.target

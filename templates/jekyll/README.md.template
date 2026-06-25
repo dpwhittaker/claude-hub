@@ -1,0 +1,26 @@
+---
+tags: [Site, WIP]
+layout: default
+permalink: /
+---
+
+# <NAME>
+
+A new Jekyll + Markdown site, served at `/<NAME>/`.
+
+Replace this paragraph with a one-sentence card description after you know what you're building.
+
+## Add content
+
+Drop Markdown files in this directory (or in subfolders) — each `.md` with YAML
+front matter becomes a page. This `README.md` is the site index (`permalink: /`).
+Set the site title, description, and theme in `_config.yml`.
+
+## Run
+
+`jekyll@<NAME>.service` runs the local preview at boot. To restart manually:
+
+```bash
+sudo systemctl restart jekyll@<NAME>.service
+journalctl -u jekyll@<NAME>.service -f
+```

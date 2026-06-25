@@ -836,6 +836,61 @@ async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {
   return port;
 }
 
+// Jekyll/Bundler template scaffold. Unlike bootstrapTemplate (npm + vite@),
+// this is a Ruby project: copy templates/jekyll/ → project dir with
+// <NAME>/<PORT> filled, make serve-local.sh executable (copyTemplate writes
+// 0644), stamp .project-meta.json (port allocated from the 4000s so it never
+// collides with the Vite 5173+ range), `bundle install` against Gemfile.local
+// into a project-local vendor/bundle, then enable jekyll@<name>.service. Cleans
+// up on any failure so the caller's "doesn't exist" precondition holds on
+// retry. SPEC §V52.
+async function bootstrapJekyll(dir, name) {
+  fs.mkdirSync(dir, { recursive: false });
+  const port = allocatePort(PROJECTS_ROOT, 4000);
+  try {
+    copyTemplate(path.join(__dirname, 'templates', 'jekyll'), dir, { NAME: name, PORT: String(port) });
+    // copyTemplate writes files 0644; the systemd unit execs serve-local.sh
+    // directly, so it must be marked executable.
+    fs.chmodSync(path.join(dir, 'serve-local.sh'), 0o755);
+    // Write meta before bundle install so a failed install still leaves a
+    // recognizable managed project that DELETE /api/projects can clean up.
+    fs.writeFileSync(
+      path.join(dir, '.project-meta.json'),
+      JSON.stringify({
+        name,
+        createdAt: new Date().toISOString(),
+        template: 'jekyll',
+        proxyTarget: 'http://127.0.0.1:' + port,
+        proxyPrefix: '/' + name,
+        stripPrefix: false,
+        openUrl: '/' + name + '/',
+        extraUnits: ['jekyll@' + name + '.service'],
+      }, null, 2) + '\n',
+    );
+    // Gemfile.local (not Gemfile) + project-local vendor/bundle via .bundle/config.
+    await execFileP('/bin/bash', ['-lc', 'cd "$0" && BUNDLE_GEMFILE=Gemfile.local bundle install', dir], {
+      timeout: 5 * 60 * 1000,
+    });
+    await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', `jekyll@${name}.service`], {
+      timeout: 30000,
+    });
+  } catch (e) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw new Error('jekyll scaffold failed: ' + e.message, { cause: e });
+  }
+  writeBootstrapPrompt(dir, name, 'greenfield', { templateId: 'jekyll' });
+  return port;
+}
+
+// Dispatch to the right scaffolder for the template family. jekyll is a
+// Ruby/Bundler project (its own unit + bundle install); everything else is a
+// Vite project sharing vite@<name>.service. SPEC §V52.
+function scaffoldProject(dir, name, template, { firebase = false } = {}) {
+  return template === 'jekyll'
+    ? bootstrapJekyll(dir, name)
+    : bootstrapTemplate(dir, name, template, { firebase });
+}
+
 function handleListOrphans(_req, res) {
   sendJson(res, 200, { folders: listOrphanFolderNames(PROJECTS_ROOT) });
 }
@@ -879,7 +934,7 @@ function handleCreateProject(req, res) {
       } else if (gh.mode === 'create') {
         const visibility = gh.visibility === 'public' ? 'public' : 'private';
         if (template !== 'none') {
-          await bootstrapTemplate(dir, name, template, { firebase });
+          await scaffoldProject(dir, name, template, { firebase });
           try {
             await ghInitPush(dir, name, visibility);
           } catch (e) {
@@ -890,7 +945,7 @@ function handleCreateProject(req, res) {
           await bootstrapCreateRepo(dir, name, visibility);
         }
       } else {
-        if (template !== 'none') await bootstrapTemplate(dir, name, template, { firebase });
+        if (template !== 'none') await scaffoldProject(dir, name, template, { firebase });
         else await bootstrapNoGithub(dir, name);
       }
     } catch (e) {
