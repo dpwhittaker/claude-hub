@@ -43,6 +43,7 @@ const { effectiveTemplate, firebaseEnabled } = require('./lib/template-policy');
 const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const { installTouchWheel } = require('./lib/touch-wheel');
 const { isEmbedder, tabsToReload } = require('./lib/tab-reload-targets');
+const { matchGlob, routeForPath } = require('./lib/file-routes');
 const termSessionsLib = require('./lib/term-sessions');
 const crypto = require('node:crypto');
 
@@ -865,6 +866,14 @@ async function bootstrapJekyll(dir, name) {
         stripPrefix: false,
         openUrl: '/' + name + '/',
         extraUnits: ['jekyll@' + name + '.service'],
+        // Default-permalink Jekyll → URL mapping, so Browse shows a preview
+        // eye-icon on .md files that render via the live preview (SPEC §V54).
+        // README → site index; index.md → pretty dir URL; other .md → .html.
+        routes: [
+          { match: 'README.md', to: '/' },
+          { match: '**/index.md', to: '/:dir/' },
+          { match: '**/*.md', to: '/:dir/:name.html' },
+        ],
       }, null, 2) + '\n',
     );
     // Gemfile.local (not Gemfile) + project-local vendor/bundle via .bundle/config.
@@ -2480,9 +2489,35 @@ function readProjectProxyPrefix(project) {
   }
 }
 
+// Read + sanitize the `routes` array from .project-meta.json. Each rule is
+// {match, to} of strings; `to` must be a root-relative URL path (starts with
+// `/`). Anything malformed is dropped, so a bad rule can't inject a weird
+// iframe src. The Browse view inlines `routeForPath` against this array to map
+// source files → served pages (preview icons + render iframe). SPEC §V54.
+function readProjectRoutes(project) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(
+      path.join(PROJECTS_ROOT, project, '.project-meta.json'), 'utf8'));
+    if (!Array.isArray(meta.routes)) return [];
+    const out = [];
+    for (const r of meta.routes) {
+      if (!r || typeof r.match !== 'string' || typeof r.to !== 'string') continue;
+      if (r.match.length > 256 || r.to.length > 256) continue;
+      // `to` is appended to PROXY_PREFIX and used as an iframe src — keep it a
+      // root-relative path (optionally with a #fragment), no scheme/host/CRLF.
+      if (!/^\/[^\s"'<>\\]*$/.test(r.to)) continue;
+      out.push({ match: r.match, to: r.to });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 function renderViewShell(project) {
   const safeProject = escapeHtml(project);
   const proxyPrefix = readProjectProxyPrefix(project);
+  const routes = readProjectRoutes(project);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -2743,6 +2778,11 @@ const PROJECT = ${JSON.stringify(project)};
 // the proxy when set, since build-tool index.html files (Vite etc.) are
 // source templates that can't run from raw bytes.
 const PROXY_PREFIX = ${JSON.stringify(proxyPrefix)};
+// File→URL route rules from .project-meta.json (SPEC §V54). routeForPath maps a
+// source file → the page it renders at (relative to PROXY_PREFIX): a real
+// Jekyll site's built HTML path, or a .nojekyll SPA's #fragment. Drives the
+// preview eye-icon on .md (and any other routable file) + the render iframe.
+const ROUTES = ${JSON.stringify(routes)};
 const TREE_PANE = document.getElementById('tree-pane');
 const TABS = document.getElementById('tabs');
 const FRAMES = document.getElementById('frames');
@@ -2882,6 +2922,10 @@ ${isEmbedder.toString()}
 
 ${tabsToReload.toString()}
 
+${matchGlob.toString()}
+
+${routeForPath.toString()}
+
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -2922,11 +2966,17 @@ function renderNode(n) {
     nameSpan.textContent = n.name;
     fileEl.appendChild(nameSpan);
     fileEl.addEventListener('click', () => openTab(n.path, 'view'));
-    if (isRenderable(n.name)) {
+    // A file gets the preview eye-icon if it can be rendered in an iframe
+    // (html/svg, raw or via proxy) OR it maps to a served page through the
+    // project's routes (Jekyll-built HTML / SPA #fragment), which needs a
+    // running backend (PROXY_PREFIX). SPEC §V16/§V54.
+    const hasRoute = !!(PROXY_PREFIX && routeForPath(ROUTES, n.path));
+    if (isRenderable(n.name) || hasRoute) {
       const eyeBtn = document.createElement('button');
       eyeBtn.type = 'button';
       eyeBtn.className = 'file-action';
-      eyeBtn.title = isSvgFile(n.name) ? 'Render SVG' : 'Render in iframe';
+      eyeBtn.title = isSvgFile(n.name) ? 'Render SVG'
+        : (isHtmlFile(n.name) ? 'Render in iframe' : 'Preview rendered page');
       eyeBtn.setAttribute('aria-label', 'Render ' + n.name + ' in iframe');
       eyeBtn.innerHTML = EYE_SVG;
       eyeBtn.addEventListener('click', (e) => {
@@ -3166,7 +3216,13 @@ function openTab(filePath, mode) {
   // ?raw=1 — the browser renders the image/svg+xml bytes natively, and an
   // .svg is a source file, not a proxy app entry point. View mode always
   // goes through /view/ with ?embed=1 (per-file header stripped).
-  if (mode === 'render' && PROXY_PREFIX && isHtmlFile(filePath)) {
+  const routeUrl = (mode === 'render' && PROXY_PREFIX) ? routeForPath(ROUTES, filePath) : null;
+  if (routeUrl) {
+    // The file maps to a served page (Jekyll-built HTML or SPA #fragment).
+    // routeUrl already carries its own leading slash + any #fragment; encodeURI
+    // keeps '/', '#', ':' intact while escaping spaces/unicode. SPEC §V54.
+    frame.src = PROXY_PREFIX + encodeURI(routeUrl);
+  } else if (mode === 'render' && PROXY_PREFIX && isHtmlFile(filePath)) {
     // index.html at any depth → trailing slash (let the upstream serve
     // its own root index). Other paths pass through verbatim so e.g.
     // public/foo.html lands on <proxyPrefix>/public/foo.html.

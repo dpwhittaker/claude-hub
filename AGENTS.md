@@ -62,6 +62,7 @@ Folder under `~/projects/` shows on landing page iff contains `.project-meta.jso
 | `proxyPrefix` | Optional. URL prefix to match. Defaults `/<name>`. Useful when folder name and public URL diverge. |
 | `stripPrefix` | Optional, default `true`. When `false`, prefix left on request — needed for upstreams that expect it (e.g. Vite with `base: "/<name>/"`). |
 | `extraUnits` | Optional list of systemd units to stop when project deleted via UI (plus `ttyd@<name>.service`). Useful when project runs own backend unit. |
+| `routes` | Optional ordered `[{match, to}]` rewrite rules mapping a source file → the URL it renders at (relative to the proxy prefix). Browse shows a **preview eye-icon** on any file that matches a rule and renders it via the live backend (`PROXY_PREFIX + route`). Lets `.md` (and anything else) preview through the project's real renderer. See "File→URL routes" below. |
 
 Title, description, tags come from **`README.md`** (NOT `.project-meta.json`):
 
@@ -97,6 +98,43 @@ Two-pane viewer's left tree marks "noisy" entries dim (lower opacity, muted name
 - `.git` always dim, regardless.
 
 Dim dirs not recursed eagerly — lazy-load on first expand via `/api/view-tree/<proj>?path=<sub>`. Anything inside dim dir inherits dim. Keeps `node_modules` from blowing 5000-node tree cap.
+
+## File→URL routes (preview eye-icon)
+
+The Browse tree shows a **preview eye-icon** on:
+
+1. `.html` / `.svg` — rendered in an iframe (html via proxy when available, else `?raw=1`; svg always `?raw=1` as `image/svg+xml`). V16.
+2. Any file matching a `routes` rule in `.project-meta.json` — rendered via the live backend at `PROXY_PREFIX + route` (needs a `proxyTarget`). V54.
+
+`routes` is an **ordered list of rewrite rules**, first match wins:
+
+```json
+"routes": [
+  { "match": "README.md",    "to": "/" },
+  { "match": "**/index.md",  "to": "/:dir/" },
+  { "match": "**/*.md",      "to": "/:dir/:name.html" }
+]
+```
+
+- **glob** (`match`): `*` = exactly one path segment, `**` = zero or more segments (captured as `:splat`), everything else literal.
+- **template** (`to`): a root-relative URL (may include a `#fragment`). Vars: `:dir` (dirname, `''` at root), `:name` (basename minus final ext), `:ext`, `:path` (full rel path), `:pathnoext`, `:splat`. Output is slash-normalized (`//`→`/`, `#/`→`#`).
+- Files with any path segment starting `_` or `.` are never routed (Jekyll/most static hosts don't serve them).
+- The resolver is `lib/file-routes.js` (`matchGlob` + `routeForPath`), inlined into the Browse client via `.toString()` (so it must stay self-contained — no closures), and validated server-side by `readProjectRoutes` (`to` must be `^/[^\s"'<>\\]*$`).
+
+The two live examples, discovered to differ fundamentally:
+
+- **genesis** — a real Jekyll site (default page permalinks): the rules above map `sessions/x/index.md → /sessions/x/` and `texts/a.md → /texts/a.html`. The eye-icon opens the Jekyll-rendered HTML through `genesis-preview.service`.
+- **systematic-theology** — a `.nojekyll` SPA (`index.html` + `js/app.js` hash router, Markdown fetched client-side). Its `.md` files don't map to server HTML — they map to `#fragment` routes:
+  ```json
+  "routes": [
+    { "match": "handouts/**/*.md",    "to": "/#:path" },
+    { "match": "storyboards/**/*.md", "to": "/#:path" },
+    { "match": "data/**/*.md",        "to": "/#:splat/:name" }
+  ]
+  ```
+  so `data/god/trinity.md → /theology/#god/trinity`, `data/TOC.md → /theology/#TOC`, `handouts/x.md → /theology/#handouts/x.md`. The eye-icon loads the SPA, whose router renders the Markdown.
+
+New jekyll-template projects are stamped with the genesis-style default rules automatically (`bootstrapJekyll`).
 
 ## Common ops
 

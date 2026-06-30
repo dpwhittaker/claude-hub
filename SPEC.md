@@ -60,11 +60,12 @@ files:
 - `lib/gh-repos.js` — `makeGhRepos({exec, ttlMs, now})` cache + `filterReposByFolders(repos, folders)`.
 - `lib/onboard.js` — `bootstrapOnboard(dir, name)` + `listOrphanFolderNames(projectsRoot)`.
 - `lib/tab-reload-targets.js` — `isEmbedder(path)` + `tabsToReload(tabs, changedPath)`. inlined into client via `.toString()`.
+- `lib/file-routes.js` — `matchGlob(glob, path)` + `routeForPath(rules, relPath)`. source path → served-URL (relative to proxy prefix) per `routes` rules. inlined into client via `.toString()`. (V54)
 - `lib/term-sessions.js` — `readSessionsMap`, `writeSessionsMap`, `allocateTabId`, `parseTermKey`, `joinTermKey`, `TAB_ID_RE`, `TERM_KEY_SEP`. develop-pane tab map io + key parse.
 - `<project>/.develop-sessions.json` — `{sessions: {sN: uuid}, lastActive: sN|null}`. sole source of truth for develop-pane tabs; read by `ttyd-attach.sh` to launch `claude --session-id <uuid>` (first start) / `claude --resume <uuid>` (restart).
 - `eslint.config.js` — flat config (`@eslint/js` recommended + node globals).
 - `.github/workflows/ci.yml` — push/PR trigger; `npm ci` + `npm run lint` + `npm test` on Node 22.
-- `<project>/.project-meta.json` — sentinel. fields: `name, createdAt, openUrl?, proxyTarget?, proxyPrefix?, stripPrefix?, extraUnits?, template?`
+- `<project>/.project-meta.json` — sentinel. fields: `name, createdAt, openUrl?, proxyTarget?, proxyPrefix?, stripPrefix?, extraUnits?, template?, routes?` (`routes` = ordered `[{match, to}]` rewrite rules, V54)
 - `<project>/README.md` — H1 = card title, first para = description, frontmatter `tags: [...]` = badges
 - `<project>/AGENTS.md` — agent context (per project)
 - `<project>/vite.config.ts` (Vite template) — `base: '/<name>/'`, `server.port: <port>`, `server.host: '127.0.0.1'`
@@ -138,6 +139,7 @@ module exports (test surface, not public API):
 - V50: server startup migrates legacy `ttyd@<project>.service` units (no `__`) to `ttyd@<project>__s1.service`. extracts existing claude uuid from latest `~/.claude/projects/<encoded>/*.jsonl` (else fresh uuid), writes map, `tmux rename-session <project> → <project>__s1` (preserves live process + convo), disables old unit, enables new. idempotent — skips when `.develop-sessions.json` already exists. admin keys `develop`/`wsl` exempt.
 - V51: project DELETE enumerates `ttyd@<project>__*.service` via `systemctl list-units` (all states), disables every child + legacy bare unit in one batch, kills every matching tmux session, then removes the directory. ⊥ orphan ttyd units after a delete.
 - V52: `jekyll` template = Ruby/Bundler, not vite. `bootstrapJekyll(dir, name)` (not `bootstrapTemplate`): copy `templates/jekyll` → `chmod +x serve-local.sh` (copyTemplate writes 0644; unit execs it) → stamp meta `template:jekyll, proxyTarget:127.0.0.1:<port>, stripPrefix:false, openUrl:/<name>/, extraUnits:[jekyll@<name>.service]` → port via `allocatePort(root, 4000)` (4000s range, ⊥ collide w/ vite 5173+) → `BUNDLE_GEMFILE=Gemfile.local bundle install` (project-local `vendor/bundle`) → `sudo systemctl enable --now jekyll@<name>.service`. cleanup-on-fail per V13. `scaffoldProject` dispatches jekyll→bootstrapJekyll else→bootstrapTemplate. firebase forced off (no package.json). DELETE drops `jekyll@<name>` via the generic `extraUnits` path.
+- V54: `.project-meta.json`.`routes` = ordered `[{match, to}]` rewrite rules mapping a source file's repo-relative path → the URL it renders at (relative to `PROXY_PREFIX`). glob: `*`=one segment, `**`=zero+ segments (captured `:splat`); `to` template vars `:dir :name :ext :path :pathnoext :splat`; output slash-normalized (`//`→`/`, `#/`→`#`); first match wins; any path segment starting `_`/`.` ⊥ routed. `lib/file-routes.js` (`matchGlob`+`routeForPath`) inlined into the Browse client. `readProjectRoutes` validates server-side: `match`/`to` strings ≤256, `to` matches `^/[^\s"'<>\\]*$` (root-relative, no scheme/host/CRLF) else dropped. Browse shows the preview eye-icon when `isRenderable(name) ∨ (PROXY_PREFIX ∧ routeForPath)`; render iframe src = `PROXY_PREFIX + encodeURI(route)` (takes precedence over the html-proxy + raw branches). expresses real Jekyll (genesis: `README→/`, `**/index.md→/:dir/`, `**/*.md→/:dir/:name.html`) AND `.nojekyll` SPA (systematic-theology: `data/**/*.md→/#:splat/:name`, `handouts|storyboards/**/*.md→/#:path`). jekyll template stamps the genesis-style default rules. ⊥ route render without a running backend (needs PROXY_PREFIX).
 
 ## §T TASKS
 
@@ -215,6 +217,7 @@ module exports (test surface, not public API):
 | T70 | x | tests: lib/term-sessions roundtrip + allocateTabId gap-fill + parseTermKey edge cases; routes GET/PUT/405 (POST/DELETE skipped — real sudo) | V47,V49 |
 | T71 | x | `templates/jekyll/` (Ruby/minima) + `services/jekyll@.service` + `bootstrapJekyll`/`scaffoldProject` dispatch + template-policy enum/firebase-off + landing radio + STACK blurb + tests + docs | I.files,V43,V52 |
 | T72 | x | eye-icon renders `.svg`: `isSvgFile`/`isRenderable` in view shell, gate proxy-render branch to `isHtmlFile` so svg → `?raw=1` (image/svg+xml inline); tests | V16 |
+| T73 | x | `routes` in `.project-meta.json`: `lib/file-routes.js` (`matchGlob`+`routeForPath`) + `readProjectRoutes` validation + inject `ROUTES` into shell + preview eye-icon on routable files + render-iframe `PROXY_PREFIX+route`; jekyll template default rules; genesis + systematic-theology metas; tests | I.files,V54 |
 
 ## §B BUGS
 
