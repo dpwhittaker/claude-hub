@@ -14,6 +14,13 @@ Jekyll + minima Markdown site. claude-hub conventions:
   literally `Gemfile`, so `Gemfile.local` is invisible to the deploy and only
   drives the local preview. Bundler installs into a project-local
   `vendor/bundle` (see `.bundle/config`).
+- **Browse preview icons (`routes`)**: `.project-meta.json` ships default
+  Jekyll-permalink `routes` (`README→/`, `**/index.md→/:dir/`,
+  `**/*.md→/:dir/:name.html`), so claude-hub's file browser shows an eye-icon on
+  every `.md` and renders it through the live preview. If you change the URL
+  scheme (custom `permalink:`, collections, a different layout), update `routes`
+  to match. Rule syntax + examples: `~/projects/claude-hub/AGENTS.md` →
+  "File→URL routes".
 
 ## What to do first
 
