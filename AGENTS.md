@@ -228,3 +228,47 @@ See `SPEC.md` §B (bugs) + §V (invariants) for full history. Backprop new bugs 
 ## Sharing across devices
 
 Proxy binds `127.0.0.1` only — by design not reachable from LAN. Tailscale is the tested path for phone/laptop access. See the `tailscale` skill (in `.claude/skills/tailscale/`) for setup, Funnel notes, and the WSL2 self-loopback gotcha.
+## Hindsight memory — pinned versions and drift check
+
+Harness-level maintenance, done from this project. Every Claude Code session on
+this box runs through a recall gate (`~/.hindsight/gate/`) that reaches into the
+Hindsight plugin's internals. Those internals are not a public API, so **a plugin
+upgrade can silently change recall behaviour.** Check this whenever Hindsight is
+upgraded.
+
+Versions this setup was built and verified against (2026-07-29):
+
+| Component | Version |
+|---|---|
+| `hindsight-memory` plugin (`~/.claude/plugins/cache/hindsight/hindsight-memory/`) | **0.7.5** |
+| `hindsight-api` (`~/.hindsight/venv`) | **0.8.5** |
+| Ollama | **0.32.5** |
+| LLM (all scopes, local) | `VladimirGav/gemma4-26b-16GB-VRAM` |
+
+**On upgrade, do all four:**
+
+1. **Diff `scripts/recall.py`** between the old and new plugin version. The gate
+   reimplements its *merge* to add cross-project ranking (the plugin's own
+   `recallAdditionalBanks` concatenates with no penalty). If recall.py changes how
+   it composes the query, filters scores, or shapes the `<hindsight_memories>`
+   envelope, `~/.hindsight/gate/themes.py` needs the same change.
+2. **Check the imported symbols still exist.** `themes.py` deliberately imports
+   from the plugin instead of copying it, so most drift is impossible — but if any
+   of these are renamed it silently falls back to plain single-bank recall:
+   `lib.bank.derive_bank_id` / `ensure_bank_mission`, `lib.client.HindsightClient.recall`,
+   `lib.config.load_config`, `lib.content.compose_recall_query` /
+   `truncate_recall_query` / `format_memories` / `format_current_time`,
+   `lib.daemon.get_api_url`, `recall.read_transcript_messages`.
+   The fallback is safe but **silent** — grep `~/.hindsight/gate/gate.log` for
+   `falling back` to catch it.
+3. **Confirm the LLM provider is still local.** An upgrade that resets config could
+   put extraction and consolidation back on the subscription, where a backfill once
+   burned most of an $80 monthly limit in a morning and was invisible to `/cost`:
+   ```bash
+   curl -s http://127.0.0.1:9077/metrics | grep '^hindsight_llm_calls_total'
+   # every line must read provider="ollama"
+   ```
+4. **Update the version table above** so the next drift check has a real baseline
+   to diff from.
+
+Full setup documentation, measurements and rationale: `~/.hindsight/README.md`.
