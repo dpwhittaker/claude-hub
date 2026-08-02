@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 const { installTouchWheel } = require('../lib/touch-wheel');
 
 // Stub viewport has no clientHeight and stub view has no term, so the shim
-// falls back to lineHeight 16 → step = max(10, 2.5*16) = 40px per tick.
-const FALLBACK_STEP = 40;
+// falls back to lineHeight 16 → step = max(8, 16) = 16px per tick.
+const FALLBACK_STEP = 16;
 
 function makeDoc({ viewport, rows, viewportHeight } = {}) {
   const handlers = {};
@@ -54,12 +54,12 @@ test('sub-step moves accumulate; tick fires only when total crosses step (V40)',
   const { doc, handlers, dispatched, target } = makeDoc();
   installTouchWheel(doc);
   handlers.touchstart({ touches: [{ clientY: 300 }] });
-  handlers.touchmove({ touches: [{ clientY: 285 }], target, preventDefault() {} }); // acc 15
-  handlers.touchmove({ touches: [{ clientY: 270 }], target, preventDefault() {} }); // acc 30
+  handlers.touchmove({ touches: [{ clientY: 294 }], target, preventDefault() {} }); // acc 6
+  handlers.touchmove({ touches: [{ clientY: 288 }], target, preventDefault() {} }); // acc 12
   assert.equal(dispatched.length, 0);
-  handlers.touchmove({ touches: [{ clientY: 255 }], target, preventDefault() {} }); // acc 45 → tick, rem 5
+  handlers.touchmove({ touches: [{ clientY: 282 }], target, preventDefault() {} }); // acc 18 → tick, rem 2
   assert.equal(dispatched.length, 1);
-  handlers.touchmove({ touches: [{ clientY: 240 }], target, preventDefault() {} }); // acc 20
+  handlers.touchmove({ touches: [{ clientY: 276 }], target, preventDefault() {} }); // acc 8
   assert.equal(dispatched.length, 1);
 });
 
@@ -68,7 +68,7 @@ test('fast flick spanning multiple steps emits multiple ticks in one move', () =
   installTouchWheel(doc);
   handlers.touchstart({ touches: [{ clientY: 500 }] });
   handlers.touchmove({
-    touches: [{ clientY: 500 - (2 * FALLBACK_STEP + 30) }],
+    touches: [{ clientY: 500 - (2 * FALLBACK_STEP + 5) }],
     target, preventDefault() {},
   });
   assert.equal(dispatched.length, 2);
@@ -90,14 +90,14 @@ test('preventDefault fires even below threshold (suppress rubber-band)', () => {
   assert.equal(prevented, true);
 });
 
-test('step derives from viewport height / term.rows (2.5 text lines per tick)', () => {
-  // clientHeight 480 / rows 24 = 20px lines → step 50.
+test('step derives from viewport height / term.rows (one text line per tick)', () => {
+  // clientHeight 480 / rows 24 = 20px lines → step 20.
   const { doc, handlers, dispatched, target } = makeDoc({ rows: 24, viewportHeight: 480 });
   installTouchWheel(doc);
   handlers.touchstart({ touches: [{ clientY: 100 }] });
-  handlers.touchmove({ touches: [{ clientY: 50 }], target, preventDefault() {} });
+  handlers.touchmove({ touches: [{ clientY: 80 }], target, preventDefault() {} });
   assert.equal(dispatched.length, 1);
-  assert.equal(dispatched[0].e.deltaY, 50);
+  assert.equal(dispatched[0].e.deltaY, 20);
 });
 
 test('falls back to event target when .xterm-viewport not in DOM yet', () => {
@@ -151,10 +151,10 @@ test('touchend resets accumulator — residual drag does not leak into next gest
   const { doc, handlers, dispatched, target } = makeDoc();
   installTouchWheel(doc);
   handlers.touchstart({ touches: [{ clientY: 200 }] });
-  handlers.touchmove({ touches: [{ clientY: 170 }], target, preventDefault() {} }); // acc 30, no tick
+  handlers.touchmove({ touches: [{ clientY: 190 }], target, preventDefault() {} }); // acc 10, no tick
   handlers.touchend({});
   handlers.touchstart({ touches: [{ clientY: 200 }] });
-  handlers.touchmove({ touches: [{ clientY: 170 }], target, preventDefault() {} }); // fresh acc 30
+  handlers.touchmove({ touches: [{ clientY: 190 }], target, preventDefault() {} }); // fresh acc 10
   assert.equal(dispatched.length, 0);
 });
 
