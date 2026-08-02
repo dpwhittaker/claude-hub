@@ -97,6 +97,13 @@ if ! tmux has-session -t "$KEY" 2>/dev/null; then
     # Forward terminal focus-in/out escape sequences instead of swallowing
     # them — Claude Code uses this to detect when the browser tab loses focus.
     tmux set-option        -t "$KEY" -g focus-events on
+    # Mouse mode: wheel events from the browser (incl. the touch→wheel shim)
+    # reach tmux, which forwards them to the inner app when it requested mouse
+    # tracking — Claude Code does, and scrolls its own transcript in the
+    # alternate screen. Do NOT bind WheelUpPane to bare `copy-mode`; the
+    # default binding's conditional passthrough is required (alt screen has no
+    # tmux history — copy-mode there shows [0/0]).
+    tmux set-option        -t "$KEY" -g mouse on
     # OSC 52 clipboard bridge. With set-clipboard on, tmux emits
     # \e]52;c;<base64>\a whenever a mouse-mode selection is copied;
     # claude-hub's WebSocket shim catches that on the browser side and
