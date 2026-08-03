@@ -74,11 +74,10 @@ Confirm the projects show up in the JSON response.
 ```bash
 mkdir -p docs/img
 OUT=$(pwd)/docs/img/landing.png
-WIN_OUT=$(wslpath -w "$OUT")
-'/mnt/c/Program Files/Google/Chrome/Application/chrome.exe' \
+google-chrome \
   --headless --disable-gpu --hide-scrollbars \
   --window-size=1280,900 \
-  --screenshot="$WIN_OUT" \
+  --screenshot="$OUT" \
   http://127.0.0.1:9001/
 ```
 
@@ -97,19 +96,17 @@ The Browse screenshots should be of the **real claude-hub project** so the tree 
 
 ```bash
 OUT=$(pwd)/docs/img/browse-default.png
-WIN_OUT=$(wslpath -w "$OUT")
-'/mnt/c/Program Files/Google/Chrome/Application/chrome.exe' \
+google-chrome \
   --headless --disable-gpu --hide-scrollbars \
   --window-size=1400,900 --virtual-time-budget=4000 \
-  --screenshot="$WIN_OUT" \
+  --screenshot="$OUT" \
   "http://127.0.0.1:8002/view/claude-hub/?dev=0"
 
 OUT=$(pwd)/docs/img/browse-with-develop.png
-WIN_OUT=$(wslpath -w "$OUT")
-'/mnt/c/Program Files/Google/Chrome/Application/chrome.exe' \
+google-chrome \
   --headless --disable-gpu --hide-scrollbars \
   --window-size=1400,900 --virtual-time-budget=4000 \
-  --screenshot="$WIN_OUT" \
+  --screenshot="$OUT" \
   "http://127.0.0.1:8002/view/claude-hub/?dev=1"
 ```
 
@@ -207,11 +204,10 @@ Visit `/?new=1` to land on the hub with the create dialog already open. Headless
 
 ```bash
 OUT=$(pwd)/docs/img/new-project.png
-WIN_OUT=$(wslpath -w "$OUT")
-'/mnt/c/Program Files/Google/Chrome/Application/chrome.exe' \
+google-chrome \
   --headless --disable-gpu --hide-scrollbars \
   --window-size=1280,900 --virtual-time-budget=4000 \
-  --screenshot="$WIN_OUT" \
+  --screenshot="$OUT" \
   "http://127.0.0.1:8002/?new=1"
 
 # Crop to dialog bounds. crop=W:H:X:Y. Tune if the dialog moves.

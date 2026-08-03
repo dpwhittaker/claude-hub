@@ -16,9 +16,9 @@
  *   /term/develop(/|$)   → admin terminal: fresh `claude` in ~/projects each
  *                          connection (no tmux, no --continue). For
  *                          cross-project chores. Backed by ttyd-develop.service.
- *   /term/wsl(/|$)       → raw bash login shell, no claude, no tmux. For
+ *   /term/shell(/|$)     → raw bash login shell, no claude, no tmux. For
  *                          system poking that doesn't need an LLM in the loop.
- *                          Backed by ttyd-wsl.service.
+ *                          Backed by ttyd-shell.service.
  *
  * WebSocket upgrades are forwarded so Vite HMR (and ttyd) keep working.
  *
@@ -92,13 +92,13 @@ function refreshStaticRoutes() {
 }
 
 // ---------- ttyd routing ----------
-// Each terminal "key" (project name, or 'develop' / 'wsl' for the admin
+// Each terminal "key" (project name, or 'develop' / 'shell' for the admin
 // terminals) is served by a systemd-managed ttyd unit that binds a unix
 // socket under /run/ttyd/. SPEC §V.13, §V.36 — claude-hub never spawns ttyd
 // itself; it just proxies /term/<key>/ to the systemd-bound socket.
 //   - ttyd@<name>.service      → /run/ttyd/<name>.sock     (per project)
 //   - ttyd-develop.service     → /run/ttyd/develop.sock    (admin: fresh claude)
-//   - ttyd-wsl.service         → /run/ttyd/wsl.sock        (admin: raw bash)
+//   - ttyd-shell.service       → /run/ttyd/shell.sock      (admin: raw bash)
 const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local', 'bin', 'claude');
 const TTYD_RUNTIME_DIR = '/run/ttyd';
 
@@ -3968,6 +3968,16 @@ function handleViewRequest(req, res, urlPath) {
 const server = http.createServer(async (req, res) => {
   const url = req.url || '/';
 
+  // Legacy redirect: the raw-shell admin terminal was called `wsl` back when
+  // this ran under WSL2. Keep old bookmarks working. 301 to the same subpath
+  // under /term/shell/ — a silent socket alias would not work, since ttyd is
+  // started with `-b /term/shell` and would emit asset URLs under that base.
+  if (url === '/term/wsl' || url.startsWith('/term/wsl/') || url.startsWith('/term/wsl?')) {
+    res.writeHead(301, { Location: '/term/shell' + url.slice('/term/wsl'.length) });
+    res.end();
+    return;
+  }
+
   // Managed-projects API — list/create/delete.
   const apiPath = url.split('?', 1)[0];
   if (apiPath === '/api/projects') {
@@ -4199,7 +4209,11 @@ async function migrateLegacyTermUnits() {
   } catch {
     return;
   }
-  const ADMIN_KEYS = new Set(['develop', 'wsl']);
+  // Guards against a template instance literally named ttyd@develop/@shell.
+  // 'wsl' is retained: it is the pre-rename name of the shell terminal, and a
+  // stale ttyd@wsl.service on an un-migrated host must not be mistaken for a
+  // project. (The standalone ttyd-shell.service never matches this glob.)
+  const ADMIN_KEYS = new Set(['develop', 'shell', 'wsl']);
   for (const line of stdout.split('\n')) {
     const m = /^ttyd@([^.\s]+)\.service\s/.exec(line);
     if (!m) continue;

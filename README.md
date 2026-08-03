@@ -78,12 +78,12 @@ For terminal cards (`/term/<project>/`) you also need `ttyd` installed
 
 ```bash
 # Substitute /home/USER + User=david placeholders at install time.
-for u in ttyd@.service ttyd-develop.service ttyd-wsl.service; do
+for u in ttyd@.service ttyd-develop.service ttyd-shell.service; do
   sudo bash -c "sed 's|/home/USER|\$HOME|g; s|^User=david|User=\$USER|' services/\$u > /etc/systemd/system/\$u"
 done
 sudo install -m 755 services/ttyd-attach.sh /usr/local/bin/ttyd-attach.sh
 sudo systemctl daemon-reload
-sudo systemctl enable --now ttyd-develop.service ttyd-wsl.service
+sudo systemctl enable --now ttyd-develop.service ttyd-shell.service
 ```
 
 When you create a project via the `+` card, `ttyd@<name>.service` is
@@ -107,11 +107,7 @@ project's `.project-meta.json` (`proxyTarget`, `proxyPrefix`,
 
 `sudo` for `systemctl enable --now vite@<name>.service` and the matching
 `disable --now` on project delete relies on the same passwordless sudo grant
-already used by `ttyd@`. Add to `/etc/sudoers.d/claude-hub`:
-
-```
-david ALL=(root) NOPASSWD: /bin/systemctl enable --now vite@*.service, /bin/systemctl disable --now vite@*.service
-```
+already used by `ttyd@` — see [Passwordless sudo](#passwordless-sudo) below.
 
 For **Jekyll**-template projects you need Ruby + Bundler
 (`apt install ruby-full` on Debian/Ubuntu, then `gem install bundler`) and the
@@ -126,11 +122,30 @@ sudo systemctl daemon-reload
 runs the project's `serve-local.sh` (`bundle exec jekyll serve`) under
 `Restart=always`. Unlike Vite projects, ports are allocated from the **4000s**
 (so they never collide with the Vite 5173+ range), and the port + `/<name>`
-baseurl are baked into `serve-local.sh` at scaffold time. Add the matching sudo
-grant:
+baseurl are baked into `serve-local.sh` at scaffold time. It needs the same
+sudo grant as the other units — see below.
+
+## Passwordless sudo
+
+Project create/delete shells out to `sudo -n systemctl enable|disable --now
+<unit>` for `ttyd@`, `vite@`, and `jekyll@` instances. Grant it in
+`/etc/sudoers.d/claude-hub` (mode `0440`, root-owned):
 
 ```
-david ALL=(root) NOPASSWD: /bin/systemctl enable --now jekyll@*.service, /bin/systemctl disable --now jekyll@*.service
+<user> ALL=(root) NOPASSWD: /usr/bin/systemctl, /bin/systemctl
+```
+
+> **Do not try to scope this per-unit with wildcards.** `sudo` 1.9.17 and newer
+> reject wildcards in command *arguments*, so the tempting form
+> `NOPASSWD: /usr/bin/systemctl enable --now vite@*.service` is a hard syntax
+> error — and one bad line invalidates the entire sudoers file, not just that
+> entry. Grant the binary instead; `server.js` already validates every unit name
+> against a strict regex before it reaches `sudo`.
+
+Always verify after editing:
+
+```bash
+sudo visudo -c
 ```
 
 ## Sharing across devices (Tailscale)
@@ -161,7 +176,7 @@ filesystem access to `~/projects`.
 | `landing.html` | Static landing page. Hardcoded cards for Develop + Proxy; fetches the rest from `/api/projects`. |
 | `services/claude-hub.service` | systemd unit for the proxy itself. |
 | `services/ttyd@.service` | Templated systemd unit. `systemctl enable --now ttyd@<project>` brings up a per-project terminal. |
-| `services/ttyd-develop.service`, `services/ttyd-wsl.service` | Static admin terminal units (fresh claude in `~/projects`, raw bash). |
+| `services/ttyd-develop.service`, `services/ttyd-shell.service` | Static admin terminal units (fresh claude in `~/projects`, raw bash). |
 | `services/ttyd-attach.sh` | Helper that ttyd execs per browser connection — joins or creates the per-project tmux session. |
 | `AGENTS.md` | Architecture + ops + gotchas. Read it before changing the routing or the systemd units. |
 

@@ -23,7 +23,8 @@ Want public reachability? `tailscale funnel` = same command, `funnel` substitute
 
 - `tailscale serve` config stored on the daemon; survives reboots. Inspect: `tailscale serve status`.
 - Cert auto-renews via Tailscale's ACME flow. No on-disk cert to manage.
-- TLS+:443 binding lives on the Tailscale virtual interface. On WSL2 with `networkingMode=Mirrored`, the Windows-side tailscale daemon reaches `localhost:8002` directly. Self-loopback from inside WSL2 to the `*.ts.net` URL fails ("connection refused") — test from another peer or from Windows itself.
+- TLS+:443 binding lives on the Tailscale virtual interface. Where `tailscaled` runs natively on the same host as claude-hub, self-loopback works: `curl https://<gpu-host>/` from the host itself returns 200 with a valid cert.
+- Upstreams that validate the `Host` header (notably Vite) need the tailnet host allowed, since the proxy forwards the original header. A loopback check via `127.0.0.1:8002` will pass while the real URL 403s — always verify through the actual URL.
 - To reconfigure from scratch: `tailscale serve --bg --https=443 http://localhost:8002`.
 - Tear down: `tailscale serve --https=443 off`.
 

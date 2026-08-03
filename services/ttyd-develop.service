@@ -10,7 +10,7 @@ User=david
 # Socket lives under /run/ttyd/ — created with the right ownership by systemd
 # from RuntimeDirectory below. The claude-hub proxy targets this socket
 # directly so we never expose a TCP port. Preserve=yes is critical:
-# /run/ttyd is shared with every ttyd@ instance and ttyd-wsl, so without
+# /run/ttyd is shared with every ttyd@ instance and ttyd-shell, so without
 # preserve any stop wipes everyone else's sockets too.
 RuntimeDirectory=ttyd
 RuntimeDirectoryMode=0755

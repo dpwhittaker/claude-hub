@@ -13,7 +13,7 @@ User=david
 RuntimeDirectory=ttyd
 RuntimeDirectoryMode=0755
 # /run/ttyd is shared across every ttyd@ instance plus ttyd-develop and
-# ttyd-wsl. Without preserve=yes, when any single instance stops systemd
+# ttyd-shell. Without preserve=yes, when any single instance stops systemd
 # wipes the entire directory, killing every other instance's socket.
 RuntimeDirectoryPreserve=yes
 # Per-tab instance names take the form `<project>__<tabId>` (e.g.

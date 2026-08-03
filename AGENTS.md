@@ -34,7 +34,7 @@ Proxy = only Node process. Everything else (project apps, ttyd terminals) separa
 | `/view/<proj>/` | Two-pane viewer: collapsible tree (left, draggable splitter) + tabbed iframes (right). README.md opens in initial tab. |
 | `/view/<proj>/<file>` | Renders single file (markdown via `marked`, code via highlight.js, raw bytes via mime). `?embed=1` strips page chrome — used by two-pane viewer's iframes. `?raw=1` to download. |
 | `/term/<proj>/` | Forwards to `unix:/run/ttyd/<proj>.sock` if socket exists. Resolved per request — adding project no proxy restart. |
-| `/term/develop/`, `/term/wsl/` | Static admin terminals (fresh claude in `~/projects`, raw bash). |
+| `/term/develop/`, `/term/shell/` | Static admin terminals (fresh claude in `~/projects`, raw bash). `/term/wsl/` 301s to `/term/shell/` for old bookmarks. |
 | `/<proj>/*` (optional) | Reverse-proxy to project's backend if `.project-meta.json` declares `proxyTarget`. Card's "Open" button steered via `openUrl` in same file. No proxy restart — claude-hub rebuilds route table on every project create/delete. |
 
 ## Project sentinel: `.project-meta.json`
@@ -82,7 +82,7 @@ sudo systemctl enable --now <unit>`. `services/ttyd-attach.sh` installs to
 | `services/claude-hub.service` | `node server.js` (this proxy). Adjust `ExecStart` to your node binary path. |
 | `services/ttyd@.service` | Templated. `systemctl enable --now ttyd@<name>` brings up `unix:/run/ttyd/<name>.sock` running `ttyd-attach.sh <name>` — joins or creates tmux session named `<name>` running `claude --continue` (omitted on first launch when no prior session exists, avoid exit-loop). |
 | `services/ttyd-develop.service` | Admin: fresh `claude` in `~/projects` per browser connection. No tmux. |
-| `services/ttyd-wsl.service` | Admin: raw `bash -l`. No claude, no tmux. |
+| `services/ttyd-shell.service` | Admin: raw `bash -l`. No claude, no tmux. |
 | `services/vite@.service` | Templated. `systemctl enable --now vite@<name>` runs `npm run dev` in `~/projects/<name>` under `Restart=always`. Enabled during any vite-family template scaffold (`vite` / `game-2d` / `game-3d` / `game-3d-complex` all share this one unit). |
 | `services/jekyll@.service` | Templated. `systemctl enable --now jekyll@<name>` runs `~/projects/<name>/serve-local.sh` (`bundle exec jekyll serve`) under `Restart=always`, system PATH (Ruby/bundler, no nvm). Enabled only for the `jekyll` template — the one non-vite family. |
 
@@ -221,13 +221,13 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 - **Greenfield bootstrap prompt is stack-aware** — `writeBootstrapPrompt(dir, name, 'greenfield', {templateId, firebase})` injects a `STACK[templateId]` blurb so a fresh session greets oriented. New template → add a `STACK` entry in `lib/bootstrap-prompt.js`.
 - **Vite base path splits** — dev base = `/<NAME>/` (proxy needs it, V20). Static deploy: `build:pages` bakes `/<NAME>/`, `build:firebase` bakes `/`. Don't unify.
 - **Firebase keys are public** — `VITE_FIREBASE_*` ship in the bundle by design. Gate access with Firestore/Storage security rules, not key secrecy.
-- **WSL2 self-loopback to `*.ts.net` fails** — route lives on the Windows tailscale virtual interface (V17). Test from a peer or from Windows.
+- **Vite `allowedHosts` must cover the tailnet host** — Vite 403s (`Blocked request. This host … is not allowed`) any `Host` it doesn't recognise, and the proxy forwards the original header. Loopback tests pass while the tailnet URL fails, so **test through the real URL, not just `127.0.0.1:8002`**. Use the suffix wildcard `allowedHosts: ['.ts.net', 'localhost', '127.0.0.1']` — it matches any MagicDNS name without committing a hostname.
 
 See `SPEC.md` §B (bugs) + §V (invariants) for full history. Backprop new bugs via `/ck:spec bug: …`.
 
 ## Sharing across devices
 
-Proxy binds `127.0.0.1` only — by design not reachable from LAN. Tailscale is the tested path for phone/laptop access. See the `tailscale` skill (in `.claude/skills/tailscale/`) for setup, Funnel notes, and the WSL2 self-loopback gotcha.
+Proxy binds `127.0.0.1` only — by design not reachable from LAN. Tailscale is the tested path for phone/laptop access. See the `tailscale` skill (in `.claude/skills/tailscale/`) for setup and Funnel notes.
 ## Hindsight memory — pinned versions and drift check
 
 Harness-level maintenance, done from this project. Every Claude Code session on

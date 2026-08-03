@@ -15,7 +15,7 @@ test('PROJECT_ID_RE: accepts safe names, rejects metacharacters', () => {
 });
 
 test('RESERVED_PROJECT_NAMES covers the route prefixes', () => {
-  for (const r of ['develop', 'wsl', 'view', 'term', 'api']) {
+  for (const r of ['develop', 'shell', 'wsl', 'view', 'term', 'api']) {
     assert.ok(RESERVED_PROJECT_NAMES.has(r), `${r} must be reserved`);
   }
 });
