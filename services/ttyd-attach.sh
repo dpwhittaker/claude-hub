@@ -117,8 +117,13 @@ if ! tmux has-session -t "$KEY" 2>/dev/null; then
     # launch so it greets the user, reads AGENTS.md, and populates the
     # project's metadata. The bootstrapper in claude-hub writes a project-
     # specific prompt to .claude-bootstrap.txt — different copy for greenfield
-    # vs cloned projects (V30/V31). If the file is absent (e.g. a project
-    # created out-of-band by hand), fall back to a generic greenfield prompt.
+    # vs cloned projects (V30/V31). If the file is absent, fall back to the
+    # adaptive prompt below. That path is common: is_fresh only means "no
+    # transcript for this tab's uuid yet", not "new project", so the fallback
+    # lands on established projects (created out-of-band, or whose s1 tab got
+    # a new session id) far more often than on empty ones. It therefore tells
+    # claude to survey the tree and propose next steps, and to ask "what
+    # should we build?" only when the project really is uninitialized.
     # Backgrounded so the parent ttyd-attach.sh can `exec tmux attach`. The
     # sleep gives claude time to finish booting before we type into the pane.
     # Only fire on the project's very first tab so secondary tabs start clean.
@@ -129,7 +134,7 @@ if ! tmux has-session -t "$KEY" 2>/dev/null; then
               tmux send-keys -t "$KEY" -l "$(cat "$bootstrap_file")"
               rm -f "$bootstrap_file"
           else
-              tmux send-keys -t "$KEY" -l "Read AGENTS.md and README.md in this directory, then briefly greet me and ask what I want to build here. Once we agree on the project, update README.md — rewrite the H1 (card title), rewrite the first paragraph (one-sentence card description), and set the 'tags: [...]' frontmatter to short tags like 'Game', 'Tool', 'API', 'Library', or 'Service' plus a status flag like 'WIP' or 'Stable'. The landing page reads all three from README."
+              tmux send-keys -t "$KEY" -l "Read AGENTS.md and README.md in this directory, then get oriented — skim the tree and the recent git log to see where this project stands. If it is already underway, briefly greet me with what it is in one sentence, what state it seems to be in, and two to four concrete next steps you could take — then ask which I want. If it looks uninitialized (an empty scaffold, no real content yet), ask what I want to build here instead. Either way, the landing page card reads three things from README.md: the H1 (card title), the first paragraph (one-sentence description), and the 'tags: [...]' frontmatter (short tags like 'Game', 'Tool', 'API', 'Library' or 'Service', plus a status flag like 'WIP' or 'Stable'). Check those three against what the project actually is now — rewrite any that are missing, placeholder, or out of date, and leave them alone if they already fit."
           fi
           tmux send-keys -t "$KEY" Enter
         ) &
