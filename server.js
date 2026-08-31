@@ -172,6 +172,14 @@ const ANDROID_INPUT_INJECT = `<script>document.addEventListener('DOMContentLoade
 // selections; this turns those into actual host clipboard writes.
 const { installOsc52Bridge } = require('./lib/osc52');
 const OSC52_INJECT = `<script>(${installOsc52Bridge.toString()})(window);</script>`;
+// Automatic reconnect (V63, B18). Also wraps window.WebSocket, so it runs at
+// head-parse time like OSC52 — and AFTER it, since it has to see the socket
+// object that wrapper hands back. Undoes ttyd's `error → doReconnect = false`
+// so a dropped connection retries itself instead of parking on
+// "Press ⏎ to Reconnect", and refits after reopen so the pty is not resized
+// to whatever shape the viewport had before the drop.
+const { installTermReconnect } = require('./lib/term-reconnect');
+const TERM_RECONNECT_INJECT = `<script>(${installTermReconnect.toString()})(window);</script>`;
 // xterm.js's .xterm-viewport sets overflow-y:scroll, so a scrollbar is always
 // painted on the right edge of the term pane even when scrollback fits. Hide
 // the bar without disabling scroll (touch-wheel + wheel events still drive
@@ -197,8 +205,8 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
     // Chrome/Android before layout. Then inject scripts into <head> (runs
     // before body parses) so ttyd's preact mount can't wipe us.
     html = patchViewportMeta(html);
-    const injectBlob = OSC52_INJECT + SCROLLBAR_HIDE_INJECT + TOUCH_WHEEL_INJECT
-      + KEYBOARD_FIT_INJECT + ANDROID_INPUT_INJECT;
+    const injectBlob = OSC52_INJECT + TERM_RECONNECT_INJECT + SCROLLBAR_HIDE_INJECT
+      + TOUCH_WHEEL_INJECT + KEYBOARD_FIT_INJECT + ANDROID_INPUT_INJECT;
     if (html.includes('</head>')) {
       html = html.replace('</head>', injectBlob + '</head>');
     } else if (html.includes('</body>')) {

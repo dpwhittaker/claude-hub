@@ -207,12 +207,13 @@ against a scratch `PROJECTS_ROOT`.
 | `lib/term-sessions.js` | Develop-pane tab map io (V47). |
 | `lib/android-input.js` | Android soft-keyboard input shim for ttyd pages (V61, B17). |
 | `lib/keyboard-fit.js` | Mobile viewport fit for ttyd pages; `patchViewportMeta` + `installKeyboardFit` (V62). |
+| `lib/term-reconnect.js` | Automatic reconnect + post-reopen refit for ttyd pages (V63, V64, B19). |
 | `lib/escape-html.js` | The one server-side HTML escaper. |
 
-Nine helpers are shared between server and browser by injecting their source
+Ten helpers are shared between server and browser by injecting their source
 with `.toString()` (`tabKey`, `installTouchWheel`, `isEmbedder`,
 `tabsToReload`, `matchGlob`, `routeForPath`, `installOsc52Bridge`,
-`installKeyboardFit`, `installAndroidInput`). **Those must stay
+`installKeyboardFit`, `installAndroidInput`, `installTermReconnect`). **Those must stay
 self-contained** — no closures over module scope, no `require` inside them —
 because the browser only receives the function body.
 
@@ -285,6 +286,41 @@ vv `resize` for no-op suggestion-strip toggles as you type, so that was a
 whole redraw per keystroke competing with input. It now drops resizes that
 changed neither dimension and coalesces the dispatch to one per animation
 frame (V62).
+
+## Terminal reconnect (V63, V64, B19)
+
+`installTermReconnect` is the fifth injected shim, and the second that wraps
+`window.WebSocket` — it goes in AFTER `installOsc52Bridge` so the nesting is
+`ReconnectWrapped(Osc52Wrapped(native))` and every socket still flows through
+osc52's message scanner. Head-parse timing, no DOMContentLoaded gate, for the
+same reason osc52 has none: ttyd constructs its socket from
+`componentDidMount`, and a gated wrapper would arrive too late.
+
+**What it undoes.** ttyd 1.7.7's `connect()` registers
+`addEventListener(socket, 'error', () => this.doReconnect = false)`, and
+`onSocketClose` reads `doReconnect` to choose between reconnecting and parking
+on `Press ⏎ to Reconnect`. Every real network loss — a phone sleeping, a
+wifi↔cellular handoff — fires `error` before `close`, so the automatic branch
+was effectively dead code. The shim simply never registers that listener.
+
+**Where the backoff comes from.** ttyd reconnects the instant its close
+handler runs, so the shim holds that handler and calls it later; the delay
+before delivery IS the retry delay. Nothing of ttyd's is patched, and holding
+the close defers `dispose()` too, which keeps the refit binding alive for the
+whole wait.
+
+**Why the refit is separate.** `dispose()` drops `initListeners()`'s
+`window 'resize' → fitAddon.fit()` binding, so xterm keeps its pre-drop
+cols/rows while the socket is down and `onSocketOpen` re-handshakes with them.
+The shim calls `window.term.fit` — set in ttyd's `open()` and never torn down —
+rather than dispatching a synthetic resize, because V62's dedupe drops a
+forwarded resize when neither viewport dimension changed, which is exactly the
+case that still needs a refit.
+
+> Reading the bundle beats guessing: it is one ~735KB inlined file at
+> `/term/<key>/`, and `grep -o '.\{160\}<symbol>.\{240\}'` over it recovers
+> the minified source of any handler you need. That is how the `error` listener
+> and the `window.term.fit` hook above were both confirmed rather than assumed.
 
 ## Common ops
 
