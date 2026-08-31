@@ -1,5 +1,5 @@
 ---
-tags: [Hub, Tool]
+tags: [Hub, Tool, Stable]
 ---
 
 # claude-hub
