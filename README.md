@@ -181,8 +181,11 @@ filesystem access to `~/projects`.
 | `services/ttyd-develop.service`, `services/ttyd-shell.service` | Static admin terminal units (fresh claude in `~/projects`, raw bash). |
 | `services/ttyd-attach.sh` | Helper that ttyd execs per browser connection — joins or creates the per-project tmux session. |
 | `AGENTS.md` | Architecture + ops + gotchas. Read it before changing the routing or the systemd units. |
+| `HINDSIGHT.md` | The optional Hindsight memory layer: what it adds, how to rebuild it, how to remove it. claude-hub runs fine with none of it installed. |
 
 ## See also
 
 - `AGENTS.md` for the full architecture, route table, and the list of
   things that have bitten past sessions.
+- `HINDSIGHT.md` for the optional per-repo memory layer — install, the
+  reasoning behind each config value, and how to verify a rebuild.
