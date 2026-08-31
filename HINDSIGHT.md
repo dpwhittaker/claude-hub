@@ -31,6 +31,11 @@ bank. Agents read the pages through MCP tools (`hindsight_search_knowledge_pages
 Nothing is injected into the context automatically except a short page roster at
 session start — see `autoReflect` below for why.
 
+`~/.hindsight/backfill_project.py` is a separate escape hatch: it imports a repo's
+*own content* (lesson notes, handouts, source documents) as one document per file,
+so recall can answer questions about the material and not only about the work
+sessions. It predates the current client but talks to the API directly.
+
 ## Versions this was built and verified against
 
 Last verified **2026-08-31**.
@@ -114,6 +119,16 @@ ollama pull VladimirGav/gemma4-26b-16GB-VRAM
 That file carries the tuning and the reasoning behind it — read it rather than
 re-deriving. Summary: flash attention on, `q8_0` KV cache, `OLLAMA_NUM_PARALLEL=3`.
 
+Install gotchas hit on this box:
+
+- `zstd` must be present first (`apt install zstd`) or the install script aborts.
+- The installer **bakes the installing shell's `PATH` into the unit** — here that
+  once captured version-pinned plugin cache dirs that vanished on the next update.
+- Ollama upgrades rewrite the base unit. The `ollama.service.d/` drop-in survives;
+  the base unit's `PATH` does not. Re-check after every upgrade.
+- `ollama pull` progress does not stream into a log file — watch
+  `du -sh /usr/share/ollama/.ollama/models` instead.
+
 ### 3. Client
 
 ```bash
@@ -173,6 +188,42 @@ more or less continuously.
 > does not migrate a bank's existing pages — each keeps the trigger it was born
 > with and needs `PATCH /v1/default/banks/<bank>/knowledge-base/nodes/<id>` to
 > move. On a rebuild, write this file *before* the first session in each repo.
+
+### Server settings (`~/.hindsight/hindsight.env`)
+
+Three are load-bearing, each for a reason you would not guess:
+
+**`HINDSIGHT_API_LLM_OLLAMA_NUM_CTX=16384`** — Ollama's default is 4096 and
+**overflow is silent**: it truncates the prompt, and extraction quietly loses part
+of the transcript. Measured against real traffic, extraction sends ~2.5k tokens and
+consolidation averages ~7.1k with outliers past 10k. Sliding-window attention keeps
+the full 16k KV cache to a few hundred MiB at `q8_0`, so headroom is cheap.
+
+**`HINDSIGHT_API_LLM_MAX_CONCURRENT`** must match `OLLAMA_NUM_PARALLEL`. Lower and
+requests queue server-side however many slots Ollama has; higher and they pile into
+Ollama's queue and time out. Both are **3** today.
+
+**`HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU=true`** (and the reranker equivalent) —
+the embedding and reranker models are tiny (33M and 22M params) but took ~1.1 GiB
+of VRAM, pushing the total past the card and making Ollama spill *LLM* layers to
+CPU: a ~10× slowdown on the model that matters, to save milliseconds on two that
+don't. Recall still returns in ~0.45 s with both on CPU.
+
+### Splitting models per scope
+
+One local model serves extraction, consolidation and reflection, because there is
+VRAM for exactly one. Hindsight does support a split —
+`HINDSIGHT_API_{RETAIN,CONSOLIDATION,REFLECT}_LLM_MODEL`, each with its own
+`_MAX_CONCURRENT`.
+
+If quality ever becomes the weak link, **move consolidation first**. Extraction is
+mechanical schema-filling whose errors are local and recoverable; consolidation
+decides merge-vs-create against existing state, and its errors are permanent and
+compounding — a bad merge collapses two distinct facts irreversibly.
+
+Two models cannot be co-resident on a 16 GB card, so a local split means Ollama
+swaps between them on every call. It is only worth doing against a hosted model,
+which reintroduces per-call spend for ~25% of volume.
 
 ### Cadence settings worth revisiting per repo
 
@@ -237,6 +288,20 @@ curl -s http://127.0.0.1:9077/metrics | grep '^hindsight_llm_calls_total'
 
 A backfill on a metered provider once burned most of a monthly limit in a morning,
 and it did not show up in `/cost`.
+
+**There is no redaction — anywhere.** Neither the server nor the client has
+secret-scrubbing, exclusion patterns, or `<private>` handling. Transcripts are
+retained whole, so anything echoed through a command — command output, file
+contents, env dumps, API responses — can be extracted into the bank and surfaced
+into a later session. The mitigation is behavioural, not technical. Banks are
+per-repo and individually deletable, so a contaminated one can be dropped alone:
+`curl -X DELETE http://127.0.0.1:9077/v1/default/banks/cc-<repo>`.
+
+**Never benchmark the model with `/api/generate`.** It takes a raw prompt and does
+not apply the chat template; this model then degenerates into repetition loops and
+never emits a stop token, which looks exactly like "can't do structured output".
+Hindsight uses `/api/chat`. `/api/generate` also hides the reasoning channel on a
+thinking model, so a perfectly good call can look like it returned nothing.
 
 **The survey never reads `AGENTS.md` or `CLAUDE.md`** — by design. They are live,
 user-controlled instructions, and a stale copy captured as memory could override
