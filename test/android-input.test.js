@@ -175,20 +175,87 @@ test('V61: focusin seeds the mirror, so a keydown-less input is not swallowed', 
   assert.deepEqual(sent, ['dictated']);
 });
 
-test('V61: keypress means xterm already sent it — input must not send it twice', () => {
-  // Android with a paired hardware keyboard: xterm's _keyPress fires and
-  // sends the char, then `input` still arrives.
+test('V61: a printable key is OURS — xterm never sees keydown or keypress', () => {
+  // stopImmediatePropagation stops propagation, not the default action: Chrome
+  // still fires keypress, and xterm's own keypress listener would send the
+  // character on top of our diff. Both must be suppressed (B18).
   const { doc, sent, textarea, fire } = makePage();
   installAndroidInput(doc);
-  fire('keydown', { keyCode: 65 });
-  fire('keypress', { keyCode: 97 });
+  assert.equal(fire('keydown', { keyCode: 65, key: 'a' }).stopped, true);
+  assert.equal(fire('keypress', { keyCode: 97, key: 'a' }).stopped, true);
   textarea.value = 'a';
   fire('input', {});
-  assert.deepEqual(sent, []);
-  // ...and the mirror adopted it, so the next real char is not re-sent with it.
-  textarea.value = 'ab';
+  assert.deepEqual(sent, ['a'], 'exactly one sender');
+});
+
+test('V61: space is a printable key, so the autocorrect that rides it is ours (B18)', () => {
+  // The doubling report: Gboard commits the corrected word together with the
+  // space. If xterm owned space it would send " " BEFORE the input event, so
+  // the correction would be diffed against the wrong text and land out of
+  // order on top of the word already sent.
+  const { doc, sent, textarea, fire, type } = makePage();
+  installAndroidInput(doc);
+  for (const ch of 'teh') type(ch);
+  assert.deepEqual(sent, ['t', 'e', 'h']);
+  sent.length = 0;
+  assert.equal(fire('keydown', { keyCode: 32, key: ' ' }).stopped, true);
+  assert.equal(fire('keypress', { keyCode: 32, key: ' ' }).stopped, true);
+  textarea.value = 'the ';
   fire('input', {});
-  assert.deepEqual(sent, ['b']);
+  assert.deepEqual(sent, [DEL + DEL + 'he '], 'one correction, no duplicate word');
+});
+
+test('V61: a control key is XTERM\'s — keydown and keypress pass through', () => {
+  const { doc, fire } = makePage();
+  installAndroidInput(doc);
+  for (const key of ['Enter', 'Backspace', 'ArrowLeft', 'Tab', 'Escape']) {
+    assert.equal(fire('keydown', { key }).stopped, false, key);
+    assert.equal(fire('keypress', { key }).stopped, false, key);
+  }
+});
+
+test('V61: a modifier combo is XTERM\'s (Ctrl-C must stay a control sequence)', () => {
+  const { doc, fire } = makePage();
+  installAndroidInput(doc);
+  assert.equal(fire('keydown', { key: 'c', ctrlKey: true }).stopped, false);
+  assert.equal(fire('keydown', { key: 'a', metaKey: true }).stopped, false);
+  assert.equal(fire('keydown', { key: 'b', altKey: true }).stopped, false);
+});
+
+test('V61: the textarea change from an xterm-owned key is adopted, not re-sent', () => {
+  // Backspace: xterm sends 0x7f itself and the textarea also shrinks. Diffing
+  // that would send a second DEL.
+  const { doc, sent, textarea, fire, type } = makePage();
+  installAndroidInput(doc);
+  for (const ch of 'ab') type(ch);
+  sent.length = 0;
+  fire('keydown', { key: 'Backspace', keyCode: 8 });
+  textarea.value = 'a';
+  fire('input', {});
+  assert.deepEqual(sent, [], 'xterm already sent the DEL');
+  // ...and the mirror tracked it, so the next character diffs correctly.
+  type('c');
+  assert.deepEqual(sent, ['c']);
+});
+
+test('V61: an IME keydown still wins even after an xterm-owned key', () => {
+  const { doc, sent, textarea, fire } = makePage();
+  installAndroidInput(doc);
+  fire('keydown', { key: 'Enter' });
+  fire('keydown', { keyCode: 229, key: 'Unidentified' });
+  textarea.value = 'z';
+  fire('input', {});
+  assert.deepEqual(sent, ['z']);
+});
+
+test('V61: compositionstart reclaims ownership from a pending xterm key', () => {
+  const { doc, sent, textarea, fire } = makePage();
+  installAndroidInput(doc);
+  fire('keydown', { key: 'Enter' });
+  fire('compositionstart', {});
+  textarea.value = 'w';
+  fire('input', {});
+  assert.deepEqual(sent, ['w']);
 });
 
 test('V61: emoji edits never split a surrogate pair', () => {
@@ -211,7 +278,7 @@ test('V61: the scratch textarea is trimmed to a tail, never emptied', () => {
   // deleteContentBackward when there is something to delete.
   const { doc, textarea, fire } = makePage();
   installAndroidInput(doc);
-  textarea.value = 'x'.repeat(600);
+  textarea.value = 'x'.repeat(600) + ' ';
   fire('input', {});
   assert.equal(textarea.value.length, 64);
   assert.ok(textarea.value.length > 0);
@@ -229,7 +296,7 @@ test('V61: no trimming while a composition is live', () => {
 test('V61: trimming leaves the diff correct for the next keystroke', () => {
   const { doc, sent, textarea, fire } = makePage();
   installAndroidInput(doc);
-  textarea.value = 'x'.repeat(600);
+  textarea.value = 'x'.repeat(600) + ' ';
   fire('input', {});
   sent.length = 0;
   textarea.value += 'y';
@@ -267,4 +334,25 @@ test('V61: installAndroidInput survives .toString() round-trip (no closure refs)
   reconstructed(doc);
   for (const ch of 'hi') type(ch);
   assert.deepEqual(sent, ['h', 'i']);
+});
+
+test('V61: mid-word growth is never trimmed — Gboard tracks its region by offset', () => {
+  // Rewriting the box under a live composing region desyncs the keyboard from
+  // the DOM, and the next correction is computed against the wrong span (B18).
+  const { doc, textarea, fire } = makePage();
+  installAndroidInput(doc);
+  textarea.value = 'x'.repeat(600);      // long, but mid-word
+  fire('input', {});
+  assert.equal(textarea.value.length, 600, 'no boundary yet, so no rewrite');
+  textarea.value += ' ';                 // boundary reached
+  fire('input', {});
+  assert.equal(textarea.value.length, 64);
+});
+
+test('V61: HARD_CAP trims even without a boundary, so growth stays bounded', () => {
+  const { doc, textarea, fire } = makePage();
+  installAndroidInput(doc);
+  textarea.value = 'x'.repeat(3000);
+  fire('input', {});
+  assert.equal(textarea.value.length, 64);
 });

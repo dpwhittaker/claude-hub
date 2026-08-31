@@ -246,20 +246,36 @@ Things that look like details but are load-bearing:
 
 - **Gated on `/Android/i`.** Desktop and iOS keep xterm's stock path; the
   shim returns before binding anything.
-- **Only keyCode 229 is swallowed.** Every real key still reaches xterm, so
-  Enter, arrows and a paired hardware keyboard behave exactly as before. A
-  `keypress` sets a flag so a character xterm's `_keyPress` already sent is
-  not sent a second time from `input`.
+- **Exactly one sender per key**, decided at keydown by `xtermOwns`. Text
+  keys are the shim's — the IME sentinel *and* every printable key, space
+  included — and are suppressed at **both** `keydown` and `keypress`.
+  `stopImmediatePropagation` stops propagation but **not the browser's
+  default action**, so Chrome still fires `keypress` and `input`, and xterm's
+  own listeners are live on the textarea: suppressing only `keydown` lets
+  xterm send the character on top of the diff (B18). Control keys — Enter,
+  Tab, arrows, Escape, Backspace, Home/End, function keys, anything with a
+  modifier — stay xterm's, and the textarea change they cause is *adopted*
+  into the mirror rather than re-sent.
 - **DEL per codepoint, not per UTF-16 unit** — a line editor erases an emoji
   with one backspace, and the prefix scan refuses to land between surrogates.
 - **The textarea is never emptied.** Gboard only emits
   `deleteContentBackward` when there is something to delete, so an empty box
-  silently eats backspaces. It is trimmed to a 64-char tail past 512 instead.
+  silently eats backspaces. It is trimmed to a 64-char tail past 512 instead —
+  and only at a whitespace boundary, because rewriting the box mid-word moves
+  text under Gboard's composing region (tracked by offset) and desyncs the
+  keyboard from the DOM (B18). A 2048 hard cap is the escape hatch.
 - **`focusin` seeds the mirror**, so an `input` with no preceding keydown
   (voice, suggestion-strip tap) is diffed rather than swallowed as first
   sight of the element.
 - Only public xterm API is used: `term.textarea`, `term.input(data, true)`,
   `term.scrollToBottom()`.
+
+> **Verifying a change here: hook `term.onData`, not `term.input`.** xterm's
+> own path calls `coreService.triggerDataEvent()` directly and never goes
+> through the public `term.input()`, so wrapping `input` shows you only the
+> shim's output and will happily report "no duplicates" while xterm is
+> double-sending beside you. `onData` is the only hook that sees both. That
+> mistake is what let B18 ship.
 
 `installKeyboardFit` is the other half. It used to forward *every*
 visualViewport `resize` as a synthetic `window` `resize`; ttyd binds that
