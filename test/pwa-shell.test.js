@@ -27,6 +27,7 @@ test('/p/<project>/ serves the shell with all three panes wired', async () => {
     const html = await r.text();
 
     assert.match(html, /<iframe id="pane-open"/, 'Open pane');
+    assert.match(html, /<iframe id="pane-view"/, 'Browse pane');
     assert.match(html, /id="pane-term"/, 'Develop pane');
     assert.match(html, /<button id="fab"/, 'view-cycling FAB');
     // Installable: the manifest + service worker are the PWA half of this.
@@ -35,6 +36,53 @@ test('/p/<project>/ serves the shell with all three panes wired', async () => {
   } finally {
     await fx.close();
   }
+});
+
+// The FAB's single-pane rotation. VIEW is the third state: without it the
+// Browse shell is unreachable on a phone, where the split's right half — its
+// only other home — never appears.
+test('the FAB cycle is TERM > OPEN > VIEW, with SPLIT spliced in when enabled', () => {
+  const html = renderShellHtml('demo', '/demo/', '/term/demo__s1/', 'open');
+  assert.match(html, /const CYCLE = \['term', 'open', 'view'\]/);
+  // Each rotation entry needs a pane and a FAB label to land on.
+  for (const v of ['term', 'open', 'view', 'split']) {
+    assert.match(html, new RegExp(v + ": '" + v.toUpperCase() + "'"), v + ' label');
+  }
+});
+
+// An installed PWA has no browser chrome, so the terminal strip is the only
+// route back to the hub — and it has to sit ahead of the tabs, which scroll.
+test('a home link opens the tabstrip, ahead of the tabs and the + button', () => {
+  const html = renderShellHtml('demo', '/demo/', '/term/demo__s1/', 'open');
+  assert.match(
+    html,
+    /<div class="term-tabs" id="term-tabs">\s*<a class="term-home" href="\/"/,
+    'home link is the tabstrip\'s first child',
+  );
+  assert.match(html, /aria-label="claude-hub home"/);
+});
+
+// Long-press stopped being a bare refresh: it opens a menu carrying that
+// refresh plus the split toggle, over a scrim (every pane is an iframe, so an
+// outside tap would otherwise never reach the shell document).
+test('long-press menu offers refresh + a checkable split toggle', () => {
+  const html = renderShellHtml('demo', '/demo/', '/term/demo__s1/', 'open');
+  assert.match(html, /<div id="fab-scrim" hidden>/);
+  assert.match(html, /<div id="fab-menu" role="menu"/);
+  assert.match(html, /id="fab-refresh" role="menuitem"/);
+  assert.match(html, /id="fab-split" role="menuitemcheckbox" aria-checked="false"/);
+});
+
+// Split is a per-device, per-project preference that beats the media query in
+// both directions — a phone can be forced into split, a landscape tablet out.
+test('the split preference is stored per project, not globally', () => {
+  const a = renderShellHtml('alpha', '/a/', '/term/alpha__s1/', 'open');
+  const b = renderShellHtml('beta', '/b/', '/term/beta__s1/', 'open');
+  assert.match(a, /'claude-hub:split:' \+ cfg\.name/);
+  assert.match(a, /"name":"alpha"/);
+  assert.match(b, /"name":"beta"/);
+  // The media query is consulted only when the stored preference is unset.
+  assert.match(a, /splitPref === null \? splitMq\.matches : splitPref/);
 });
 
 test('shell data block carries the project\'s own URLs, not defaults', async () => {
@@ -52,11 +100,13 @@ test('shell data block carries the project\'s own URLs, not defaults', async () 
   }
 });
 
-test('?view=term starts on the terminal, default starts on Open', async () => {
+test('?view= picks the starting pane, default starts on Open', async () => {
   const fx = await startFixture();
   try {
     mkProject(fx.projectsRoot, 'demo', { createdAt: '2026-01-01T00:00:00Z' });
     assert.match(await (await fetch(fx.url + '/p/demo/?view=term')).text(), /"initial":"term"/);
+    // view is a bookmarkable start now that the FAB cycle reaches Browse.
+    assert.match(await (await fetch(fx.url + '/p/demo/?view=view')).text(), /"initial":"view"/);
     assert.match(await (await fetch(fx.url + '/p/demo/')).text(), /"initial":"open"/);
     // Anything unrecognised falls back to Open rather than erroring.
     assert.match(await (await fetch(fx.url + '/p/demo/?view=bogus')).text(), /"initial":"open"/);

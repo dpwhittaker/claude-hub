@@ -969,11 +969,11 @@ const ASSET_MIME = {
 };
 const ASSET_FILE_RE = /^[A-Za-z0-9._-]+$/;
 
-// /p/<name>/ — dual-iframe shell. Mounts the project's Open view and its
-// Develop terminal side-by-side (one visible, one hidden) so a FAB tap toggles
-// without rerendering either side. ttyd stays connected (no xterm redraw,
-// scrollback intact), Vite/HMR socket stays alive. Lazy-mount the inactive
-// iframe on first toggle to halve cold-start cost.
+// /p/<name>/ — three-pane shell. Mounts the project's Open view, its Browse
+// view and its Develop terminal as siblings (one visible, the rest hidden) so
+// a FAB tap swaps without rerendering any of them. ttyd stays connected (no
+// xterm redraw, scrollback intact), Vite/HMR socket stays alive. The idle
+// panes mount on a stagger after first paint to keep cold start cheap.
 function readProjectOpenUrl(name) {
   const metaPath = path.join(PROJECTS_ROOT, name, '.project-meta.json');
   let meta = {};
@@ -989,7 +989,7 @@ function handleShellRequest(res, name, initialView) {
   }
   const openUrl = readProjectOpenUrl(name);
   const termUrl = `/term/${lookupActiveTermKey(name)}/`;
-  const start = initialView === 'term' ? 'term' : 'open';
+  const start = initialView === 'term' || initialView === 'view' ? initialView : 'open';
   const html = renderShellHtml(name, openUrl, termUrl, start);
   res.writeHead(200, {
     'Content-Type': 'text/html; charset=utf-8',
@@ -2281,7 +2281,7 @@ const server = http.createServer(async (req, res) => {
   if (urlPathOnly.startsWith('/assets/')) {
     return serveAsset(res, urlPathOnly.slice('/assets/'.length), 'public, max-age=86400');
   }
-  // /p/<name>/ — dual-iframe shell for fast Develop↔Open toggle inside the PWA.
+  // /p/<name>/ — three-pane shell for fast Develop/Open/Browse cycling in the PWA.
   // Matches /p/<name>, /p/<name>/, or /p/<name>/?view=... only — anything
   // deeper falls through to 404 (no shell sub-resources today).
   {
@@ -2300,7 +2300,7 @@ const server = http.createServer(async (req, res) => {
       }
       const query = new URLSearchParams(url.split('?')[1] || '');
       const view = query.get('view');
-      handleShellRequest(res, name, view === 'term' ? 'term' : 'open');
+      handleShellRequest(res, name, view);
       return;
     }
   }

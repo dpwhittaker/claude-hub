@@ -199,7 +199,7 @@ against a scratch `PROJECTS_ROOT`.
 | module | what |
 |---|---|
 | `lib/view-shell.js` | The Browse two-pane document (`/view/<proj>/`) — tree, tabs, develop pane, client script. |
-| `lib/pwa-shell.js` | The per-project PWA shell (`/p/<proj>/`) — installable, FAB view cycle, split landscape. |
+| `lib/pwa-shell.js` | The per-project PWA shell (`/p/<proj>/`) — installable, home link in the term tabstrip, FAB cycling TERM→OPEN→VIEW (+SPLIT), long-press menu (refresh + sticky split preference). |
 | `lib/project-cards.js` | Landing-card assembly: sentinel-over-README precedence + worktree ordering (V55). |
 | `lib/readme-meta.js` | README text → `{title, description, tags}`. |
 | `lib/worktree.js` | Git-worktree teardown plan (V56). |
