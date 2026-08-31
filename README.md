@@ -28,19 +28,19 @@ unless you opt in (see "Sharing across devices" below).
 
 ## Screenshots
 
-**Landing page** — every project gets a card with badges, description, and three actions. The `+` tile opens a dialog that bootstraps a brand-new project end-to-end (folder, README, AGENTS.md, optional `gh repo create` / clone, ttyd terminal, fresh Claude Code session asking "what should we build here?"). Claude is the engine behind every card, every Develop button, every scaffolded project:
+**Landing page** — every project gets a card with badges, description, and three actions. A `git worktree` checkout of another project (`Pathfinder — fog-of-war` here) gets an amber **worktree** badge and a line naming the parent and branch, and sorts directly beneath the project it branched from rather than drifting to the end of the list by age. The `+` tile opens a dialog that bootstraps a brand-new project end-to-end (folder, README, AGENTS.md, optional `gh repo create` / clone, ttyd terminal, fresh Claude Code session asking "what should we build here?"). Claude is the engine behind every card, every Develop button, every scaffolded project:
 
 ![Landing page](docs/img/landing.png)
 
-**Browse** (`/view/<project>/`) — collapsible tree on the left (gitignored entries dimmed and lazy-loaded), tabbed iframes on the right. README opens in the initial tab; markdown renders with YAML frontmatter highlighted, `*.html` files get an eye icon to render the page in-place, and the file watcher pushes live updates so edits Claude makes in your terminal show up here without a manual refresh:
+**Browse** (`/view/<project>/`) — collapsible tree on the left (gitignored entries dimmed and lazy-loaded, names tinted by git status), tabbed iframes on the right. README opens in the initial tab; markdown renders with YAML frontmatter highlighted, and an eye icon renders a file in place — `*.html` and `*.svg` directly, plus any file a project maps to a URL via `routes` in its `.project-meta.json`, which is how a Markdown source previews through the site's real renderer. The file watcher pushes live updates, so edits Claude makes in your terminal show up here without a manual refresh:
 
 ![Browse — file viewer](docs/img/browse-default.png)
 
-**Browse + Develop side-by-side** — the terminal icon in the header (or `?dev=1` on the URL) opens the `Develop` pane to the right with a draggable splitter. The same long-lived tmux Claude session that you'd reach via the `Develop` button is now beside the file viewer, so you can read, ask, and edit in one window. This is the core workflow: Claude writes, the tree refreshes, your tab reloads, you keep reading:
+**Browse + Develop together** — the terminal icon in the header (or `?dev=1` on the URL) opens the `Develop` pane below the tree and tabs, spanning the full width, with a draggable splitter between them. The same long-lived tmux Claude session you'd reach via the `Develop` button is now in the same window as the file viewer, so you can read, ask, and edit without switching. Each project can hold several Claude conversations at once — the tab strip along the top of the pane switches between them, and each one keeps its own scrollback. This is the core workflow: Claude writes, the tree refreshes, your tab reloads, you keep reading:
 
 ![Browse + Develop pane](docs/img/browse-with-develop.png)
 
-**Develop** (`/term/<project>/`) — the same browser terminal full-screen. ttyd attaches to a per-project tmux session running `claude --continue`, so you pick up the same conversation from any device. Claude is doing the work; the hub is the interface:
+**Develop** (`/term/<project>/`) — the same browser terminal full-screen. ttyd attaches to a long-lived tmux session per conversation, and each one resumes its own Claude session by id — so you pick up exactly where you left off, from any device, on whichever conversation you were in. Claude is doing the work; the hub is the interface:
 
 ![Develop terminal](docs/img/develop.png)
 

@@ -217,11 +217,10 @@
       font-size: 0.78rem;
       color: var(--muted);
       margin: -2px 0 8px;
-      display: flex;
-      align-items: baseline;
-      gap: 6px;
-      flex-wrap: wrap;
+      line-height: 1.6;
     }
+    /* Keep the separator glued to the branch so it can't wrap off alone. */
+    .card .provenance .branch { white-space: nowrap; }
     .card .provenance a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--edge); }
     .card .provenance a:hover { color: var(--accent); border-bottom-color: var(--accent); }
     .card .provenance code {
@@ -483,7 +482,9 @@
       const link = parent
         ? `<a href="#project-${encodeURIComponent(p.worktreeOf)}" title="${name}">${label}</a>`
         : `<span title="${name} — no longer on this hub">${label}</span>`;
-      const branch = p.branch ? ` · <code>${escapeHtml(p.branch)}</code>` : '';
+      const branch = p.branch
+        ? ` <span class="branch">· <code>${escapeHtml(p.branch)}</code></span>`
+        : '';
       return `<div class="provenance">⑂ worktree of ${link}${branch}</div>`;
     }
 
