@@ -11,7 +11,7 @@ A new idea hits at 2am? Tap `+`. claude-hub mints a fresh project — folder, RE
 Each project gets a card with three actions:
 
 - **Open** — the live web app, if the project has one (otherwise the rendered README).
-- **Develop** — a browser terminal attached to a long-lived `tmux` session running Claude Code, so you can pick up where you left off from any device.
+- **Develop** — a browser terminal attached to a long-lived `tmux` session running Claude Code, so you can pick up where you left off from any device. Opens the project's [PWA shell](#on-your-phone-the-pwa) in terminal view, so the FAB is one tap away.
 - **Browse** — a two-pane file viewer (collapsible tree on the left, tabbed file panes on the right, gitignored entries dimmed, live updates pushed over WebSocket so edits Claude makes show up without a refresh).
 
 Plus a `+` card that creates a brand-new project end-to-end: makes the
@@ -51,6 +51,47 @@ unless you opt in (see "Sharing across devices" below).
 > **Cloning someone else's repo?** Fork it on GitHub first; the dropdown only lists repos your `gh auth` account owns. The fork appears in the list and you clone from there. (Power-user escape hatch: `POST /api/projects` with `github: { mode: 'clone', source: 'owner/repo' }` accepts arbitrary slugs/URLs directly.)
 
 > Refresh these screenshots after a UI change with the `screenshots` skill (in `.claude/skills/screenshots/`).
+
+## On your phone (the PWA)
+
+Every project also has an installable shell at **`/p/<project>/`** — the URL the
+landing card's **Develop** button actually opens. Same three surfaces as the
+desktop layout (terminal, the live app, the file browser), rebuilt for a phone:
+no browser chrome, no tab bar, one thumb. Add it to your home screen and it
+launches standalone, straight into that project.
+
+**One control: the FAB.** A draggable floating button (flick it to whichever
+corner suits your grip; the position sticks) cycles the panes in a fixed order —
+**TERM → OPEN → VIEW** — and its label always names where the *next* tap goes,
+not where you are. All three panes stay mounted, each holding one fixed source
+for the life of the page, so switching is instant and nothing re-navigates: the
+terminal keeps its scrollback and its ttyd attachment while you go read a file
+and come back.
+
+**Long-press it** (550ms) for a menu instead of a switch:
+
+- **Refresh** — reloads only the pane you're actually looking at, and says which
+  one that is. A stray press can't drop the terminal's connection.
+- **Split view** — a checkbox, and the *only* way in or out of split. Split pins
+  the terminal to the left half and puts the app or the file browser on the
+  right; a FAB tap then swaps just the right half and stays split. The
+  preference is sticky per device *and* per project, and it overrides the
+  landscape-tablet default in both directions — force a phone into split, or
+  force a wide screen out of it.
+
+**Getting back.** An installed PWA has no browser back button, so the terminal's
+tab strip carries a home link as its first item, pinned to the left so the
+strip's own sideways scrolling can't hide it.
+
+`?view=term|open|view|split` picks the starting pane — that's how the landing
+card deep-links you into the terminal.
+
+> Two shims are what make the terminal genuinely usable on a phone rather than
+> merely present: Android's soft keyboard drops keystrokes through xterm.js's IME
+> path, and ttyd never reconnects itself after a real network drop (a phone
+> sleeping, a wifi↔cellular handoff). Both are fixed by scripts injected into
+> every terminal page — see `AGENTS.md` → "Mobile terminal input (Android)" and
+> "Terminal reconnect".
 
 ## Quickstart
 
