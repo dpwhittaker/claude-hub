@@ -28,4 +28,16 @@ module.exports = [
       'no-control-regex': 'off',
     },
   },
+  // The two files that run in the browser, not under node. Everything else
+  // here is CommonJS server code; the shims under lib/ are node modules whose
+  // functions are stringified into a page, so they keep the node globals and
+  // take `window`/`document` as arguments (V42).
+  {
+    files: ['assets/sw.js'],
+    languageOptions: { globals: { ...globals.serviceworker } },
+  },
+  {
+    files: ['upload-dialog.js'],
+    languageOptions: { globals: { ...globals.browser } },
+  },
 ];
