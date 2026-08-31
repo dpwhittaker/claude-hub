@@ -262,8 +262,16 @@ test('V42: installTermReconnect survives the round-trip through new Function', (
 });
 
 // Ordering constraint: both shims wrap window.WebSocket, and this one has to
-// wrap osc52's wrapper (not the other way round) so it sees the socket ttyd
-// will actually use.
+// wrap osc52's wrapper (not the other way round) so `const Orig = view.WebSocket`
+// captures the scanner rather than the native constructor.
+//
+// Pinned here because reordering fails SILENTLY and late. ttyd builds its first
+// socket through `view.WebSocket`, which is osc52's wrapper whichever order the
+// two are installed in — so OSC 52 keeps working right up until the first
+// network drop, and only the sockets the reconnect shim builds afterwards
+// bypass the scanner. The symptom is "tmux copy stopped reaching the system
+// clipboard, but only after a reconnect", which nobody would trace back to an
+// injection-order edit weeks earlier.
 test('V63: the injected blob puts OSC52 ahead of the reconnect shim', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const m = /const injectBlob = ([\s\S]*?);/.exec(src);
@@ -274,4 +282,19 @@ test('V63: the injected blob puts OSC52 ahead of the reconnect shim', () => {
     blob.indexOf('OSC52_INJECT') < blob.indexOf('TERM_RECONNECT_INJECT'),
     'OSC52_INJECT must come first',
   );
+});
+
+// The other half of the same constraint. The three DOM shims are gated on
+// DOMContentLoaded; matching that style here would be silently fatal — ttyd
+// constructs its socket from componentDidMount, so a gated wrapper installs
+// after the constructor it was supposed to replace and simply never sees a
+// socket. Nothing throws; reconnect and clipboard both just stop existing.
+test('V63: both WebSocket-wrapping shims stay ungated by DOMContentLoaded', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  for (const name of ['OSC52_INJECT', 'TERM_RECONNECT_INJECT']) {
+    const m = new RegExp('const ' + name + ' = (.*);').exec(src);
+    assert.ok(m, name + ' declaration found');
+    assert.ok(!m[1].includes('DOMContentLoaded'), name + ' must run at head parse');
+    assert.ok(m[1].includes('(window)'), name + ' takes the view, not the document');
+  }
 });
