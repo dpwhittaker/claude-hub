@@ -40,11 +40,13 @@ test('/p/<project>/ serves the shell with all three panes wired', async () => {
 
 // The FAB's single-pane rotation. VIEW is the third state: without it the
 // Browse shell is unreachable on a phone, where the split's right half — its
-// only other home — never appears.
-test('the FAB cycle is TERM > OPEN > VIEW, with SPLIT spliced in when enabled', () => {
+// only other home — never appears. SPLIT is deliberately absent: it is a mode
+// the long-press menu owns, and while split a tap swaps the right half only.
+test('the FAB rotation is TERM > OPEN > VIEW, and never includes SPLIT', () => {
   const html = renderShellHtml('demo', '/demo/', '/term/demo__s1/', 'open');
   assert.match(html, /const CYCLE = \['term', 'open', 'view'\]/);
-  // Each rotation entry needs a pane and a FAB label to land on.
+  assert.match(html, /if \(cur === 'split'\) return otherRight\(rightView\)/);
+  // Each state still needs a pane and a FAB label to land on.
   for (const v of ['term', 'open', 'view', 'split']) {
     assert.match(html, new RegExp(v + ": '" + v.toUpperCase() + "'"), v + ' label');
   }

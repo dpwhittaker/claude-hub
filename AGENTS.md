@@ -199,19 +199,76 @@ against a scratch `PROJECTS_ROOT`.
 | module | what |
 |---|---|
 | `lib/view-shell.js` | The Browse two-pane document (`/view/<proj>/`) — tree, tabs, develop pane, client script. |
-| `lib/pwa-shell.js` | The per-project PWA shell (`/p/<proj>/`) — installable, home link in the term tabstrip, FAB cycling TERM→OPEN→VIEW (+SPLIT), long-press menu (refresh + sticky split preference). |
+| `lib/pwa-shell.js` | The per-project PWA shell (`/p/<proj>/`) — installable, home link in the term tabstrip, FAB cycling TERM→OPEN→VIEW (swaps the right half while split), long-press menu (refresh + sticky split preference, the only way in/out of split). |
 | `lib/project-cards.js` | Landing-card assembly: sentinel-over-README precedence + worktree ordering (V55). |
 | `lib/readme-meta.js` | README text → `{title, description, tags}`. |
 | `lib/worktree.js` | Git-worktree teardown plan (V56). |
 | `lib/file-routes.js` | `routes` glob → URL rewriting (V54). |
 | `lib/term-sessions.js` | Develop-pane tab map io (V47). |
+| `lib/android-input.js` | Android soft-keyboard input shim for ttyd pages (V61, B17). |
+| `lib/keyboard-fit.js` | Mobile viewport fit for ttyd pages; `patchViewportMeta` + `installKeyboardFit` (V62). |
 | `lib/escape-html.js` | The one server-side HTML escaper. |
 
-Six helpers are shared between server and browser by injecting their source
+Nine helpers are shared between server and browser by injecting their source
 with `.toString()` (`tabKey`, `installTouchWheel`, `isEmbedder`,
-`tabsToReload`, `matchGlob`, `routeForPath`). **Those must stay
+`tabsToReload`, `matchGlob`, `routeForPath`, `installOsc52Bridge`,
+`installKeyboardFit`, `installAndroidInput`). **Those must stay
 self-contained** — no closures over module scope, no `require` inside them —
 because the browser only receives the function body.
+
+## Mobile terminal input (Android)
+
+Every `/term/<key>/` HTML response gets four scripts spliced into `<head>` on
+the way through the proxy (`proxyRes`, `server.js`): `installOsc52Bridge`,
+the scrollbar-hide style, `installTouchWheel` (V40) and — added for B17 —
+`installKeyboardFit` (V62) plus `installAndroidInput` (V61).
+
+**Why the Android one exists.** ttyd 1.7.7 bundles xterm.js 5.x, and Gboard
+reports every character as a `keydown` with keyCode 229. xterm routes that
+into `CompositionHelper._handleAnyTextareaChanges`, which snapshots
+`textarea.value` and diffs it inside a `setTimeout(0)` guarded by
+`!_isComposing`. That loses keystrokes two ways, both worse the faster you
+type: the macrotask competes with the renderer (tmux repainting a
+full-screen TUI per echoed byte starves it), and a composition opening
+between the keydown and the timer discards the diff outright. There is no
+local echo, so a dropped character never appears — it reads as the terminal
+lagging the server.
+
+`lib/android-input.js` takes the path over. It works because of an
+**event-phase asymmetry**: xterm binds `compositionstart|update|end` on the
+textarea in the *bubble* phase, and `keydown|keypress|input` in the capture
+phase *on the textarea itself* — so a capture listener on `document` runs
+before all of them and `stopImmediatePropagation` suppresses xterm's handling
+without touching a private field. It then diffs the textarea against a mirror
+**synchronously, in the handler that observed the change**.
+
+Things that look like details but are load-bearing:
+
+- **Gated on `/Android/i`.** Desktop and iOS keep xterm's stock path; the
+  shim returns before binding anything.
+- **Only keyCode 229 is swallowed.** Every real key still reaches xterm, so
+  Enter, arrows and a paired hardware keyboard behave exactly as before. A
+  `keypress` sets a flag so a character xterm's `_keyPress` already sent is
+  not sent a second time from `input`.
+- **DEL per codepoint, not per UTF-16 unit** — a line editor erases an emoji
+  with one backspace, and the prefix scan refuses to land between surrogates.
+- **The textarea is never emptied.** Gboard only emits
+  `deleteContentBackward` when there is something to delete, so an empty box
+  silently eats backspaces. It is trimmed to a 64-char tail past 512 instead.
+- **`focusin` seeds the mirror**, so an `input` with no preceding keydown
+  (voice, suggestion-strip tap) is diffed rather than swallowed as first
+  sight of the element.
+- Only public xterm API is used: `term.textarea`, `term.input(data, true)`,
+  `term.scrollToBottom()`.
+
+`installKeyboardFit` is the other half. It used to forward *every*
+visualViewport `resize` as a synthetic `window` `resize`; ttyd binds that
+straight to `fitAddon.fit()` with **no debounce**, and a fit that lands on new
+rows/cols sends `RESIZE_TERMINAL` → SIGWINCH → full TUI repaint. Gboard fires
+vv `resize` for no-op suggestion-strip toggles as you type, so that was a
+whole redraw per keystroke competing with input. It now drops resizes that
+changed neither dimension and coalesces the dispatch to one per animation
+frame (V62).
 
 ## Common ops
 
@@ -299,6 +356,7 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 - **Vite base path splits** — dev base = `/<NAME>/` (proxy needs it, V20). Static deploy: `build:pages` bakes `/<NAME>/`, `build:firebase` bakes `/`. Don't unify.
 - **Firebase keys are public** — `VITE_FIREBASE_*` ship in the bundle by design. Gate access with Firestore/Storage security rules, not key secrecy.
 - **Never `rm -rf` a worktree project** — the parent repo holds its registry entry. Use the UI's delete (which runs `git worktree remove`) or `git -C ~/projects/<parent> worktree remove --force <dir>`. If one got removed the hard way, `git -C ~/projects/<parent> worktree prune` cleans up (B16).
+- **Upgrading ttyd/xterm invalidates the Android input shim's premise** — `lib/android-input.js` (V61) relies on xterm binding `compositionstart|update|end` in the *bubble* phase and on the public `term.textarea` / `term.input()` / `term.scrollToBottom()` surface. Re-check both against the new bundle before shipping an upgrade; if upstream ever fixes `_handleAnyTextareaChanges` (the `setTimeout(0)` + `!_isComposing` drop, B17), delete the shim rather than stacking it on a fixed path.
 - **Vite `allowedHosts` must cover the tailnet host** — Vite 403s (`Blocked request. This host … is not allowed`) any `Host` it doesn't recognise, and the proxy forwards the original header. Loopback tests pass while the tailnet URL fails, so **test through the real URL, not just `127.0.0.1:8002`**. Use the suffix wildcard `allowedHosts: ['.ts.net', 'localhost', '127.0.0.1']` — it matches any MagicDNS name without committing a hostname.
 
 See `SPEC.md` §B (bugs) + §V (invariants) for full history. Backprop new bugs via `/ck:spec bug: …`.

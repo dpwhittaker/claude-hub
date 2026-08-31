@@ -158,6 +158,14 @@ const TERM_INDEX_RE = /^\/term\/[A-Za-z0-9_.-]+\/?(?:\?.*)?$/;
 const TOUCH_WHEEL_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${require('./lib/touch-wheel').installTouchWheel.toString()})(document);});</script>`;
 const { patchViewportMeta, installKeyboardFit } = require('./lib/keyboard-fit');
 const KEYBOARD_FIT_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${installKeyboardFit.toString()})(document);});</script>`;
+// Android-only: take the IME input path off xterm's CompositionHelper, which
+// defers every keystroke to a setTimeout(0) and drops it outright if Gboard
+// opens a composition in the meantime (V61, B17). Self-gating on the UA, so
+// it is inert everywhere else. DOMContentLoaded is enough — the listeners sit
+// on `document` and resolve window.term lazily, so they can be installed
+// before ttyd has constructed the terminal.
+const { installAndroidInput } = require('./lib/android-input');
+const ANDROID_INPUT_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${installAndroidInput.toString()})(document);});</script>`;
 // OSC 52 → navigator.clipboard. Runs synchronously at <head> parse time (no
 // DOMContentLoaded gate) so it wraps window.WebSocket BEFORE ttyd's bundle
 // constructs its socket. tmux `set-clipboard on` emits OSC 52 on mouse
@@ -189,7 +197,8 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
     // Chrome/Android before layout. Then inject scripts into <head> (runs
     // before body parses) so ttyd's preact mount can't wipe us.
     html = patchViewportMeta(html);
-    const injectBlob = OSC52_INJECT + SCROLLBAR_HIDE_INJECT + TOUCH_WHEEL_INJECT + KEYBOARD_FIT_INJECT;
+    const injectBlob = OSC52_INJECT + SCROLLBAR_HIDE_INJECT + TOUCH_WHEEL_INJECT
+      + KEYBOARD_FIT_INJECT + ANDROID_INPUT_INJECT;
     if (html.includes('</head>')) {
       html = html.replace('</head>', injectBlob + '</head>');
     } else if (html.includes('</body>')) {
