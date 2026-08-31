@@ -29,7 +29,7 @@ Proxy = only Node process. Everything else (project apps, ttyd terminals) separa
 |---|---|
 | `/` | `landing.html`. Hardcoded cards for **Develop** (fresh claude in `~/projects`) and **Proxy** (this dir). Rest rendered dynamically from `/api/projects`. |
 | `/api/projects` | `GET` lists managed projects. `POST` creates new one (mkdir + AGENTS/README + `.project-meta.json` + `sudo systemctl enable --now ttyd@<name>`). |
-| `/api/projects/<name>` | `DELETE` stops `ttyd@<name>` plus any `extraUnits`, kills project's tmux session, removes folder. Needs `.project-meta.json` as sentinel. |
+| `/api/projects/<name>` | `DELETE` stops `ttyd@<name>` plus any `extraUnits`, kills project's tmux session, removes folder — via `git worktree remove` when the sentinel names a `worktreeOf` parent. Needs `.project-meta.json` as sentinel. |
 | `/api/view-tree/<name>` | `GET` returns project's recursive tree as JSON. With `?path=<sub>` returns one level lazily — file browser uses to expand dim dirs (`node_modules`, gitignored, …) on demand. |
 | `/view/<proj>/` | Two-pane viewer: collapsible tree (left, draggable splitter) + tabbed iframes (right). README.md opens in initial tab. |
 | `/view/<proj>/<file>` | Renders single file (markdown via `marked`, code via highlight.js, raw bytes via mime). `?embed=1` strips page chrome — used by two-pane viewer's iframes. `?raw=1` to download. |
@@ -56,19 +56,25 @@ Folder under `~/projects/` shows on landing page iff contains `.project-meta.jso
 | field | purpose |
 |---|---|
 | `name` | Folder name; informational. |
-| `createdAt` | ISO timestamp; cards sort by this. |
+| `createdAt` | ISO timestamp; cards sort by this. A worktree sorts under its parent's value instead of its own, so it lands beside the project it branched from. |
 | `openUrl` | Optional. Where card's "Open" button goes. Defaults `/view/<name>/README.md`. Set to `/<name>/` (or wherever) when project has live app reachable through proxy. |
 | `proxyTarget` | Optional. If set, claude-hub reverse-proxies project's prefix to this URL. Without it, no live route — only `/view/<name>/` and `/term/<name>/`. |
 | `proxyPrefix` | Optional. URL prefix to match. Defaults `/<name>`. Useful when folder name and public URL diverge. |
 | `stripPrefix` | Optional, default `true`. When `false`, prefix left on request — needed for upstreams that expect it (e.g. Vite with `base: "/<name>/"`). |
 | `extraUnits` | Optional list of systemd units to stop when project deleted via UI (plus `ttyd@<name>.service`). Useful when project runs own backend unit. |
+| `title` | Optional. Overrides the README H1 as the card title. Set on worktrees, which inherit the parent README verbatim. |
+| `description` | Optional. Overrides the README's first paragraph as the card description. Same reason. |
+| `worktreeOf` | Optional. Name of the project this folder is a `git worktree` of. Adds a `worktree` badge, a provenance line on the card, and routes DELETE through git. See "Git worktrees" below. |
+| `branch` | Optional. Branch the worktree has checked out; shown on the card beside the parent link. Informational. |
 | `routes` | Optional ordered `[{match, to}]` rewrite rules mapping a source file → the URL it renders at (relative to the proxy prefix). Browse shows a **preview eye-icon** on any file that matches a rule and renders it via the live backend (`PROXY_PREFIX + route`). Lets `.md` (and anything else) preview through the project's real renderer. See "File→URL routes" below. |
 
-Title, description, tags come from **`README.md`** (NOT `.project-meta.json`):
+Title, description, tags come from **`README.md`** unless the sentinel overrides them (V55):
 
 - **Title**: first H1.
 - **Description**: first paragraph after H1, inline markdown stripped.
 - **Tags** (badge pills): `tags: [...]` in YAML frontmatter at top of README.md. Absent → card shows `Project`.
+
+`.project-meta.json`'s `title` / `description` win when present — the escape hatch a worktree needs, since it checks out its parent's README byte-for-byte. Tags always come from the README; a `worktreeOf` sentinel prepends the `worktree` badge to them. Parsing lives in `lib/readme-meta.js`, card assembly + ordering in `lib/project-cards.js`.
 
 ## systemd units
 
@@ -135,6 +141,52 @@ The two live examples, discovered to differ fundamentally:
   so `data/god/trinity.md → /theology/#god/trinity`, `data/TOC.md → /theology/#TOC`, `handouts/x.md → /theology/#handouts/x.md`. The eye-icon loads the SPA, whose router renders the Markdown.
 
 New jekyll-template projects are stamped with the genesis-style default rules automatically (`bootstrapJekyll`).
+
+## Git worktrees
+
+Claude Code's `isolation: "worktree"` drops a `git worktree add` checkout next
+to its parent — `~/projects/<parent>_<task>/`. Give it a `.project-meta.json`
+and it becomes a first-class card with its own Vite port, terminal and Browse
+pane, so an agent can render and test its own branch instead of competing for
+the parent's dev server. The three live ones look like:
+
+```json
+{
+  "name": "world-builder-opus-5_avatar-lighting",
+  "worktreeOf": "world-builder-opus-5",
+  "branch": "avatar-lighting",
+  "title": "World Forge — avatar-lighting",
+  "description": "Worktree of world-builder-opus-5 on branch 'avatar-lighting'.",
+  "proxyTarget": "http://127.0.0.1:5179",
+  "extraUnits": ["vite@world-builder-opus-5_avatar-lighting.service"]
+}
+```
+
+Three things follow from `worktreeOf`, all of them because a worktree is *not*
+an independent project:
+
+- **The card can't trust the README.** The checkout carries the parent's
+  README verbatim, so title + description come from the sentinel (V55).
+- **It sorts with its parent, not by age.** A worktree created months after
+  its parent still renders directly beneath it, ahead of newer projects. The
+  `<parent>_<task>` naming alone can't do this — a plain `createdAt` sort
+  scatters them (V55).
+- **DELETE goes through git.** The checkout is registered in the *parent's*
+  `.git/worktrees/`, so DELETE runs `git -C <parentDir> worktree remove
+  --force <dir>` and only falls back to `rm` + `git worktree prune` if that
+  fails. A bare `rm -rf` leaves the parent listing a checkout that is gone
+  and refusing to reuse the path (V56, B16).
+
+`worktreeOf` is read from on-disk JSON and turned into a path, so it gets the
+same `PROJECT_ID_RE` validation as a project name. An invalid one degrades to
+"plain project" rather than reaching outside `PROJECTS_ROOT`.
+
+To check the parent's registry by hand:
+
+```bash
+git -C ~/projects/<parent> worktree list
+git -C ~/projects/<parent> worktree prune   # drop stale entries
+```
 
 ## Common ops
 
@@ -221,6 +273,7 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 - **Greenfield bootstrap prompt is stack-aware** — `writeBootstrapPrompt(dir, name, 'greenfield', {templateId, firebase})` injects a `STACK[templateId]` blurb so a fresh session greets oriented. New template → add a `STACK` entry in `lib/bootstrap-prompt.js`.
 - **Vite base path splits** — dev base = `/<NAME>/` (proxy needs it, V20). Static deploy: `build:pages` bakes `/<NAME>/`, `build:firebase` bakes `/`. Don't unify.
 - **Firebase keys are public** — `VITE_FIREBASE_*` ship in the bundle by design. Gate access with Firestore/Storage security rules, not key secrecy.
+- **Never `rm -rf` a worktree project** — the parent repo holds its registry entry. Use the UI's delete (which runs `git worktree remove`) or `git -C ~/projects/<parent> worktree remove --force <dir>`. If one got removed the hard way, `git -C ~/projects/<parent> worktree prune` cleans up (B16).
 - **Vite `allowedHosts` must cover the tailnet host** — Vite 403s (`Blocked request. This host … is not allowed`) any `Host` it doesn't recognise, and the proxy forwards the original header. Loopback tests pass while the tailnet URL fails, so **test through the real URL, not just `127.0.0.1:8002`**. Use the suffix wildcard `allowedHosts: ['.ts.net', 'localhost', '127.0.0.1']` — it matches any MagicDNS name without committing a hostname.
 
 See `SPEC.md` §B (bugs) + §V (invariants) for full history. Backprop new bugs via `/ck:spec bug: …`.

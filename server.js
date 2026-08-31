@@ -44,6 +44,9 @@ const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const { installTouchWheel } = require('./lib/touch-wheel');
 const { isEmbedder, tabsToReload } = require('./lib/tab-reload-targets');
 const { matchGlob, routeForPath } = require('./lib/file-routes');
+const { parseFrontmatter, readmeMetaFromContent } = require('./lib/readme-meta');
+const { buildProjectCards } = require('./lib/project-cards');
+const { worktreeRemovalPlan } = require('./lib/worktree');
 const termSessionsLib = require('./lib/term-sessions');
 const crypto = require('node:crypto');
 
@@ -336,52 +339,10 @@ The landing page reads it as the card description.
 `;
 }
 
-// Parse YAML-style frontmatter at the top of a markdown file. Handles flat
-// `key: value` plus simple inline-list values like `tags: [a, b, "c d"]`.
-function parseFrontmatter(content) {
-  if (!content.startsWith('---')) return { meta: {}, body: content };
-  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
-  if (!m) return { meta: {}, body: content };
-  const meta = {};
-  for (const line of m[1].split('\n')) {
-    const kv = /^\s*([A-Za-z_][\w-]*)\s*:\s*(.*?)\s*$/.exec(line);
-    if (!kv) continue;
-    let v = kv[2];
-    const list = /^\[(.*)\]$/.exec(v);
-    if (list) {
-      meta[kv[1]] = list[1]
-        .split(',')
-        .map((s) => s.trim().replace(/^["']|["']$/g, ''))
-        .filter(Boolean);
-      continue;
-    }
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-      v = v.slice(1, -1);
-    }
-    meta[kv[1]] = v;
-  }
-  return { meta, body: content.slice(m[0].length) };
-}
-
-// Best-effort markdown → plain text for card descriptions. Strips inline
-// emphasis, links, images, and inline code so a description like
-// `**Live Site:** [foo](url)` doesn't render as literal asterisks.
-function stripInlineMarkdown(s) {
-  return s
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/__(.+?)__/g, '$1')
-    .replace(/\*(.+?)\*/g, '$1')
-    .replace(/(^|\W)_(.+?)_(?=\W|$)/g, '$1$2')
-    .replace(/`([^`]+)`/g, '$1')
-    .trim();
-}
-
-// Returns { title, description, tags } from README.md. README is the canonical
-// human-facing doc — title is the first H1, description is the first
-// paragraph after it (markdown-stripped), tags is the frontmatter `tags:`
-// list. AGENTS.md is intentionally NOT used here; it's the agent-facing brief.
+// README.md is the canonical human-facing doc for a project — the landing
+// page card's title (first H1), description (first paragraph) and badge pills
+// (`tags:` frontmatter) all come from it. Parsing lives in lib/readme-meta.js;
+// this wrapper is just the disk read.
 function parseReadmeMeta(projectDir) {
   let content;
   for (const candidate of ['README.md', 'Readme.md', 'readme.md']) {
@@ -390,32 +351,12 @@ function parseReadmeMeta(projectDir) {
       break;
     } catch {}
   }
-  if (content == null) return { title: null, description: null, tags: [] };
-  const { meta, body } = parseFrontmatter(content);
-  const lines = body.split('\n');
-  let i = 0;
-  // Skip leading blank lines, then look for the first H1.
-  while (i < lines.length && !/^#\s+\S/.test(lines[i])) i++;
-  let title = null;
-  let description = null;
-  if (i < lines.length) {
-    title = lines[i].replace(/^#\s+/, '').trim() || null;
-    i++;
-    while (i < lines.length && lines[i].trim() === '') i++;
-    const para = [];
-    while (i < lines.length && lines[i].trim() !== '' && !lines[i].trim().startsWith('#')) {
-      para.push(lines[i].trim());
-      i++;
-    }
-    const text = stripInlineMarkdown(para.join(' '));
-    if (text) description = text.slice(0, 400);
-  }
-  let tags = [];
-  if (Array.isArray(meta.tags)) tags = meta.tags;
-  else if (typeof meta.tags === 'string' && meta.tags.trim()) tags = [meta.tags.trim()];
-  return { title, description, tags };
+  return readmeMetaFromContent(content == null ? null : content);
 }
 
+// Walk ~/projects/, keep every folder carrying a .project-meta.json sentinel,
+// and hand the rows to lib/project-cards.js for precedence + ordering (V55).
+// termUrl is stitched on afterwards because it needs another disk read.
 function listManagedProjects() {
   let entries;
   try {
@@ -423,7 +364,7 @@ function listManagedProjects() {
   } catch {
     return [];
   }
-  const out = [];
+  const rows = [];
   for (const e of entries) {
     if (!e.isDirectory()) continue;
     const name = e.name;
@@ -433,25 +374,12 @@ function listManagedProjects() {
     if (!fs.existsSync(metaPath)) continue;
     let meta = {};
     try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch {}
-    const { title, description: readmeDesc, tags } = parseReadmeMeta(dir);
-    const description = readmeDesc || meta.description || '';
-    // Open URL defaults to the rendered README. Projects with a live app
-    // override it via openUrl in .project-meta.json so the card's Open
-    // button jumps straight to the running app.
-    const openUrl = meta.openUrl || `/view/${name}/README.md`;
-    out.push({
-      name,
-      title: title || name,
-      description,
-      tags: Array.isArray(tags) ? tags : [],
-      openUrl,
-      createdAt: meta.createdAt || null,
-      termUrl: `/term/${lookupActiveTermKey(name)}/`,
-      browseUrl: `/view/${name}/`,
-    });
+    rows.push({ name, meta, readme: parseReadmeMeta(dir) });
   }
-  out.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
-  return out;
+  return buildProjectCards(rows).map((card) => ({
+    ...card,
+    termUrl: `/term/${lookupActiveTermKey(card.name)}/`,
+  }));
 }
 
 // Resolve the term key for a project (e.g. for the PWA shell / card link).
@@ -552,10 +480,29 @@ function handleDeleteProject(req, res, name) {
     for (const t of tmuxNames) {
       try { await execFileP('tmux', ['kill-session', '-t', t], { timeout: 5000 }); } catch {}
     }
-    fs.rm(real, { recursive: true, force: true }, (rmErr) => {
+    // A worktree lives in the PARENT repo's registry as well as on disk, so
+    // let git detach it — `worktree remove` deletes the folder too. A plain
+    // rm -rf would leave the parent listing a checkout that is gone, and
+    // refusing to reuse the path until someone prunes by hand. SPEC §V56 / §B16.
+    const plan = worktreeRemovalPlan({ dir: real, meta, projectsRoot: PROJECTS_ROOT });
+    let removedByGit = false;
+    if (plan) {
+      try {
+        await execFileP('git', plan.removeArgs, { timeout: 30000 });
+        removedByGit = true;
+      } catch {
+        // Parent repo moved, registry already broken, git missing — fall
+        // through to rm and prune the stale entry afterwards, so the parent
+        // ends up consistent either way.
+      }
+    }
+    fs.rm(real, { recursive: true, force: true }, async (rmErr) => {
       if (rmErr) return sendJson(res, 500, { error: 'rm failed: ' + rmErr.message });
+      if (plan && !removedByGit) {
+        try { await execFileP('git', plan.pruneArgs, { timeout: 30000 }); } catch {}
+      }
       refreshStaticRoutes();
-      sendJson(res, 200, { name, deleted: true });
+      sendJson(res, 200, { name, deleted: true, worktreeOf: plan ? plan.parent : null });
     });
   })();
 }
