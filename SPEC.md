@@ -61,6 +61,9 @@ files:
 - `lib/onboard.js` — `bootstrapOnboard(dir, name)` + `listOrphanFolderNames(projectsRoot)`.
 - `lib/tab-reload-targets.js` — `isEmbedder(path)` + `tabsToReload(tabs, changedPath)`. inlined into client via `.toString()`.
 - `lib/file-routes.js` — `matchGlob(glob, path)` + `routeForPath(rules, relPath)`. source path → served-URL (relative to proxy prefix) per `routes` rules. inlined into client via `.toString()`. (V54)
+- `lib/escape-html.js` — `escapeHtml(s)`. the one server-side escaper, shared by both page shells and server.js. (the Browse client keeps its own inlined copy — that one runs in the browser.)
+- `lib/view-shell.js` — `renderViewShell(project, {proxyPrefix, routes})` → the Browse two-pane document (tree + tabs + develop pane + client script). injects `tabKey`/`installTouchWheel`/`isEmbedder`/`tabsToReload`/`matchGlob`/`routeForPath` via `.toString()`. pure — caller resolves proxyPrefix/routes from the sentinel.
+- `lib/pwa-shell.js` — `renderShellHtml(name, openUrl, termUrl, initialView)` → the per-project PWA shell served at `/p/<name>/` (installable, FAB view cycle, split landscape, keyboard fit). pure.
 - `lib/readme-meta.js` — `parseFrontmatter`, `stripInlineMarkdown`, `readmeMetaFromContent(content)`. README text → `{title, description, tags}` for the card. server.js keeps the disk read.
 - `lib/project-cards.js` — `buildCard(row)` + `sortCards(cards)` + `buildProjectCards(rows)`. sentinel-over-README precedence, `worktree` badge, worktree-under-parent ordering (V55).
 - `lib/worktree.js` — `parentProjectName(meta)`, `branchName(meta)`, `worktreeRemovalPlan({dir, meta, projectsRoot})` → git argv for `worktree remove --force` + `worktree prune` fallback, or null for a plain project (V56).
@@ -226,6 +229,7 @@ module exports (test surface, not public API):
 | T73 | x | `routes` in `.project-meta.json`: `lib/file-routes.js` (`matchGlob`+`routeForPath`) + `readProjectRoutes` validation + inject `ROUTES` into shell + preview eye-icon on routable files + render-iframe `PROXY_PREFIX+route`; jekyll template default rules; genesis + systematic-theology metas; tests | I.files,V54 |
 | T74 | x | extract `lib/readme-meta.js` + `lib/project-cards.js` from `listManagedProjects`; sentinel-over-README precedence, `worktree` badge, worktree-under-parent sort; tests | I.files,V55 |
 | T75 | x | `lib/worktree.js` + `handleDeleteProject` git-aware teardown (`worktree remove --force`, `prune` fallback, name validation); landing card provenance line (`⑂ worktree of <parent> · <branch>`, amber badge, anchor link to parent card); tests incl. real-git repro | I.routes,V56,B16 |
+| T76 | x | split the two page shells out of server.js → `lib/view-shell.js` + `lib/pwa-shell.js` + shared `lib/escape-html.js`; server.js 4301 → 2452 lines; add first `/p/<proj>/` integration coverage | I.files |
 
 ## §B BUGS
 

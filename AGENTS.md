@@ -188,6 +188,31 @@ git -C ~/projects/<parent> worktree list
 git -C ~/projects/<parent> worktree prune   # drop stale entries
 ```
 
+## Where the code lives
+
+`server.js` is routing, request handling and disk access — everything that
+touches `http`, `fs` or `sudo`. Anything pure gets extracted to `lib/` so it
+can be unit-tested without booting a server; tests that DO need a server use
+`test/helpers/fixture.js`, which boots `server.js` in-process on a random port
+against a scratch `PROJECTS_ROOT`.
+
+| module | what |
+|---|---|
+| `lib/view-shell.js` | The Browse two-pane document (`/view/<proj>/`) — tree, tabs, develop pane, client script. |
+| `lib/pwa-shell.js` | The per-project PWA shell (`/p/<proj>/`) — installable, FAB view cycle, split landscape. |
+| `lib/project-cards.js` | Landing-card assembly: sentinel-over-README precedence + worktree ordering (V55). |
+| `lib/readme-meta.js` | README text → `{title, description, tags}`. |
+| `lib/worktree.js` | Git-worktree teardown plan (V56). |
+| `lib/file-routes.js` | `routes` glob → URL rewriting (V54). |
+| `lib/term-sessions.js` | Develop-pane tab map io (V47). |
+| `lib/escape-html.js` | The one server-side HTML escaper. |
+
+Six helpers are shared between server and browser by injecting their source
+with `.toString()` (`tabKey`, `installTouchWheel`, `isEmbedder`,
+`tabsToReload`, `matchGlob`, `routeForPath`). **Those must stay
+self-contained** — no closures over module scope, no `require` inside them —
+because the browser only receives the function body.
+
 ## Common ops
 
 ```bash
@@ -267,7 +292,7 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 
 ## Gotchas
 
-- **Stale node process** — `server.js` lives in V8 memory; edits don't apply until `systemctl restart claude-hub.service`. `landing.html` is read per request, no restart needed.
+- **Stale node process** — `server.js` lives in V8 memory; edits don't apply until `systemctl restart claude-hub.service`. `landing.html` is read per request, no restart needed. Same for anything under `lib/` — it's `require`d into the same process.
 - **Game template = vite project** — `game-2d`/`game-3d`/`game-3d-complex` ride the one `vite@<name>.service`, not a per-template unit. New template? Make it a vite project (reuse `vite@`) — or, like `jekyll`, give it its own scaffolder + `<kind>@<name>.service` and dispatch it in `scaffoldProject`.
 - **Jekyll template is the non-vite exception** — `jekyll` is Ruby/Bundler, scaffolded by `bootstrapJekyll` (not `bootstrapTemplate`), runs under `jekyll@<name>.service`, ports allocated from the 4000s (not 5173+), no firebase. `serve-local.sh` carries the baked `--baseurl /<name>` + port; the unit just execs it. README.md (`permalink: /`) is the site index.
 - **Greenfield bootstrap prompt is stack-aware** — `writeBootstrapPrompt(dir, name, 'greenfield', {templateId, firebase})` injects a `STACK[templateId]` blurb so a fresh session greets oriented. New template → add a `STACK` entry in `lib/bootstrap-prompt.js`.
