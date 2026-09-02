@@ -47,6 +47,7 @@ const { escapeHtml } = require('./lib/escape-html');
 const { renderViewShell } = require('./lib/view-shell');
 const { renderShellHtml } = require('./lib/pwa-shell');
 const termSessionsLib = require('./lib/term-sessions');
+const scaffoldInstall = require('./lib/scaffold-install');
 const crypto = require('node:crypto');
 
 const PORT = Number(process.env.PROXY_PORT) || 8002;
@@ -781,11 +782,14 @@ async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {
         extraUnits: ['vite@' + name + '.service'],
       }, null, 2) + '\n',
     );
-    const installCmd = firebase
-      ? 'cd "$0" && npm install && npm install firebase'
-      : 'cd "$0" && npm install';
+    // Command AND env both come from lib/scaffold-install.js — the hub runs
+    // under NODE_ENV=production, which npm reads as --omit=dev and which would
+    // otherwise skip every devDependency (vite included) while still exiting 0.
+    // See B20 / V65 for why it takes both a flag and an env override.
+    const installCmd = scaffoldInstall.installCommand({ firebase });
     await execFileP('/bin/bash', ['-lc', 'export NVM_DIR=$HOME/.nvm && . $NVM_DIR/nvm.sh && ' + installCmd, dir], {
       timeout: 5 * 60 * 1000,
+      env: scaffoldInstall.installEnv(process.env),
     });
     // sudoers grant for `sudo -n systemctl enable --now vite@<name>.service`
     // mirrors the existing ttyd@ grant — see services/ install instructions.
