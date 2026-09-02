@@ -10,11 +10,21 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-async function startFixture() {
+/**
+ * @param {object}   [opts]
+ * @param {function} [opts.seed] — called with the scratch PROJECTS_ROOT before
+ *   server.js is required. Needed for anything touching the reverse-proxy
+ *   route table: `STATIC_ROUTES` is built once at require time and refreshed
+ *   only on project create/delete, so a `.project-meta.json` written after the
+ *   boot is invisible to `/<proj>/*` routing.
+ */
+async function startFixture(opts = {}) {
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-hub-test-'));
   process.env.PROJECTS_ROOT = projectsRoot;
   // Avoid clashing with the systemd unit on 8002.
   process.env.PROXY_PORT = '0';
+
+  if (typeof opts.seed === 'function') opts.seed(projectsRoot);
 
   // Clear require cache so PROJECTS_ROOT env is read fresh on each call.
   const serverPath = require.resolve('../../server.js');
