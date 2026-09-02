@@ -204,6 +204,7 @@ against a scratch `PROJECTS_ROOT`.
 | `lib/readme-meta.js` | README text → `{title, description, tags}`. |
 | `lib/worktree.js` | Git-worktree teardown plan (V56). |
 | `lib/file-routes.js` | `routes` glob → URL rewriting (V54). |
+| `lib/scaffold-install.js` | Command line + env for a scaffold's `npm install` — both guards against the inherited `NODE_ENV=production` (V65, B20). |
 | `lib/term-sessions.js` | Develop-pane tab map io (V47). |
 | `lib/android-input.js` | Android soft-keyboard input shim for ttyd pages (V61, B17). |
 | `lib/keyboard-fit.js` | Mobile viewport fit for ttyd pages; `patchViewportMeta` + `installKeyboardFit` (V62). |
@@ -372,7 +373,7 @@ Vite-family scaffold (`bootstrapTemplate`):
 2. Free port ≥ 5173 allocated by scanning sibling projects' `.project-meta.json` `proxyTarget`.
 3. If `firebase` → `templates/_firebase/` overlaid (adds `src/firebase.ts`, `.env.example`, `firebase.json`, `.firebaserc`).
 4. `.project-meta.json` stamped: `template: '<template>'`, `proxyTarget`, `proxyPrefix: /<name>`, `stripPrefix: false`, `openUrl: /<name>/`, `extraUnits: ['vite@<name>.service']`.
-5. `npm install` (+ `npm install firebase` when overlaid), 5 min timeout, in scaffolded dir.
+5. `npm install --include=dev` (+ `npm install firebase --include=dev` when overlaid) with `NODE_ENV=development`, 5 min timeout, in scaffolded dir. Both come from `lib/scaffold-install.js` — see V65/B20 for why the flag and the env are BOTH required.
 6. `sudo systemctl enable --now vite@<name>.service`.
 
 Jekyll scaffold (`bootstrapJekyll`, V52):
@@ -409,7 +410,8 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 - **Firebase keys are public** — `VITE_FIREBASE_*` ship in the bundle by design. Gate access with Firestore/Storage security rules, not key secrecy.
 - **Never `rm -rf` a worktree project** — the parent repo holds its registry entry. Use the UI's delete (which runs `git worktree remove`) or `git -C ~/projects/<parent> worktree remove --force <dir>`. If one got removed the hard way, `git -C ~/projects/<parent> worktree prune` cleans up (B16).
 - **Upgrading ttyd/xterm invalidates the Android input shim's premise** — `lib/android-input.js` (V61) relies on xterm binding `compositionstart|update|end` in the *bubble* phase and on the public `term.textarea` / `term.input()` / `term.scrollToBottom()` surface. Re-check both against the new bundle before shipping an upgrade; if upstream ever fixes `_handleAnyTextareaChanges` (the `setTimeout(0)` + `!_isComposing` drop, B17), delete the shim rather than stacking it on a fixed path.
-- **Vite `allowedHosts` must cover the tailnet host** — Vite 403s (`Blocked request. This host … is not allowed`) any `Host` it doesn't recognise, and the proxy forwards the original header. Loopback tests pass while the tailnet URL fails, so **test through the real URL, not just `127.0.0.1:8002`**. Use the suffix wildcard `allowedHosts: ['.ts.net', 'localhost', '127.0.0.1']` — it matches any MagicDNS name without committing a hostname.
+- **Vite `allowedHosts` must cover the tailnet host** — Vite 403s (`Blocked request. This host … is not allowed`) any `Host` it doesn't recognise, and the proxy forwards the original header (`changeOrigin: false`). Loopback tests pass while the tailnet URL fails, so **test through the real URL, not just `127.0.0.1:8002`**. Use the suffix wildcard `allowedHosts: ['.ts.net', 'localhost']` — it matches any MagicDNS name without committing a hostname. All four vite-family templates now ship this (V66); it was missing from every one of them until B21, so only *hand-built* projects had it and every scaffolded project 403'd on the tailnet URL.
+- **Nothing the hub spawns should inherit its `NODE_ENV`** — `claude-hub.service` runs with `Environment=NODE_ENV=production`, and a child inherits it. npm reads `NODE_ENV=production` as `--omit=dev`, which is what silently gutted every scaffold (B20): devDependencies skipped, **exit code still 0**, so the failure cleanup never fired and the project only died later in `vite@<name>.service`. The install's command line and env both come from `lib/scaffold-install.js` now — if you add another npm/node shell-out, route it through there rather than calling `npm install` bare. The `bundle install` for Jekyll is unaffected (bundler keys off `BUNDLE_WITHOUT`/`RACK_ENV`, not `NODE_ENV`), and the systemd units are too — a unit gets its environment from systemd, not from the hub, which is why `vite@.service`'s own `NODE_ENV=development` was never in question.
 
 See `SPEC.md` §B (bugs) + §V (invariants) for full history. Backprop new bugs via `/ck:spec bug: …`.
 
