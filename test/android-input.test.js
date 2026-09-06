@@ -175,6 +175,81 @@ test('V61: focusin seeds the mirror, so a keydown-less input is not swallowed', 
   assert.deepEqual(sent, ['dictated']);
 });
 
+test('B23: a blur empties the box under us, so focusin re-seeds the mirror', () => {
+  // xterm's `_handleTextAreaBlur` does `this.textarea.value = ''`. Without a
+  // re-seed the mirror still holds everything typed since the last trim, and
+  // the first character typed on return diffs against it — one DEL per stale
+  // char, wiping a line or two of whatever was already at the prompt.
+  const { doc, sent, textarea, fire, type } = makePage();
+  installAndroidInput(doc);
+  fire('focusin', {});
+  for (const ch of 'git commit -m "a long line already at the prompt"') type(ch);
+  sent.length = 0;
+
+  textarea.value = ''; // what xterm does on blur
+  fire('focusin', {}); // ...and the user comes back
+  type('x');
+
+  assert.deepEqual(sent, ['x'], 'the first char after returning must send only itself');
+  assert.ok(!sent.join('').includes(DEL), 'no DEL may be emitted for text xterm discarded');
+});
+
+test('B23: re-seeding survives a trim — the stale tail is not re-deleted either', () => {
+  // The mirror is a 64-char tail past 512, so even a trimmed session had a
+  // full line of stale mirror to turn into DELs.
+  const { doc, sent, textarea, fire } = makePage();
+  installAndroidInput(doc);
+  textarea.value = 'x'.repeat(600) + ' ';
+  fire('input', {});
+  assert.equal(textarea.value.length, 64);
+  sent.length = 0;
+
+  textarea.value = '';
+  fire('focusin', {});
+  textarea.value = 'y';
+  fire('input', {});
+  assert.deepEqual(sent, ['y']);
+});
+
+test('B23: focusin still seeds from a NON-empty box without sending it', () => {
+  // Nothing can type into an unfocused textarea, so whatever it holds when
+  // focus lands is neither ours to send nor ours to delete.
+  const { doc, sent, textarea, fire } = makePage();
+  installAndroidInput(doc);
+  textarea.value = 'left over';
+  fire('focusin', {});
+  assert.deepEqual(sent, []);
+  textarea.value = 'left overz';
+  fire('input', {});
+  assert.deepEqual(sent, ['z']);
+});
+
+test('B23: focus clears a composition that the blur left open', () => {
+  // A composition cannot survive the focus change; if it did, `trim` would
+  // stay disabled and the box would grow to COMPOSITION_CAP.
+  const { doc, textarea, fire } = makePage();
+  installAndroidInput(doc);
+  fire('compositionstart', {});
+  textarea.value = '';
+  fire('focusin', {});
+  textarea.value = 'x'.repeat(600) + ' ';
+  fire('input', {});
+  assert.equal(textarea.value.length, 64, 'trimming must be live again after focus');
+});
+
+test('B23: focus drops a pending xterm-owned key, so the next input is not swallowed', () => {
+  // If the key that moved focus away were still marked xterm's, the first
+  // input after returning would be adopted into the mirror and sent by nobody.
+  const { doc, sent, textarea, fire } = makePage();
+  installAndroidInput(doc);
+  fire('keydown', { keyCode: 9, key: 'Tab' }); // xterm's key, input never came
+  textarea.value = '';
+  fire('focusin', {});
+  textarea.value = 'a';
+  fire('input', {});
+  assert.deepEqual(sent, ['a']);
+});
+
 test('V61: a printable key is OURS — xterm never sees keydown or keypress', () => {
   // stopImmediatePropagation stops propagation, not the default action: Chrome
   // still fires keypress, and xterm's own keypress listener would send the

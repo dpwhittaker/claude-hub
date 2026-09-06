@@ -207,7 +207,7 @@ against a scratch `PROJECTS_ROOT`.
 | `lib/file-routes.js` | `routes` glob → URL rewriting (V54). |
 | `lib/scaffold-install.js` | Command line + env for a scaffold's `npm install` — both guards against the inherited `NODE_ENV=production` (V65, B20). |
 | `lib/term-sessions.js` | Develop-pane tab map io (V47). |
-| `lib/android-input.js` | Android soft-keyboard input shim for ttyd pages (V61, B17). |
+| `lib/android-input.js` | Android soft-keyboard input shim for ttyd pages (V61, B17, B23). |
 | `lib/keyboard-fit.js` | Mobile viewport fit for ttyd pages; `patchViewportMeta` + `installKeyboardFit` (V62). |
 | `lib/term-reconnect.js` | Automatic reconnect + post-reopen refit for ttyd pages (V63, V64, B19). |
 | `lib/escape-html.js` | The one server-side HTML escaper. |
@@ -268,9 +268,19 @@ Things that look like details but are load-bearing:
   and only at a whitespace boundary, because rewriting the box mid-word moves
   text under Gboard's composing region (tracked by offset) and desyncs the
   keyboard from the DOM (B18). A 2048 hard cap is the escape hatch.
-- **`focusin` seeds the mirror**, so an `input` with no preceding keydown
-  (voice, suggestion-strip tap) is diffed rather than swallowed as first
-  sight of the element.
+- **`focusin` re-seeds the mirror — every time, not just on first sight of
+  the element.** Two jobs in one listener. It means an `input` with no
+  preceding keydown (voice, suggestion-strip tap) is diffed rather than
+  swallowed; and it resyncs after **xterm empties the box on blur**
+  (`_handleTextAreaBlur` does `this.textarea.value = ''`). Without the
+  re-seed the mirror kept the pre-blur text, so the first character typed on
+  return diffed against it and sent one DEL per stale char — deleting a line
+  or two of whatever was already at the prompt (B23). The pairing is exact:
+  xterm clears on the element's `blur`, the shim re-seeds on its `focusin`,
+  and nothing can type into an unfocused textarea, so whatever the box holds
+  when focus lands is neither the shim's to send nor its to delete. The same
+  listener clears `composing` and `adoptNextInput`, neither of which can
+  survive a focus change.
 - Only public xterm API is used: `term.textarea`, `term.input(data, true)`,
   `term.scrollToBottom()`.
 
@@ -411,7 +421,7 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 - **Vite base path splits** — dev base = `/<NAME>/` (proxy needs it, V20). Static deploy: `build:pages` bakes `/<NAME>/`, `build:firebase` bakes `/`. Don't unify.
 - **Firebase keys are public** — `VITE_FIREBASE_*` ship in the bundle by design. Gate access with Firestore/Storage security rules, not key secrecy.
 - **Never `rm -rf` a worktree project** — the parent repo holds its registry entry. Use the UI's delete (which runs `git worktree remove`) or `git -C ~/projects/<parent> worktree remove --force <dir>`. If one got removed the hard way, `git -C ~/projects/<parent> worktree prune` cleans up (B16).
-- **Upgrading ttyd/xterm invalidates the Android input shim's premise** — `lib/android-input.js` (V61) relies on xterm binding `compositionstart|update|end` in the *bubble* phase and on the public `term.textarea` / `term.input()` / `term.scrollToBottom()` surface. Re-check both against the new bundle before shipping an upgrade; if upstream ever fixes `_handleAnyTextareaChanges` (the `setTimeout(0)` + `!_isComposing` drop, B17), delete the shim rather than stacking it on a fixed path.
+- **Upgrading ttyd/xterm invalidates the Android input shim's premise** — `lib/android-input.js` (V61) relies on xterm binding `compositionstart|update|end` in the *bubble* phase and on the public `term.textarea` / `term.input()` / `term.scrollToBottom()` surface. It is also paired with `_handleTextAreaBlur` emptying the textarea (B23). Re-check all three against the new bundle before shipping an upgrade; if upstream ever fixes `_handleAnyTextareaChanges` (the `setTimeout(0)` + `!_isComposing` drop, B17), delete the shim rather than stacking it on a fixed path.
 - **Vite `allowedHosts` must cover the tailnet host** — Vite 403s (`Blocked request. This host … is not allowed`) any `Host` it doesn't recognise, and the proxy forwards the original header (`changeOrigin: false`). Loopback tests pass while the tailnet URL fails, so **test through the real URL, not just `127.0.0.1:8002`**. Use the suffix wildcard `allowedHosts: ['.ts.net', 'localhost']` — it matches any MagicDNS name without committing a hostname. All four vite-family templates now ship this (V66); it was missing from every one of them until B21, so only *hand-built* projects had it and every scaffolded project 403'd on the tailnet URL.
 - **Nothing the hub spawns should inherit its `NODE_ENV`** — `claude-hub.service` runs with `Environment=NODE_ENV=production`, and a child inherits it. npm reads `NODE_ENV=production` as `--omit=dev`, which is what silently gutted every scaffold (B20): devDependencies skipped, **exit code still 0**, so the failure cleanup never fired and the project only died later in `vite@<name>.service`. The install's command line and env both come from `lib/scaffold-install.js` now — if you add another npm/node shell-out, route it through there rather than calling `npm install` bare. The `bundle install` for Jekyll is unaffected (bundler keys off `BUNDLE_WITHOUT`/`RACK_ENV`, not `NODE_ENV`), and the systemd units are too — a unit gets its environment from systemd, not from the hub, which is why `vite@.service`'s own `NODE_ENV=development` was never in question.
 
