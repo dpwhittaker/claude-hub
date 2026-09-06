@@ -1,0 +1,41 @@
+# SPEC
+
+Durable memory for this project — reload it at the start of every session.
+Format, encoding & the maintenance protocol (how a new requirement retires an
+old one): `~/projects/claude-hub/SDD.md`, browsable at `/view/claude-hub/SDD.md`.
+
+## §G GOAL
+
+? one line — what this app must do. agree it w/ the user & rewrite before the
+first feature (§T.1). ⊥ leave this placeholder standing.
+
+## §C CONSTRAINTS
+
+- Vite 7 + react-three-fiber 9 + three 0.180 + TypeScript 5.9. drei (helpers), rapier (physics), zustand (state).
+- dev server = `vite@<NAME>.service` (systemd, `Restart=always`), owns port `<PORT>`. ⊥ `npm run dev` by hand — 2nd process → `EADDRINUSE` or a stale instance the proxy hits instead.
+- reverse-proxied at `/<NAME>/` by claude-hub. `base` in `vite.config.ts` ! = `.project-meta.json` `proxyPrefix`.
+- `server.allowedHosts` ! ⊇ `.ts.net`. hub proxies `changeOrigin: false` ∴ upstream sees CLIENT `Host`; Vite 7 403s unknown hosts.
+- `strictPort: true` — port comes from the sentinel, ⊥ drift to a free one silently.
+
+## §I INTERFACES
+
+- url: `GET /<NAME>/` → the app, through claude-hub
+- card: `README.md` H1 → title, ¶1 → description, frontmatter `tags: [...]` → badges
+
+## §V INVARIANTS
+
+V1: `base` in `vite.config.ts` = `/<NAME>/` = sentinel `proxyPrefix`. any ≠ → assets 404 through the proxy while `127.0.0.1:<PORT>` looks fine.
+V2: `server.allowedHosts` ⊇ `['.ts.net', 'localhost']`. ⊥ a concrete FQDN (commits the machine's tailnet name). loopback passes while the tailnet URL 403s ∴ test through the REAL url.
+V3: the dev server is `vite@<NAME>.service`'s alone. ⊥ 2nd process on `<PORT>`.
+V4: `README.md` H1/¶1/`tags` = the landing card's title/description/badges. ⊥ let them drift from §G.
+V5: `three` & `@types/three` versions ! match. a minor drift breaks R3F's typings, ⊥ at runtime.
+
+## §T TASKS
+
+id|status|task|cites
+T1|.|agree §G w/ user; rewrite §G + `README.md` H1/¶1/`tags` to match|V4
+T2|.|first feature. add §I rows for surface it adds, §V for rules it must hold|-
+
+## §B BUGS
+
+id|date|cause|fix

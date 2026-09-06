@@ -222,11 +222,16 @@ filesystem access to `~/projects`.
 | `services/ttyd-develop.service`, `services/ttyd-shell.service` | Static admin terminal units (fresh claude in `~/projects`, raw bash). |
 | `services/ttyd-attach.sh` | Helper that ttyd execs per browser connection — joins or creates the per-project tmux session. |
 | `AGENTS.md` | Architecture + ops + gotchas. Read it before changing the routing or the systemd units. |
+| `SPEC.md` | The durable spec — goals, constraints, interfaces, numbered invariants, tasks, and every bug with the invariant that now catches it. |
+| `SDD.md` | The spec-driven-development protocol `SPEC.md` follows: sections, compressed encoding, backprop, and the rules for retiring what a new requirement invalidated. Every scaffolded project ships a starter `SPEC.md` pointing here. |
 | `HINDSIGHT.md` | The optional Hindsight memory layer: what it adds, how to rebuild it, how to remove it. claude-hub runs fine with none of it installed. |
 
 ## See also
 
 - `AGENTS.md` for the full architecture, route table, and the list of
   things that have bitten past sessions.
+- `SDD.md` for the spec-driven-development protocol — how `SPEC.md` is
+  structured, how bugs backpropagate into invariants, and how the spec is
+  kept honest as the project grows.
 - `HINDSIGHT.md` for the optional per-repo memory layer — install, the
   reasoning behind each config value, and how to verify a rebuild.

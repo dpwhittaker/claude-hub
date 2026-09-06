@@ -10,6 +10,7 @@ show_excerpts: false
 # out of the built site.
 exclude:
   - AGENTS.md
+  - SPEC.md
   - .project-meta.json
   - README.original.md
   - Gemfile.local

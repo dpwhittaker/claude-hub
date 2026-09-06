@@ -1,6 +1,63 @@
 # <NAME> — AGENTS.md
 
-Jekyll + minima Markdown site. claude-hub conventions:
+Jekyll + minima Markdown site.
+
+## Workflow rule: commit + push every turn
+
+Every turn that changes code, config, assets, or docs ends with a commit —
+and a push if this project has a remote. Don't wait to be asked. One commit
+per logical change; run the build/tests first and fix what fails before
+committing. Restart the project's systemd unit when the running app needs the
+change to take effect. Skip only when the turn produced no working-tree changes.
+
+**Commit explicit paths, never `-A`.** Several Claude sessions can share this
+checkout (one per Develop tab), so `git add -A` sweeps up whatever a peer
+session has half-written. Name what you wrote:
+`git commit -m "…" -- src/foo.ts src/foo.test.ts`.
+
+## Workflow rule: git worktrees
+
+Parallel work goes in a worktree, not in this checkout — two agents editing
+one tree is the "peer swept my files" problem above, at feature scale. Claude
+Code's `isolation: "worktree"` drops a checkout at `~/projects/<NAME>_<task>/`;
+give it a `.project-meta.json` naming `worktreeOf: "<NAME>"` and its `branch`
+and it becomes its own claude-hub card with its own port, terminal and Browse
+pane, so it runs its own dev server instead of competing for this one's.
+
+**Never `rm -rf` a worktree** — this repo's `.git/worktrees/` keeps the
+registry entry and then refuses to reuse the path. Delete it from its card
+(which routes through `git worktree remove`), or
+`git -C ~/projects/<NAME> worktree remove --force <dir>`. A worktree also
+checks out this project's `README.md` byte-for-byte, so its card title and
+description have to come from its sentinel, not the README.
+
+## Workflow rule: the spec is the memory (SDD)
+
+`SPEC.md` at the root is this project's durable memory — goals (`§G`),
+constraints (`§C`), interfaces (`§I`), invariants (`§V`), tasks (`§T`) and
+bugs (`§B`), written compressed enough to reload on every request. It exists
+because your context window resets and the code does not: anything decided but
+not written down gets re-derived next session, differently. Read it before you
+change anything; update it in the same turn as the code, never "later". The
+loop is: read the spec → work against it → prove each `§V` you touched with a
+named test → **backprop** — every bug becomes a `§B` row and its class becomes
+a `§V` invariant, so the project stops re-making mistakes it has already made.
+
+The part that needs discipline is not writing the spec, it is retiring what a
+new requirement invalidated. `§V`/`§I` describe the present and get edited;
+`§T`/`§B` are logs and only get appended. Numbers are permanent addresses —
+never reused, even after retirement. Before appending an invariant, grep `§V`
+for its subject: a rule that changed gets **revised in place at its existing
+number**, tagged `(revised)` and carrying `⊥ <the old rule>` so nobody walks
+back into it — a rule whose concern is gone gets **deleted**, its retirement
+logged in the `§T` row that did the work.
+
+**Full protocol: `~/projects/claude-hub/SDD.md`** — section reference, the
+encoding and its symbol table, backprop, and the maintenance rules for keeping
+the spec true as the project grows. Browse it at
+`/view/claude-hub/SDD.md`.
+
+## claude-hub conventions
 
 - **Local preview** runs via `jekyll@<NAME>.service` (systemd, `Restart=always`)
   → `serve-local.sh`, which runs `bundle exec jekyll serve --baseurl /<NAME>` on

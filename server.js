@@ -326,6 +326,60 @@ This is the orientation doc for any agent (you) working in this project.
 Human-facing details — project title, one-sentence summary, and tags — live
 in \`README.md\`, which is what the landing page reads. Keep README current.
 
+## Workflow rule: commit + push every turn
+
+Every turn that changes code, config, assets, or docs ends with a commit —
+and a push if this project has a remote. Don't wait to be asked. One commit
+per logical change; run whatever tests exist first and fix what fails before
+committing. Skip only when the turn produced no working-tree changes.
+
+**Commit explicit paths, never \`-A\`.** Several Claude sessions can share this
+checkout (one per Develop tab), so \`git add -A\` sweeps up whatever a peer
+session has half-written. Name what you wrote:
+\`git commit -m "…" -- path/one path/two\`.
+
+## Workflow rule: git worktrees
+
+Parallel work goes in a worktree, not in this checkout — two agents editing
+one tree is the "peer swept my files" problem above, at feature scale. Claude
+Code's \`isolation: "worktree"\` drops a checkout at
+\`~/projects/${name}_<task>/\`; give it a \`.project-meta.json\` naming
+\`worktreeOf: "${name}"\` and its \`branch\` and it becomes its own claude-hub
+card with its own terminal and Browse pane.
+
+**Never \`rm -rf\` a worktree** — this repo's \`.git/worktrees/\` keeps the
+registry entry and then refuses to reuse the path. Delete it from its card
+(which routes through \`git worktree remove\`), or
+\`git -C ~/projects/${name} worktree remove --force <dir>\`. A worktree also
+checks out this project's \`README.md\` byte-for-byte, so its card title and
+description have to come from its sentinel, not the README.
+
+## Workflow rule: the spec is the memory (SDD)
+
+\`SPEC.md\` at the root is this project's durable memory — goals (\`§G\`),
+constraints (\`§C\`), interfaces (\`§I\`), invariants (\`§V\`), tasks (\`§T\`)
+and bugs (\`§B\`), written compressed enough to reload on every request. It
+exists because your context window resets and the code does not: anything
+decided but not written down gets re-derived next session, differently. Read it
+before you change anything; update it in the same turn as the code, never
+"later". The loop is: read the spec → work against it → prove each \`§V\` you
+touched with a named test → **backprop** — every bug becomes a \`§B\` row and
+its class becomes a \`§V\` invariant, so the project stops re-making mistakes
+it has already made.
+
+The part that needs discipline is not writing the spec, it is retiring what a
+new requirement invalidated. \`§V\`/\`§I\` describe the present and get edited;
+\`§T\`/\`§B\` are logs and only get appended. Numbers are permanent addresses —
+never reused, even after retirement. Before appending an invariant, grep \`§V\`
+for its subject: a rule that changed gets **revised in place at its existing
+number**, tagged \`(revised)\` and carrying \`⊥ <the old rule>\` so nobody walks
+back into it — a rule whose concern is gone gets **deleted**, its retirement
+logged in the \`§T\` row that did the work.
+
+**Full protocol: \`~/projects/claude-hub/SDD.md\`** — section reference, the
+encoding and its symbol table, backprop, and the maintenance rules for keeping
+the spec true as the project grows. Browse it at \`/view/claude-hub/SDD.md\`.
+
 ## Bootstrap
 
 This folder was just created via the landing page's "+" card. A
@@ -340,7 +394,51 @@ files at \`/view/${name}/\`.
    paragraph (card description), and set \`tags: [...]\` in the YAML
    frontmatter (card badges) — short tags like \`Game\`, \`Tool\`, \`API\`,
    \`Library\`, \`Service\`, plus status flags like \`WIP\` or \`Stable\`.
-3. Start scaffolding.
+3. Fill in \`SPEC.md\`: rewrite \`§G\` to the goal you just agreed, add the
+   \`§C\` constraints the stack imposes, and flip \`§T.1\` to \`x\`.
+4. Start scaffolding.
+`;
+}
+
+// SPEC.md is the project's durable memory — the SDD file every project gets,
+// bare template included. Format + maintenance protocol live in
+// ~/projects/claude-hub/SDD.md; this is just the empty skeleton with the
+// sections in their fixed order, so the first session has somewhere to write.
+function specTemplate(name) {
+  return `# SPEC
+
+Durable memory for ${name} — reload it at the start of every session.
+Format, encoding & the maintenance protocol (how a new requirement retires an
+old one): \`~/projects/claude-hub/SDD.md\`, browsable at
+\`/view/claude-hub/SDD.md\`.
+
+## §G GOAL
+
+? one line — what this project must do. agree it w/ the user & rewrite before
+the first feature (§T.1). ⊥ leave this placeholder standing.
+
+## §C CONSTRAINTS
+
+- ? stack, runtime floor, locked deps — fill in once §G is agreed.
+- terminal + Browse served by claude-hub: \`/term/${name}/\`, \`/view/${name}/\`.
+
+## §I INTERFACES
+
+- card: \`README.md\` H1 → title, ¶1 → description, frontmatter \`tags: [...]\` → badges
+
+## §V INVARIANTS
+
+V1: \`README.md\` H1/¶1/\`tags\` = the landing card's title/description/badges. ⊥ let them drift from §G.
+
+## §T TASKS
+
+id|status|task|cites
+T1|.|agree §G w/ user; rewrite §G + \`README.md\` H1/¶1/\`tags\` to match|V1
+T2|.|pick the stack → §C. add §I rows for surface it exposes|-
+
+## §B BUGS
+
+id|date|cause|fix
 `;
 }
 
@@ -681,6 +779,7 @@ async function bootstrapNoGithub(dir, name) {
   fs.mkdirSync(dir, { recursive: false });
   fs.writeFileSync(path.join(dir, 'AGENTS.md'), agentsTemplate(name));
   fs.writeFileSync(path.join(dir, 'README.md'), readmeTemplate(name));
+  fs.writeFileSync(path.join(dir, 'SPEC.md'), specTemplate(name));
   fs.writeFileSync(
     path.join(dir, '.project-meta.json'),
     JSON.stringify({ name, createdAt: new Date().toISOString() }, null, 2) + '\n',

@@ -6,6 +6,52 @@ Path-routed reverse proxy + landing page. Turn one local port into multi-project
 
 Every turn that changes code, config, assets, or docs ends with a commit and a push — don't wait to be asked. One commit per logical change; split unrelated WIP into separate commits before mixing. Run tests/lint first; if they fail, fix before committing. Restart the relevant systemd unit when the live site needs the change to take effect. Skip only when the turn produces no working-tree changes.
 
+**Commit explicit paths, never `-A`.** Several Claude sessions share this
+worktree (one per Develop tab), so `git add -A` sweeps up whatever a peer
+session has half-written. Name what you wrote:
+`git commit -m "…" -- lib/foo.js test/foo.test.js`.
+
+## Workflow rule: git worktrees
+
+Parallel work on a project goes in a worktree, not in the parent checkout —
+two agents editing one tree is the "peer swept my files" problem above, at
+feature scale. Claude Code's `isolation: "worktree"` drops a checkout at
+`~/projects/<parent>_<task>/`; give it a `.project-meta.json` naming
+`worktreeOf` + `branch` and it becomes a first-class card with its own port,
+terminal and Browse pane, so it can run its own dev server instead of
+competing for the parent's.
+
+Two rules that bite: **never `rm -rf` a worktree** (the parent's
+`.git/worktrees/` registry keeps the entry and then refuses to reuse the
+path — use the card's delete, which routes through `git worktree remove`), and
+**a worktree checks out the parent's README byte-for-byte**, so its card title
+and description have to come from the sentinel. Full detail, including the
+sentinel shape and the ordering rules: "Git worktrees" below.
+
+## Workflow rule: the spec is the memory (SDD)
+
+`SPEC.md` at the root is this project's durable memory — goals (`§G`),
+constraints (`§C`), interfaces (`§I`), invariants (`§V`), tasks (`§T`) and
+bugs (`§B`), written compressed enough to reload on every request. Read it
+before you change anything; update it in the same turn as the code, never
+"later". The loop is: read the spec → work against it → prove each `§V` you
+touched with a named test → **backprop** — every bug becomes a `§B` row and its
+class becomes a `§V` invariant, so the project stops re-making mistakes it has
+already made once.
+
+The part that needs discipline is not writing the spec, it is retiring what a
+new requirement invalidated. `§V`/`§I` describe the present and get edited;
+`§T`/`§B` are logs and only get appended. Numbers are permanent addresses —
+never reused, even after retirement. Before appending an invariant, grep `§V`
+for its subject: a rule that changed gets **revised in place at its existing
+number**, tagged `(revised)` and carrying `⊥ <the old rule>` so nobody walks
+back into it (see `V58`, `V61`) — a rule whose concern is gone gets **deleted**,
+its retirement logged in the `§T` row that did the work.
+
+**Full protocol: [`SDD.md`](./SDD.md)** — section reference, the encoding and
+its symbol table, backprop, and the maintenance rules for keeping the spec true
+as the project grows.
+
 ## What it is
 
 ```
@@ -396,7 +442,7 @@ Jekyll scaffold (`bootstrapJekyll`, V52):
 4. `BUNDLE_GEMFILE=Gemfile.local bundle install` into a project-local `vendor/bundle` (`.bundle/config`), 5 min timeout. No firebase (not an npm project).
 5. `sudo systemctl enable --now jekyll@<name>.service`.
 
-`template: 'none'` skips all of this — bare `AGENTS.md` + `README.md` + sentinel only.
+`template: 'none'` skips all of this — bare `AGENTS.md` + `README.md` + `SPEC.md` + sentinel only (V67: every project gets a spec, bare included).
 
 **Static deploy** — games are meant to ship to static hosting, not run from
 the hub long-term. Each template ships `build:pages` (`vite build
@@ -407,7 +453,7 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 
 ### Manual (without the + card)
 
-1. `mkdir ~/projects/<name>` and add `AGENTS.md` + `README.md`.
+1. `mkdir ~/projects/<name>` and add `AGENTS.md` + `README.md` + `SPEC.md` (start from any `templates/*/SPEC.md.template`; protocol in [`SDD.md`](./SDD.md)).
 2. Drop `.project-meta.json` (schema above).
 3. `sudo systemctl enable --now ttyd@<name>.service` — only systemd touch needed for terminal access. `/term/<name>/` route resolves dynamically as soon as `/run/ttyd/<name>.sock` appears.
 4. (Optional) If project has live web app, set `proxyTarget` (and `stripPrefix` / `proxyPrefix` as needed) in `.project-meta.json`, point `openUrl` at prefix. claude-hub picks up on next request — no restart.
@@ -425,7 +471,7 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 - **Vite `allowedHosts` must cover the tailnet host** — Vite 403s (`Blocked request. This host … is not allowed`) any `Host` it doesn't recognise, and the proxy forwards the original header (`changeOrigin: false`). Loopback tests pass while the tailnet URL fails, so **test through the real URL, not just `127.0.0.1:8002`**. Use the suffix wildcard `allowedHosts: ['.ts.net', 'localhost']` — it matches any MagicDNS name without committing a hostname. All four vite-family templates now ship this (V66); it was missing from every one of them until B21, so only *hand-built* projects had it and every scaffolded project 403'd on the tailnet URL.
 - **Nothing the hub spawns should inherit its `NODE_ENV`** — `claude-hub.service` runs with `Environment=NODE_ENV=production`, and a child inherits it. npm reads `NODE_ENV=production` as `--omit=dev`, which is what silently gutted every scaffold (B20): devDependencies skipped, **exit code still 0**, so the failure cleanup never fired and the project only died later in `vite@<name>.service`. The install's command line and env both come from `lib/scaffold-install.js` now — if you add another npm/node shell-out, route it through there rather than calling `npm install` bare. The `bundle install` for Jekyll is unaffected (bundler keys off `BUNDLE_WITHOUT`/`RACK_ENV`, not `NODE_ENV`), and the systemd units are too — a unit gets its environment from systemd, not from the hub, which is why `vite@.service`'s own `NODE_ENV=development` was never in question.
 
-See `SPEC.md` §B (bugs) + §V (invariants) for full history. Backprop new bugs via `/ck:spec bug: …`.
+See `SPEC.md` §B (bugs) + §V (invariants) for full history. Backprop new bugs into it — trace the cause, decide whether a `§V` would catch the class, write the failing test first: [`SDD.md`](./SDD.md) → "Backprop".
 
 ## Sharing across devices
 

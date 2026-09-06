@@ -1,0 +1,42 @@
+# SPEC
+
+Durable memory for this project — reload it at the start of every session.
+Format, encoding & the maintenance protocol (how a new requirement retires an
+old one): `~/projects/claude-hub/SDD.md`, browsable at `/view/claude-hub/SDD.md`.
+
+## §G GOAL
+
+? one line — what this app must do. agree it w/ the user & rewrite before the
+first feature (§T.1). ⊥ leave this placeholder standing.
+
+## §C CONSTRAINTS
+
+- Jekyll + minima theme. Ruby/bundler, ⊥ npm.
+- local preview = `jekyll@<NAME>.service` → `serve-local.sh` → `bundle exec jekyll serve --baseurl /<NAME>` on port `<PORT>`. ⊥ `jekyll serve` by hand.
+- deps in `Gemfile.local`, ⊥ a file named `Gemfile` — GitHub Pages builds against a literal `Gemfile` w/ its own gem set. bundler installs to project-local `vendor/bundle` (`.bundle/config`).
+- reverse-proxied at `/<NAME>/`, `stripPrefix: false` ∴ the `/<NAME>` baseurl is required.
+- `README.md` IS the site index (`permalink: /`). ⊥ an `index.html`.
+
+## §I INTERFACES
+
+- url: `GET /<NAME>/` → the site, through claude-hub
+- card: `README.md` H1 → title, ¶1 → description, frontmatter `tags: [...]` → badges
+- file: `_config.yml` — `title`, `description`, `theme`, `exclude`
+
+## §V INVARIANTS
+
+V1: served `baseurl` = `/<NAME>` = sentinel `proxyPrefix`. any ≠ → every link & asset breaks under the proxy.
+V2: preview deps ∈ `Gemfile.local`. ⊥ create `Gemfile` — Pages would build against it & the two configs fight.
+V3: `.project-meta.json` `routes` ! track the permalink scheme. change `permalink:`/add a collection → update `routes`, else Browse's eye-icon previews 404.
+V4: `README.md` H1/¶1/`tags` = the landing card's title/description/badges. ⊥ let them drift from §G.
+V5: agent-facing files (`AGENTS.md`, `SPEC.md`, `.project-meta.json`, `serve-local.sh`, `Gemfile.local*`, `vendor`) ∈ `_config.yml` `exclude`. ⊥ ship them in the built site.
+
+## §T TASKS
+
+id|status|task|cites
+T1|.|agree §G w/ user; rewrite §G + `README.md` H1/¶1/`tags` to match|V4
+T2|.|first feature. add §I rows for surface it adds, §V for rules it must hold|-
+
+## §B BUGS
+
+id|date|cause|fix
