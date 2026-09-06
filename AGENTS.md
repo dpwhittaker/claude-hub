@@ -200,6 +200,7 @@ against a scratch `PROJECTS_ROOT`.
 |---|---|
 | `lib/view-shell.js` | The Browse two-pane document (`/view/<proj>/`) — tree, tabs, develop pane, client script. |
 | `lib/pwa-shell.js` | The per-project PWA shell (`/p/<proj>/`) — installable, home link in the term tabstrip, FAB cycling TERM→OPEN→VIEW (swaps the right half while split), long-press menu (refresh + sticky split preference, the only way in/out of split). |
+| `lib/split-layout.js` | The PWA shell's split-layout verdict, keyboard-immune (V58, B22): 900px+ wide and wider than the tallest height that width has had. |
 | `lib/project-cards.js` | Landing-card assembly: sentinel-over-README precedence + worktree ordering (V55). |
 | `lib/readme-meta.js` | README text → `{title, description, tags}`. |
 | `lib/worktree.js` | Git-worktree teardown plan (V56). |
@@ -211,10 +212,11 @@ against a scratch `PROJECTS_ROOT`.
 | `lib/term-reconnect.js` | Automatic reconnect + post-reopen refit for ttyd pages (V63, V64, B19). |
 | `lib/escape-html.js` | The one server-side HTML escaper. |
 
-Ten helpers are shared between server and browser by injecting their source
+Eleven helpers are shared between server and browser by injecting their source
 with `.toString()` (`tabKey`, `installTouchWheel`, `isEmbedder`,
 `tabsToReload`, `matchGlob`, `routeForPath`, `installOsc52Bridge`,
-`installKeyboardFit`, `installAndroidInput`, `installTermReconnect`). **Those must stay
+`installKeyboardFit`, `installAndroidInput`, `installTermReconnect`,
+`makeSplitLayout`). **Those must stay
 self-contained** — no closures over module scope, no `require` inside them —
 because the browser only receives the function body.
 

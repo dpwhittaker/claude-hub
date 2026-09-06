@@ -83,8 +83,14 @@ test('the split preference is stored per project, not globally', () => {
   assert.match(a, /'claude-hub:split:' \+ cfg\.name/);
   assert.match(a, /"name":"alpha"/);
   assert.match(b, /"name":"beta"/);
-  // The media query is consulted only when the stored preference is unset.
-  assert.match(a, /splitPref === null \? splitMq\.matches : splitPref/);
+  // The layout verdict is consulted only when the stored preference is unset,
+  // and it is the inlined lib/split-layout.js judge, not a live media query:
+  // under resizes-content the soft keyboard flips '(orientation: landscape)'
+  // on a portrait tablet (B22).
+  assert.match(a, /splitPref === null \? layoutSplitNow : splitPref/);
+  assert.match(a, /function makeSplitLayout\(minWidth\)/, 'judge inlined (V42)');
+  assert.match(a, /const splitLayout = \(function makeSplitLayout[\s\S]*?\)\(900\);/, 'threshold passed in, not closed over');
+  assert.ok(!/matchMedia\(/.test(a), 'no live media query decides the split');
 });
 
 test('shell data block carries the project\'s own URLs, not defaults', async () => {
