@@ -428,17 +428,19 @@ the first feature (§T.1). ⊥ leave this placeholder standing.
 
 ## §V INVARIANTS
 
-V1: \`README.md\` H1/¶1/\`tags\` = the landing card's title/description/badges. ⊥ let them drift from §G.
+- V1: \`README.md\` H1/¶1/\`tags\` = the landing card's title/description/badges. ⊥ let them drift from §G.
 
 ## §T TASKS
 
 id|status|task|cites
+---|---|---|---
 T1|.|agree §G w/ user; rewrite §G + \`README.md\` H1/¶1/\`tags\` to match|V1
 T2|.|pick the stack → §C. add §I rows for surface it exposes|-
 
 ## §B BUGS
 
 id|date|cause|fix
+---|---|---|---
 `;
 }
 

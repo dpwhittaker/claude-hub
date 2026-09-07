@@ -50,6 +50,11 @@ exists to avoid.
 ## §B BUGS          pipe table. every bug that got out, and the invariant that now catches it.
 ```
 
+Pipe tables carry the Markdown delimiter row (`---|---|---|---`) directly under
+the header — without it Browse and GitHub run every row together into one
+paragraph. `§V` is one `- Vn:` bullet per invariant for the same reason: bare
+consecutive lines merge.
+
 ### §G — goal
 
 One line. What the code must do, not how. If it takes a paragraph, the project
@@ -90,6 +95,7 @@ actually done.
 
 ```
 id|topic|finding|src
+---|---|---|---
 R1|jwt lib|`jose` > `jsonwebtoken` — maintained, ESM, 0 deps|github.com/panva/jose
 ```
 
@@ -99,12 +105,14 @@ as fact is a future `§B`.
 
 ### §V — invariants
 
-The heart of the file. Numbered, testable rules that must hold. Each one is a
-thing the code can be checked against — by a test, by a grep, by reading one
-named file.
+The heart of the file. Numbered, testable rules that must hold, one `- Vn:`
+bullet each. Each one is a thing the code can be checked against — by a test,
+by a grep, by reading one named file.
 
-> V13: every create path ends w/ `sudo systemctl enable --now ttyd@<name>.service`.
-> V29: pre-existing `AGENTS.md` / `README.md` are NEVER overwritten on clone.
+```
+- V13: every create path ends w/ `sudo systemctl enable --now ttyd@<name>.service`.
+- V29: pre-existing `AGENTS.md` / `README.md` are NEVER overwritten on clone.
+```
 
 A good invariant is:
 
@@ -122,6 +130,7 @@ A good invariant is:
 
 ```
 id|status|task|cites
+---|---|---|---
 T3|x|add auth middleware|V1,I.api
 T4|.|impl §I.api POST /x|V2
 ```
@@ -133,6 +142,7 @@ serves, so finished work is traceable back to the rule it was there to satisfy.
 
 ```
 id|date|cause|fix
+---|---|---|---
 B1|2026-04-20|token `<` not `≤` ∴ rejected @ expiry|V2
 ```
 

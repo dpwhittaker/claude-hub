@@ -56,6 +56,13 @@ for (const id of TEMPLATES) {
       assert.equal(/<PORT>|<NAME>/.test(spec), false, `${id} SPEC.md has unresolved placeholders`);
       assert.ok(spec.includes('id|status|task|cites'), `${id} §T is a pipe table`);
       assert.ok(spec.includes('id|date|cause|fix'), `${id} §B is a pipe table`);
+      // Present is not rendered: Markdown needs the delimiter row under a pipe-table
+      // header and one bullet per invariant, or Browse/GitHub run the rows together
+      // into a paragraph (B24).
+      assert.ok(spec.includes('id|status|task|cites\n---|---|---|---'), `${id} §T carries the delimiter row`);
+      assert.ok(spec.includes('id|date|cause|fix\n---|---|---|---'), `${id} §B carries the delimiter row`);
+      assert.ok(/^- V1:/m.test(spec), `${id} §V invariants are bullets`);
+      assert.equal(/^V\d+:/m.test(spec), false, `${id} has a bare Vn: line that merges into its neighbour`);
     } finally {
       fs.rmSync(dest, { recursive: true, force: true });
     }
@@ -72,6 +79,9 @@ test('the bare `none` path gets the same three rules + a SPEC.md (V67)', () => {
 
   const spec = src.slice(src.indexOf('function specTemplate('), src.indexOf('function readmeTemplate('));
   for (const h of SPEC_SECTIONS) assert.ok(spec.includes(h), `bare SPEC.md missing ${h}`);
+  assert.ok(spec.includes('id|status|task|cites\n---|---|---|---'), 'bare §T carries the delimiter row');
+  assert.ok(spec.includes('id|date|cause|fix\n---|---|---|---'), 'bare §B carries the delimiter row');
+  assert.ok(/^- V1:/m.test(spec), 'bare §V invariants are bullets');
   assert.ok(/fs\.writeFileSync\(path\.join\(dir, 'SPEC\.md'\), specTemplate\(name\)\)/.test(src),
     'bootstrapNoGithub actually writes SPEC.md');
 });
@@ -89,6 +99,13 @@ test('SDD.md defines the sections, the encoding, and the maintenance moves (V67)
   }
   assert.ok(/never reused/i.test(sdd), 'SDD.md must pin that ids are never reused');
   assert.ok(sdd.includes('## Maintenance'), 'SDD.md needs the maintenance protocol');
+  // The examples are what an agent copies (B24): every pipe-table example shows
+  // its delimiter row, the §V example shows bullets.
+  const headers = sdd.match(/^id\|[^\n]*$/gm) || [];
+  assert.ok(headers.length >= 3, 'SDD.md shows §R, §T and §B examples');
+  assert.equal((sdd.match(/^id\|[^\n]*\n---\|---/gm) || []).length, headers.length,
+    'every SDD.md pipe-table example carries the delimiter row');
+  assert.ok(/^- V13:/m.test(sdd), 'SDD.md §V example is one bullet per invariant');
 });
 
 test('AGENTS.md carries the same three rules at its top (V67)', () => {

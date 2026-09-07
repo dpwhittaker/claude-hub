@@ -25,18 +25,20 @@ first feature (§T.1). ⊥ leave this placeholder standing.
 
 ## §V INVARIANTS
 
-V1: served `baseurl` = `/<NAME>` = sentinel `proxyPrefix`. any ≠ → every link & asset breaks under the proxy.
-V2: preview deps ∈ `Gemfile.local`. ⊥ create `Gemfile` — Pages would build against it & the two configs fight.
-V3: `.project-meta.json` `routes` ! track the permalink scheme. change `permalink:`/add a collection → update `routes`, else Browse's eye-icon previews 404.
-V4: `README.md` H1/¶1/`tags` = the landing card's title/description/badges. ⊥ let them drift from §G.
-V5: agent-facing files (`AGENTS.md`, `SPEC.md`, `.project-meta.json`, `serve-local.sh`, `Gemfile.local*`, `vendor`) ∈ `_config.yml` `exclude`. ⊥ ship them in the built site.
+- V1: served `baseurl` = `/<NAME>` = sentinel `proxyPrefix`. any ≠ → every link & asset breaks under the proxy.
+- V2: preview deps ∈ `Gemfile.local`. ⊥ create `Gemfile` — Pages would build against it & the two configs fight.
+- V3: `.project-meta.json` `routes` ! track the permalink scheme. change `permalink:`/add a collection → update `routes`, else Browse's eye-icon previews 404.
+- V4: `README.md` H1/¶1/`tags` = the landing card's title/description/badges. ⊥ let them drift from §G.
+- V5: agent-facing files (`AGENTS.md`, `SPEC.md`, `.project-meta.json`, `serve-local.sh`, `Gemfile.local*`, `vendor`) ∈ `_config.yml` `exclude`. ⊥ ship them in the built site.
 
 ## §T TASKS
 
 id|status|task|cites
+---|---|---|---
 T1|.|agree §G w/ user; rewrite §G + `README.md` H1/¶1/`tags` to match|V4
 T2|.|first feature. add §I rows for surface it adds, §V for rules it must hold|-
 
 ## §B BUGS
 
 id|date|cause|fix
+---|---|---|---

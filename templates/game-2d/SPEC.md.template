@@ -24,18 +24,20 @@ first feature (§T.1). ⊥ leave this placeholder standing.
 
 ## §V INVARIANTS
 
-V1: `base` in `vite.config.ts` = `/<NAME>/` = sentinel `proxyPrefix`. any ≠ → assets 404 through the proxy while `127.0.0.1:<PORT>` looks fine.
-V2: `server.allowedHosts` ⊇ `['.ts.net', 'localhost']`. ⊥ a concrete FQDN (commits the machine's tailnet name). loopback passes while the tailnet URL 403s ∴ test through the REAL url.
-V3: the dev server is `vite@<NAME>.service`'s alone. ⊥ 2nd process on `<PORT>`.
-V4: `README.md` H1/¶1/`tags` = the landing card's title/description/badges. ⊥ let them drift from §G.
-V5: game state lives in Phaser scenes. ⊥ a 2nd source of truth in DOM/globals.
+- V1: `base` in `vite.config.ts` = `/<NAME>/` = sentinel `proxyPrefix`. any ≠ → assets 404 through the proxy while `127.0.0.1:<PORT>` looks fine.
+- V2: `server.allowedHosts` ⊇ `['.ts.net', 'localhost']`. ⊥ a concrete FQDN (commits the machine's tailnet name). loopback passes while the tailnet URL 403s ∴ test through the REAL url.
+- V3: the dev server is `vite@<NAME>.service`'s alone. ⊥ 2nd process on `<PORT>`.
+- V4: `README.md` H1/¶1/`tags` = the landing card's title/description/badges. ⊥ let them drift from §G.
+- V5: game state lives in Phaser scenes. ⊥ a 2nd source of truth in DOM/globals.
 
 ## §T TASKS
 
 id|status|task|cites
+---|---|---|---
 T1|.|agree §G w/ user; rewrite §G + `README.md` H1/¶1/`tags` to match|V4
 T2|.|first feature. add §I rows for surface it adds, §V for rules it must hold|-
 
 ## §B BUGS
 
 id|date|cause|fix
+---|---|---|---
