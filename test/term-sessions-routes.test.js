@@ -28,16 +28,17 @@ test('GET /api/term-sessions/<proj> reflects the on-disk map', async () => {
   const fx = await startFixture();
   try {
     seedProject(fx, 'demo', {
-      sessions: { s1: 'uuid-1', s2: 'uuid-2' },
+      sessions: { s1: 'uuid-1', s2: { uuid: 'uuid-2', agent: 'codex' } },
       lastActive: 's2',
     });
     const r = await fetch(fx.url + '/api/term-sessions/demo');
     assert.equal(r.status, 200);
     const body = await r.json();
+    // s1 is seeded in the pre-agent bare-string shape and comes back claude.
     assert.deepEqual(body, {
       sessions: [
-        { id: 's1', uuid: 'uuid-1', title: null },
-        { id: 's2', uuid: 'uuid-2', title: null },
+        { id: 's1', uuid: 'uuid-1', agent: 'claude', title: null },
+        { id: 's2', uuid: 'uuid-2', agent: 'codex', title: null },
       ],
       lastActive: 's2',
     });
@@ -149,6 +150,42 @@ test('405 on unsupported methods', async () => {
     assert.equal(b.status, 405);
     const c = await fetch(fx.url + '/api/term-sessions/demo/s1', { method: 'GET' });
     assert.equal(c.status, 405);
+  } finally {
+    await fx.close();
+  }
+});
+
+// V68: the agent a POST asks for is validated before anything is written or
+// enabled. An unknown one is an error, not a silent fall back to claude —
+// the check runs ahead of the sudo branch, so it is reachable here.
+test('V68: POST rejects an unknown agent without touching the map', async () => {
+  const fx = await startFixture();
+  try {
+    const dir = seedProject(fx, 'demo', { sessions: { s1: 'u1' }, lastActive: 's1' });
+    for (const agent of ['gemini', '', 42, null]) {
+      const r = await fetch(fx.url + '/api/term-sessions/demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent }),
+      });
+      assert.equal(r.status, 400, `agent ${JSON.stringify(agent)} should 400`);
+      assert.equal((await r.json()).error, 'unknown agent');
+    }
+    assert.deepEqual(Object.keys(readSessionsMap(dir).sessions), ['s1'], 'map untouched');
+  } finally {
+    await fx.close();
+  }
+});
+
+test('V68: POST to an unknown project is 404 even with a valid agent', async () => {
+  const fx = await startFixture();
+  try {
+    const r = await fetch(fx.url + '/api/term-sessions/nope', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: 'codex' }),
+    });
+    assert.equal(r.status, 404);
   } finally {
     await fx.close();
   }

@@ -43,7 +43,10 @@ test('readSessionsMap drops keys that violate sN shape', () => {
       lastActive: 's1',
     }));
     const m = readSessionsMap(dir);
-    assert.deepEqual(m.sessions, { s1: 'u1', s2: 'u2' });
+    assert.deepEqual(m.sessions, {
+      s1: { uuid: 'u1', agent: 'claude' },
+      s2: { uuid: 'u2', agent: 'claude' },
+    });
     assert.equal(m.lastActive, 's1');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -66,10 +69,102 @@ test('readSessionsMap clears lastActive when the id is gone', () => {
 test('writeSessionsMap → readSessionsMap roundtrip', () => {
   const dir = tmpProjectDir();
   try {
-    writeSessionsMap(dir, { sessions: { s1: 'u1', s3: 'u3' }, lastActive: 's3' });
-    assert.deepEqual(readSessionsMap(dir), { sessions: { s1: 'u1', s3: 'u3' }, lastActive: 's3' });
+    writeSessionsMap(dir, {
+      sessions: { s1: { uuid: 'u1', agent: 'claude' }, s3: { uuid: 'u3', agent: 'codex' } },
+      lastActive: 's3',
+    });
+    assert.deepEqual(readSessionsMap(dir), {
+      sessions: { s1: { uuid: 'u1', agent: 'claude' }, s3: { uuid: 'u3', agent: 'codex' } },
+      lastActive: 's3',
+    });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// V68: the pre-agent file shape. Every project created before the "+" menu
+// offered a choice has one on disk, and it must keep working untouched.
+test('V68: a bare-string entry reads as a claude tab', () => {
+  const dir = tmpProjectDir();
+  try {
+    fs.writeFileSync(path.join(dir, '.develop-sessions.json'), JSON.stringify({
+      sessions: { s1: 'legacy-uuid' },
+      lastActive: 's1',
+    }));
+    assert.deepEqual(readSessionsMap(dir).sessions, {
+      s1: { uuid: 'legacy-uuid', agent: 'claude' },
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('V68: writing a legacy map normalizes it to the object shape on disk', () => {
+  const dir = tmpProjectDir();
+  try {
+    writeSessionsMap(dir, { sessions: { s1: 'legacy-uuid' }, lastActive: 's1' });
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, '.develop-sessions.json'), 'utf8'));
+    assert.deepEqual(raw.sessions, { s1: { uuid: 'legacy-uuid', agent: 'claude' } });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('V68: an unknown or missing agent reads as claude, never throws', () => {
+  const dir = tmpProjectDir();
+  try {
+    fs.writeFileSync(path.join(dir, '.develop-sessions.json'), JSON.stringify({
+      sessions: {
+        s1: { uuid: 'u1', agent: 'gemini' },
+        s2: { uuid: 'u2' },
+        s3: { uuid: 'u3', agent: 42 },
+      },
+      lastActive: 's1',
+    }));
+    const { sessions } = readSessionsMap(dir);
+    assert.equal(sessions.s1.agent, 'claude');
+    assert.equal(sessions.s2.agent, 'claude');
+    assert.equal(sessions.s3.agent, 'claude');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('V68: an entry with no usable uuid is dropped, not half-read', () => {
+  const dir = tmpProjectDir();
+  try {
+    fs.writeFileSync(path.join(dir, '.develop-sessions.json'), JSON.stringify({
+      sessions: { s1: { agent: 'codex' }, s2: '', s3: { uuid: '', agent: 'codex' }, s4: { uuid: 'ok' } },
+      lastActive: 's1',
+    }));
+    const { sessions, lastActive } = readSessionsMap(dir);
+    assert.deepEqual(Object.keys(sessions), ['s4']);
+    assert.equal(lastActive, null, 'lastActive pointing at a dropped entry is cleared');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('V68: isAgent / normalizeAgent are the single validator', () => {
+  const { AGENTS, DEFAULT_AGENT, isAgent, normalizeAgent } = require('../lib/term-sessions');
+  assert.deepEqual([...AGENTS], ['claude', 'codex']);
+  assert.equal(DEFAULT_AGENT, 'claude');
+  assert.equal(isAgent('codex'), true);
+  assert.equal(isAgent('gemini'), false);
+  assert.equal(isAgent(undefined), false);
+  assert.equal(normalizeAgent('codex'), 'codex');
+  assert.equal(normalizeAgent('gemini'), 'claude');
+  assert.equal(normalizeAgent(undefined), 'claude');
+});
+
+// The menu the "+" button opens and the server's validator have to agree —
+// a label offered in the UI whose id the API rejects is a 400 on click.
+test('V68: every agent the "+" menu offers is one the API accepts', () => {
+  const { TERM_AGENTS } = require('../lib/term-agents');
+  const { isAgent } = require('../lib/term-sessions');
+  for (const a of TERM_AGENTS) {
+    assert.equal(isAgent(a.id), true, a.id + ' is offered but not accepted');
+    assert.ok(a.label, a.id + ' has no label');
   }
 });
 

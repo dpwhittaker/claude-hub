@@ -132,7 +132,7 @@ sudo systemctl enable --now <unit>`. `services/ttyd-attach.sh` installs to
 | Unit | What it runs |
 |---|---|
 | `services/claude-hub.service` | `node server.js` (this proxy). Adjust `ExecStart` to your node binary path. |
-| `services/ttyd@.service` | Templated. `systemctl enable --now ttyd@<name>` brings up `unix:/run/ttyd/<name>.sock` running `ttyd-attach.sh <name>` — joins or creates tmux session named `<name>` running `claude --continue` (omitted on first launch when no prior session exists, avoid exit-loop). |
+| `services/ttyd@.service` | Templated. `systemctl enable --now ttyd@<proj>__<sN>` brings up `unix:/run/ttyd/<proj>__<sN>.sock` running `ttyd-attach.sh <proj>__<sN>` — joins or creates the tmux session of that name, running the tab's agent: `claude --session-id/--resume <uuid>` or plain `codex`, per `{uuid, agent}` in `<proj>/.develop-sessions.json`. A bare `ttyd@<name>` (no `__`) is the legacy/admin form and runs `claude --continue`, omitted on first launch when no prior session exists to avoid an exit-loop. |
 | `services/ttyd-develop.service` | Admin: fresh `claude` in `~/projects` per browser connection. No tmux. |
 | `services/ttyd-shell.service` | Admin: raw `bash -l`. No claude, no tmux. |
 | `services/vite@.service` | Templated. `systemctl enable --now vite@<name>` runs `npm run dev` in `~/projects/<name>` under `Restart=always`. Enabled during any vite-family template scaffold (`vite` / `game-2d` / `game-3d` / `game-3d-complex` all share this one unit). |
@@ -252,17 +252,18 @@ against a scratch `PROJECTS_ROOT`.
 | `lib/worktree.js` | Git-worktree teardown plan (V56). |
 | `lib/file-routes.js` | `routes` glob → URL rewriting (V54). |
 | `lib/scaffold-install.js` | Command line + env for a scaffold's `npm install` — both guards against the inherited `NODE_ENV=production` (V65, B20). |
-| `lib/term-sessions.js` | Develop-pane tab map io (V47). |
+| `lib/term-sessions.js` | Develop-pane tab map io + the agent validator (V47, V68). |
+| `lib/term-agents.js` | The develop `+` menu: which agent a new tab runs (V68). |
 | `lib/android-input.js` | Android soft-keyboard input shim for ttyd pages (V61, B17, B23). |
 | `lib/keyboard-fit.js` | Mobile viewport fit for ttyd pages; `patchViewportMeta` + `installKeyboardFit` (V62). |
 | `lib/term-reconnect.js` | Automatic reconnect + post-reopen refit for ttyd pages (V63, V64, B19). |
 | `lib/escape-html.js` | The one server-side HTML escaper. |
 
-Eleven helpers are shared between server and browser by injecting their source
+Twelve helpers are shared between server and browser by injecting their source
 with `.toString()` (`tabKey`, `installTouchWheel`, `isEmbedder`,
 `tabsToReload`, `matchGlob`, `routeForPath`, `installOsc52Bridge`,
 `installKeyboardFit`, `installAndroidInput`, `installTermReconnect`,
-`makeSplitLayout`). **Those must stay
+`makeSplitLayout`, `openAgentMenu`). **Those must stay
 self-contained** — no closures over module scope, no `require` inside them —
 because the browser only receives the function body.
 

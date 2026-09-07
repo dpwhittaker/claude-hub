@@ -36,7 +36,7 @@ unless you opt in (see "Sharing across devices" below).
 
 ![Browse — file viewer](docs/img/browse-default.png)
 
-**Browse + Develop together** — the terminal icon in the header (or `?dev=1` on the URL) opens the `Develop` pane below the tree and tabs, spanning the full width, with a draggable splitter between them. The same long-lived tmux Claude session you'd reach via the `Develop` button is now in the same window as the file viewer, so you can read, ask, and edit without switching. Each project can hold several Claude conversations at once — the tab strip along the top of the pane switches between them, and each one keeps its own scrollback. This is the core workflow: Claude writes, the tree refreshes, your tab reloads, you keep reading:
+**Browse + Develop together** — the terminal icon in the header (or `?dev=1` on the URL) opens the `Develop` pane below the tree and tabs, spanning the full width, with a draggable splitter between them. The same long-lived tmux Claude session you'd reach via the `Develop` button is now in the same window as the file viewer, so you can read, ask, and edit without switching. Each project can hold several agent sessions at once — the tab strip along the top of the pane switches between them, and each one keeps its own scrollback. The `+` at the end of the strip asks which agent the new tab should run, **Claude** or **Codex**; each gets its own tmux session, and a Codex tab is marked with a small badge since it has no AI-generated title to show. One difference worth knowing: a Claude tab resumes its conversation by id after a reboot, while Codex has no flag to pin a session id to a tab, so a Codex tab's conversation lives as long as its tmux session — run `codex resume` in the pane to pick an older thread back up. This is the core workflow: Claude writes, the tree refreshes, your tab reloads, you keep reading:
 
 ![Browse + Develop pane](docs/img/browse-with-develop.png)
 
@@ -220,7 +220,7 @@ filesystem access to `~/projects`.
 | `services/claude-hub.service` | systemd unit for the proxy itself. |
 | `services/ttyd@.service` | Templated systemd unit. `systemctl enable --now ttyd@<project>` brings up a per-project terminal. |
 | `services/ttyd-develop.service`, `services/ttyd-shell.service` | Static admin terminal units (fresh claude in `~/projects`, raw bash). |
-| `services/ttyd-attach.sh` | Helper that ttyd execs per browser connection — joins or creates the per-project tmux session. |
+| `services/ttyd-attach.sh` | Helper that ttyd execs per browser connection — joins or creates the per-tab tmux session and starts its agent (Claude or Codex). |
 | `AGENTS.md` | Architecture + ops + gotchas. Read it before changing the routing or the systemd units. |
 | `SPEC.md` | The durable spec — goals, constraints, interfaces, numbered invariants, tasks, and every bug with the invariant that now catches it. |
 | `SDD.md` | The spec-driven-development protocol `SPEC.md` follows: sections, compressed encoding, backprop, and the rules for retiring what a new requirement invalidated. Every scaffolded project ships a starter `SPEC.md` pointing here. |

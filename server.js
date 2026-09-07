@@ -656,22 +656,43 @@ function handleListTermSessions(_req, res, project) {
   const dir = path.join(PROJECTS_ROOT, project);
   const map = termSessionsLib.readSessionsMap(dir);
   const sessions = Object.entries(map.sessions)
-    .map(([id, uuid]) => ({
+    .map(([id, entry]) => ({
       id,
-      uuid,
-      title: termSessionsLib.readSessionTitle(dir, uuid),
+      uuid: entry.uuid,
+      agent: entry.agent,
+      // Titles come out of claude's own transcript on disk; a codex tab has
+      // no equivalent to read, so it labels by id + its agent badge.
+      title: entry.agent === 'claude'
+        ? termSessionsLib.readSessionTitle(dir, entry.uuid)
+        : null,
     }))
     .sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)));
   sendJson(res, 200, { sessions, lastActive: map.lastActive });
 }
 
-async function handleCreateTermSession(req, res, project) {
+// POST body is optional: `{agent}` picks which CLI the tab runs, defaulting
+// to claude. An agent we don't know is a 400, never a silent fallback — a
+// typo that quietly hands you the wrong agent is worse than an error.
+function handleCreateTermSession(req, res, project) {
   if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
+  readJsonBody(req, res, 4096, (body, err) => {
+    if (err) return;
+    if (body && body.agent !== undefined && !termSessionsLib.isAgent(body.agent)) {
+      return sendJson(res, 400, { error: 'unknown agent' });
+    }
+    const agent = termSessionsLib.normalizeAgent(body && body.agent);
+    createTermSession(res, project, agent).catch((e) => {
+      if (!res.headersSent) sendJson(res, 500, { error: 'create failed: ' + e.message });
+    });
+  });
+}
+
+async function createTermSession(res, project, agent) {
   const dir = path.join(PROJECTS_ROOT, project);
   const map = termSessionsLib.readSessionsMap(dir);
   const id = termSessionsLib.allocateTabId(map.sessions);
   const uuid = crypto.randomUUID();
-  map.sessions[id] = uuid;
+  map.sessions[id] = { uuid, agent };
   map.lastActive = id;
   try {
     termSessionsLib.writeSessionsMap(dir, map);
@@ -689,7 +710,7 @@ async function handleCreateTermSession(req, res, project) {
   }
   const sockPath = ttydSocketPath(termSessionsLib.joinTermKey(project, id));
   await waitForSocket(sockPath, 5000);
-  sendJson(res, 200, { id, uuid });
+  sendJson(res, 200, { id, uuid, agent });
 }
 
 async function handleDeleteTermSession(_req, res, project, id) {
@@ -1037,7 +1058,10 @@ function handleCreateProject(req, res) {
     // doesn't race binding.
     const firstUuid = crypto.randomUUID();
     try {
-      termSessionsLib.writeSessionsMap(dir, { sessions: { s1: firstUuid }, lastActive: 's1' });
+      termSessionsLib.writeSessionsMap(dir, {
+        sessions: { s1: { uuid: firstUuid, agent: termSessionsLib.DEFAULT_AGENT } },
+        lastActive: 's1',
+      });
     } catch (e) {
       return sendJson(res, 500, { error: 'write sessions map failed: ' + e.message });
     }

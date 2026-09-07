@@ -5,14 +5,26 @@
 #
 #   <project>__<tabId>   per-tab develop terminal (e.g. claude-hub__s1).
 #                        tabId is `sN`. tmux session name = full key. Each tab
-#                        owns its own claude conversation, identified by the
-#                        uuid recorded in <project>/.develop-sessions.json
-#                        under sessions[tabId]. The first attach for a tab
-#                        runs `claude --session-id <uuid>`; subsequent
-#                        attaches (and post-host-reboot restarts) run
-#                        `claude --resume <uuid>` so the conversation
-#                        persists. Closing the tab in the UI destroys the
-#                        tmux session and removes the entry from the map.
+#                        records which agent it runs and a conversation uuid in
+#                        <project>/.develop-sessions.json under
+#                        sessions[tabId] = {uuid, agent}. Closing the tab in
+#                        the UI destroys the tmux session and removes the
+#                        entry from the map.
+#
+#                        agent `claude`: the first attach for a tab runs
+#                        `claude --session-id <uuid>`; subsequent attaches
+#                        (and post-host-reboot restarts) run
+#                        `claude --resume <uuid>` so the conversation persists.
+#
+#                        agent `codex`: plain `codex`. codex has no flag that
+#                        preassigns a session id — it offers `resume <id>` and
+#                        `resume --last`, and --last is cwd-scoped, so with two
+#                        codex tabs in one project it would resume the wrong
+#                        one. The tmux session is therefore the whole
+#                        persistence story for a codex tab: it survives ttyd
+#                        restarts and every reconnect, and a host reboot starts
+#                        the tab fresh. `codex resume` inside the pane picks an
+#                        old thread back up by hand.
 #
 #   <project>            legacy bare-project key, prior to multi-tab. Left
 #                        functional for any unit that hasn't been migrated.
@@ -26,6 +38,7 @@ set -e
 
 KEY="$1"
 CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
+CODEX_BIN="${CODEX_BIN:-codex}"
 PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/projects}"
 
 if [[ -z "$KEY" ]]; then
@@ -49,29 +62,46 @@ if [[ ! -d "$PROJECT_DIR" ]]; then
     exit 1
 fi
 
-# Resolve the claude command for this tab. For per-tab keys we always run
-# `claude --session-id <uuid>` (first launch) or `claude --resume <uuid>`
-# (uuid already has a jsonl on disk). For legacy bare keys we keep the
-# pre-multi-tab `--continue` gate.
+# Resolve the agent command for this tab. Per-tab keys read {uuid, agent}
+# out of the sessions map; legacy bare keys keep the pre-multi-tab
+# `--continue` gate and are always claude.
 encoded="-$(printf '%s' "$PROJECT_DIR" | sed 's|^/||; s|/|-|g')"
 sessions_dir="$HOME/.claude/projects/$encoded"
+bootstrap_file="$PROJECT_DIR/.claude-bootstrap.txt"
 
 if [[ -n "$TAB_ID" ]]; then
     sessions_file="$PROJECT_DIR/.develop-sessions.json"
     UUID=""
+    AGENT=""
     if [[ -f "$sessions_file" ]]; then
-        # Minimal JSON probe — no jq dependency. Matches "tabId": "uuid".
-        UUID=$(sed -n "s/.*\"${TAB_ID}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$sessions_file" | head -1)
+        # Minimal JSON probes — no jq dependency. Current shape is an object
+        # per tab, written by writeSessionsMap with 2-space JSON.stringify
+        # indent, so the entry spans lines and `sed -n '/"sN": {/,/}/p'`
+        # isolates exactly one tab's block before the field probes run.
+        block=$(sed -n "/\"${TAB_ID}\"[[:space:]]*:[[:space:]]*{/,/}/p" "$sessions_file")
+        UUID=$(printf '%s\n' "$block" | sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        AGENT=$(printf '%s\n' "$block" | sed -n 's/.*"agent"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        if [[ -z "$UUID" ]]; then
+            # Pre-agent shape: "tabId": "uuid" on one line. Reads as claude.
+            UUID=$(sed -n "s/.*\"${TAB_ID}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$sessions_file" | head -1)
+        fi
     fi
     if [[ -z "$UUID" ]]; then
         echo "no session uuid for tab $TAB_ID in $sessions_file" >&2
         exit 1
     fi
-    if [[ -f "$sessions_dir/$UUID.jsonl" ]]; then
-        claude_cmd="$CLAUDE_BIN --resume $UUID --chrome"
+    if [[ "$AGENT" == "codex" ]]; then
+        agent_cmd="$CODEX_BIN"
+        # No transcript on disk to gate on, and a fresh codex every time the
+        # tmux session is (re)created — so only let the bootstrap prompt fire
+        # when there is actually one queued, i.e. straight after project
+        # create. Otherwise every reboot would re-send it.
+        if [[ -f "$bootstrap_file" ]]; then is_fresh=1; else is_fresh=0; fi
+    elif [[ -f "$sessions_dir/$UUID.jsonl" ]]; then
+        agent_cmd="$CLAUDE_BIN --resume $UUID --chrome"
         is_fresh=0
     else
-        claude_cmd="$CLAUDE_BIN --session-id $UUID --chrome"
+        agent_cmd="$CLAUDE_BIN --session-id $UUID --chrome"
         is_fresh=1
     fi
 else
@@ -83,11 +113,11 @@ else
         continue_flag="--continue"
         is_fresh=0
     fi
-    claude_cmd="$CLAUDE_BIN $continue_flag --chrome"
+    agent_cmd="$CLAUDE_BIN $continue_flag --chrome"
 fi
 
 if ! tmux has-session -t "$KEY" 2>/dev/null; then
-    tmux new-session -d -s "$KEY" -c "$PROJECT_DIR" "$claude_cmd"
+    tmux new-session -d -s "$KEY" -c "$PROJECT_DIR" "$agent_cmd"
     # window-size latest = the most recently attached/focused client's size wins
     # (closer to "fit on attach" than tmux's default of smallest-attached).
     # aggressive-resize lets the active window adapt rather than being pinned
@@ -128,7 +158,6 @@ if ! tmux has-session -t "$KEY" 2>/dev/null; then
     # sleep gives claude time to finish booting before we type into the pane.
     # Only fire on the project's very first tab so secondary tabs start clean.
     if [[ "$is_fresh" == "1" && ( -z "$TAB_ID" || "$TAB_ID" == "s1" ) ]]; then
-        bootstrap_file="$PROJECT_DIR/.claude-bootstrap.txt"
         ( sleep 4
           if [[ -f "$bootstrap_file" ]]; then
               tmux send-keys -t "$KEY" -l "$(cat "$bootstrap_file")"
