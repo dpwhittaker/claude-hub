@@ -48,6 +48,7 @@ const { escapeHtml } = require('./lib/escape-html');
 const { renderViewShell } = require('./lib/view-shell');
 const { renderShellHtml } = require('./lib/pwa-shell');
 const termSessionsLib = require('./lib/term-sessions');
+const termRelayLib = require('./lib/term-relay');
 const scaffoldInstall = require('./lib/scaffold-install');
 const crypto = require('node:crypto');
 
@@ -660,6 +661,183 @@ async function listProjectTabUnits(project) {
     if (m) units.push(m[1]);
   }
   return units;
+}
+
+// ---------- Glasses relay: /api/term-capture, /api/term-input, /api/term-scroll, /api/term-pending, /api/stt ----------
+// The G2 client (~/projects/claude-hub-g2) reads a develop tab through tmux
+// rather than through ttyd's websocket: capture-pane for the text, send-keys
+// for input and for SGR wheel ticks (scroll), and a small relay that lets a
+// WATCHING glasses client answer Claude's questions / permission prompts via
+// services/glasses-relay-hook.mjs. SPEC §V74–§V77.
+const termRelay = termRelayLib.makeRelay({
+  watchTtlMs: Number(process.env.TERM_WATCH_TTL_MS) || undefined,
+});
+const STT_URL = process.env.STT_URL || 'http://127.0.0.1:8012';
+const execFileAsync = require('node:util').promisify(require('node:child_process').execFile);
+
+// Exact session-name match (`=`), no prefix search — and the trailing ':' is
+// load-bearing: has-session takes `=key`, but every pane-targeted command
+// (send-keys, capture-pane, display-message) answers "can't find pane" to it
+// and wants `=key:` = that session's active pane (B25).
+function tmuxSession(key) { return '=' + key; }
+function tmuxTarget(key) { return '=' + key + ':'; }
+
+async function tmuxHasSession(key) {
+  try { await execFileAsync('tmux', ['has-session', '-t', tmuxSession(key)], { timeout: 3000 }); return true; }
+  catch { return false; }
+}
+
+function readRawBody(req, res, maxBytes) {
+  return new Promise((resolve) => {
+    let bytes = 0;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        res.writeHead(413, { 'Content-Type': 'text/plain' });
+        res.end('payload too large');
+        req.destroy();
+        resolve(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(res.headersSent ? null : Buffer.concat(chunks)));
+    req.on('error', () => {
+      if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end('read error'); }
+      resolve(null);
+    });
+  });
+}
+
+function relayKeyOr400(res, key) {
+  if (termRelayLib.isTermKey(key)) return true;
+  sendJson(res, 400, { error: 'invalid terminal key' });
+  return false;
+}
+
+// GET → the visible pane as text. Polling this is what makes a terminal
+// "watched": only then may a hook hold a prompt for the glasses (V75).
+async function handleTermCapture(_req, res, key) {
+  if (!relayKeyOr400(res, key)) return;
+  if (!(await tmuxHasSession(key))) return sendJson(res, 404, { error: 'no such terminal' });
+  termRelay.markWatched(key);
+  let capture;
+  try {
+    capture = await execFileAsync('tmux', ['capture-pane', '-p', '-J', '-t', tmuxTarget(key)],
+      { timeout: 3000, maxBuffer: 4 * 1024 * 1024 });
+  } catch (e) {
+    return sendJson(res, 500, { error: 'capture failed: ' + e.message });
+  }
+  let cols = 0; let rows = 0;
+  try {
+    const dims = await execFileAsync('tmux', ['display-message', '-p', '-t', tmuxTarget(key), '#{pane_width} #{pane_height}'], { timeout: 3000 });
+    [cols, rows] = dims.stdout.trim().split(' ').map(Number);
+  } catch {}
+  sendJson(res, 200, {
+    key, cols, rows,
+    lines: termRelayLib.parseCapture(capture.stdout),
+    pending: termRelay.getPending(key),
+    state: termRelay.getState(key),
+  });
+}
+
+// POST {text, enter?} → typed into the pane literally (`send-keys -l`), then
+// Enter when asked. This is how a spoken prompt lands in a Claude session.
+function handleTermInput(req, res, key) {
+  if (!relayKeyOr400(res, key)) return;
+  readJsonBody(req, res, 16384, (body, err) => {
+    if (err) return;
+    if (!body || typeof body.text !== 'string' || body.text.length > 8192) {
+      return sendJson(res, 400, { error: 'text required (≤ 8192 chars)' });
+    }
+    (async () => {
+      if (!(await tmuxHasSession(key))) return sendJson(res, 404, { error: 'no such terminal' });
+      if (body.text) await execFileAsync('tmux', ['send-keys', '-t', tmuxTarget(key), '-l', '--', body.text], { timeout: 3000 });
+      if (body.enter) await execFileAsync('tmux', ['send-keys', '-t', tmuxTarget(key), 'Enter'], { timeout: 3000 });
+      sendJson(res, 200, { ok: true });
+    })().catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: 'send-keys failed: ' + e.message }); });
+  });
+}
+
+// POST {lines} → SGR wheel ticks typed into the pane; negative scrolls toward
+// older output. Claude Code consumes them as transcript scroll (V77).
+function handleTermScroll(req, res, key) {
+  if (!relayKeyOr400(res, key)) return;
+  readJsonBody(req, res, 4096, (body, err) => {
+    if (err) return;
+    const lines = body && Number(body.lines);
+    if (!Number.isFinite(lines)) return sendJson(res, 400, { error: 'lines required' });
+    const seqs = termRelayLib.wheelSequences(lines);
+    (async () => {
+      if (!(await tmuxHasSession(key))) return sendJson(res, 404, { error: 'no such terminal' });
+      if (seqs.length) await execFileAsync('tmux', ['send-keys', '-t', tmuxTarget(key), '-l', '--', ...seqs], { timeout: 3000 });
+      sendJson(res, 200, { ok: true, ticks: seqs.length });
+    })().catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: 'send-keys failed: ' + e.message }); });
+  });
+}
+
+// Hook side. POST {kind, session_id, payload}: `stop` / `notification` are
+// recorded and answered at once; `question` / `permission` are HELD until the
+// glasses answer or release them, the watcher goes away, or the hold ages out
+// — and only if the key is watched when they arrive (V75).
+function handleTermPendingPost(req, res, key) {
+  if (!relayKeyOr400(res, key)) return;
+  readJsonBody(req, res, 256 * 1024, (body, err) => {
+    if (err) return;
+    if (!body || !termRelayLib.KINDS.includes(body.kind)) return sendJson(res, 400, { error: 'unknown kind' });
+    const payload = body.payload && typeof body.payload === 'object' ? body.payload : {};
+    if (body.kind === 'stop') {
+      termRelay.setState(key, { lastMessage: String(payload.last_assistant_message || ''), lastMessageAt: Date.now() });
+      return sendJson(res, 200, { ok: true, relay: false, reason: 'recorded' });
+    }
+    if (body.kind === 'notification') {
+      termRelay.setState(key, { notification: payload, notificationAt: Date.now() });
+      return sendJson(res, 200, { ok: true, relay: false, reason: 'recorded' });
+    }
+    termRelay.hold(key, body.kind, payload).then((result) => sendJson(res, 200, { ok: true, ...result }));
+  });
+}
+
+function handleTermPendingGet(_req, res, key) {
+  if (!relayKeyOr400(res, key)) return;
+  sendJson(res, 200, { pending: termRelay.getPending(key), state: termRelay.getState(key) });
+}
+
+// Glasses side. POST {id, answer} resolves the held prompt; {id, release:true}
+// hands it back to the TUI.
+function handleTermPendingAnswer(req, res, key) {
+  if (!relayKeyOr400(res, key)) return;
+  readJsonBody(req, res, 64 * 1024, (body, err) => {
+    if (err) return;
+    if (!body || typeof body.id !== 'string') return sendJson(res, 400, { error: 'id required' });
+    const result = body.release
+      ? termRelay.release(key, body.id)
+      : termRelay.answer(key, body.id, body.answer && typeof body.answer === 'object' ? body.answer : {});
+    if (!result.ok) return sendJson(res, result.status, { error: result.error });
+    sendJson(res, 200, { ok: true });
+  });
+}
+
+// POST raw PCM (16 kHz s16le mono) → forwarded to the whisper service
+// (services/stt/, STT_URL) → {text}. 503 when the service is down.
+async function handleStt(req, res) {
+  const body = await readRawBody(req, res, 16 * 1024 * 1024);
+  if (body === null) return;
+  let upstream;
+  try {
+    upstream = await fetch(STT_URL + '/transcribe', {
+      method: 'POST',
+      headers: { 'content-type': req.headers['content-type'] || 'application/octet-stream' },
+      body,
+      signal: AbortSignal.timeout(60000),
+    });
+  } catch (e) {
+    return sendJson(res, 503, { error: 'stt unavailable: ' + e.message });
+  }
+  const text = await upstream.text();
+  res.writeHead(upstream.status, { 'Content-Type': upstream.headers.get('content-type') || 'application/json', 'Cache-Control': 'no-store' });
+  res.end(text);
 }
 
 function handleListTermSessions(_req, res, project) {
@@ -2341,6 +2519,37 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(405, { 'Content-Type': 'text/plain' });
     res.end('method not allowed');
     return;
+  }
+  const termCaptureMatch = /^\/api\/term-capture\/([^/]+)$/.exec(apiPath);
+  if (termCaptureMatch) {
+    if (req.method === 'GET') return handleTermCapture(req, res, decodeURIComponent(termCaptureMatch[1])).catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: e.message }); });
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
+  }
+  const termInputMatch = /^\/api\/term-input\/([^/]+)$/.exec(apiPath);
+  if (termInputMatch) {
+    if (req.method === 'POST') return handleTermInput(req, res, decodeURIComponent(termInputMatch[1]));
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
+  }
+  const termScrollMatch = /^\/api\/term-scroll\/([^/]+)$/.exec(apiPath);
+  if (termScrollMatch) {
+    if (req.method === 'POST') return handleTermScroll(req, res, decodeURIComponent(termScrollMatch[1]));
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
+  }
+  const termPendingAnswerMatch = /^\/api\/term-pending\/([^/]+)\/answer$/.exec(apiPath);
+  if (termPendingAnswerMatch) {
+    if (req.method === 'POST') return handleTermPendingAnswer(req, res, decodeURIComponent(termPendingAnswerMatch[1]));
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
+  }
+  const termPendingMatch = /^\/api\/term-pending\/([^/]+)$/.exec(apiPath);
+  if (termPendingMatch) {
+    const key = decodeURIComponent(termPendingMatch[1]);
+    if (req.method === 'GET') return handleTermPendingGet(req, res, key);
+    if (req.method === 'POST') return handleTermPendingPost(req, res, key);
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
+  }
+  if (apiPath === '/api/stt') {
+    if (req.method === 'POST') return handleStt(req, res).catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: e.message }); });
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
   }
   const termSessionsList = /^\/api\/term-sessions\/([^/]+)$/.exec(apiPath);
   if (termSessionsList) {

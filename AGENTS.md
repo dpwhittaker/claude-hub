@@ -82,6 +82,10 @@ Proxy = only Node process. Everything else (project apps, ttyd terminals) separa
 | `/term/<proj>/` | Forwards to `unix:/run/ttyd/<proj>.sock` if socket exists. Resolved per request — adding project no proxy restart. |
 | `/term/develop/`, `/term/shell/` | Static admin terminals (fresh claude in `~/projects`, raw bash). `/term/wsl/` 301s to `/term/shell/` for old bookmarks. |
 | `/<proj>/*` (optional) | Reverse-proxy to project's backend if `.project-meta.json` declares `proxyTarget`. Card's "Open" button steered via `openUrl` in same file. No proxy restart — claude-hub rebuilds route table on every project create/delete. |
+| `/api/term-capture/<key>` | `GET` the visible text of a develop tab (`tmux capture-pane` of the `<proj>__sN` session) plus any prompt the glasses relay is holding. Polling it is what marks the tab **watched** (see "Glasses relay" below). |
+| `/api/term-input/<key>`, `/api/term-scroll/<key>` | `POST` text (+Enter) into the tab via `send-keys`; `POST` SGR wheel ticks so Claude Code scrolls its transcript. |
+| `/api/term-pending/<key>` | The relay: the Claude Code hook `POST`s a question / permission request here and is held until the glasses answer at `/answer` — only while the tab is watched. `GET` shows what is pending. |
+| `/api/stt` | `POST` raw 16 kHz PCM → proxied to `stt.service` (faster-whisper) → `{text}`. |
 
 ## Project sentinel: `.project-meta.json`
 
@@ -145,6 +149,7 @@ sudo systemctl enable --now <unit>`. `services/ttyd-attach.sh` installs to
 | `services/ttyd-shell.service` | Admin: raw `bash -l`. No claude, no tmux. |
 | `services/vite@.service` | Templated. `systemctl enable --now vite@<name>` runs `npm run dev` in `~/projects/<name>` under `Restart=always`. Enabled during any vite-family template scaffold (`vite` / `game-2d` / `game-3d` / `game-3d-complex` / `evenhub` all share this one unit). |
 | `services/jekyll@.service` | Templated. `systemctl enable --now jekyll@<name>` runs `~/projects/<name>/serve-local.sh` (`bundle exec jekyll serve`) under `Restart=always`, system PATH (Ruby/bundler, no nvm). Enabled only for the `jekyll` template — the one non-vite family. |
+| `services/stt.service` | `services/stt/server.py` under `~/stt-env`: faster-whisper `turbo` on `127.0.0.1:8012`, GPU only under a gpu-gate lease, unloaded after 90 s idle, CPU fallback (V78). |
 
 `/run/ttyd/` shared across every ttyd instance. All three units carry `RuntimeDirectoryPreserve=yes` for that reason — without it, one instance stop = systemd wipes whole dir, orphans every other socket. Don't remove that line.
 
@@ -265,6 +270,7 @@ against a scratch `PROJECTS_ROOT`.
 | `lib/scaffold-install.js` | Command line + env for a scaffold's `npm install` — both guards against the inherited `NODE_ENV=production` (V65, B20). |
 | `lib/term-sessions.js` | Develop-pane tab map io + the agent validator (V47, V68). |
 | `lib/term-agents.js` | The develop `+` menu: which agent a new tab runs (V68). |
+| `lib/term-relay.js` | Watched-terminal registry, held-prompt store and per-tab state behind `/api/term-*`, plus the SGR wheel-tick builder (V74–V77). Pure. |
 | `lib/android-input.js` | Android soft-keyboard input shim for ttyd pages (V61, B17, B23). |
 | `lib/keyboard-fit.js` | Mobile viewport fit for ttyd pages; `patchViewportMeta` + `installKeyboardFit` (V62). |
 | `lib/term-reconnect.js` | Automatic reconnect + post-reopen refit for ttyd pages (V63, V64, B19). |
@@ -280,6 +286,30 @@ them — because the browser only receives the function body. The last two go
 into `landing.html` rather than a template literal: `serveLanding` replaces
 the `/* @inject lib/tag-filter.js */` marker on every request, so the page
 stays editable on disk without a restart while the helpers come from `lib/`.
+
+## Glasses relay (claude-hub-g2)
+
+The G2 glasses app (`~/projects/claude-hub-g2`) reads a develop tab through
+tmux rather than ttyd — `/api/term-capture` for the text, `/api/term-input`
+for typed/spoken prompts, `/api/term-scroll` for wheel ticks — and answers
+Claude's interactive prompts through a hook:
+
+```bash
+node services/install-glasses-hooks.mjs            # wires the hook into ~/.claude/settings.json (idempotent)
+node services/install-glasses-hooks.mjs --remove   # takes exactly those entries out
+```
+
+`services/glasses-relay-hook.mjs` runs on `PreToolUse` (matcher
+`AskUserQuestion`), `PermissionRequest`, `Stop` and `Notification`. **It is
+inert unless a glasses client is watching that terminal right now** — i.e.
+polled `/api/term-capture/<key>` within the last 5 s. Everywhere else it exits
+0 with no output, which Claude Code reads as "no decision", and the ordinary
+TUI dialog appears: no tmux, hub down, unwatched tab, timeout, network error,
+`GLASSES_RELAY=0`. A held prompt is released back to the TUI the moment the
+glasses stop polling, when the user double-taps it away, or after 540 s. The
+verified mechanism (V75, claude-hub-g2 SPEC §R.15): returning
+`updatedInput.answers` from the PreToolUse hook makes the TUI skip its dialog
+and Claude proceeds with the answer.
 
 ## Mobile terminal input (Android)
 

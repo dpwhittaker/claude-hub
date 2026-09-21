@@ -40,4 +40,9 @@ module.exports = [
     files: ['upload-dialog.js'],
     languageOptions: { globals: { ...globals.browser } },
   },
+  // The glasses relay hook + its installer are ESM scripts run by node.
+  {
+    files: ['services/**/*.mjs'],
+    languageOptions: { sourceType: 'module' },
+  },
 ];

@@ -1,0 +1,17 @@
+[Unit]
+Description=claude-hub speech-to-text (faster-whisper, behind gpu-gate)
+After=network.target gpu-gate.service
+
+[Service]
+Type=simple
+User=david
+WorkingDirectory=/home/david/projects/claude-hub/services/stt
+# CTranslate2 needs cuBLAS 12 + cuDNN 9; both come from the pip wheels in the venv.
+Environment=LD_LIBRARY_PATH=/home/david/stt-env/lib/python3.12/site-packages/nvidia/cublas/lib:/home/david/stt-env/lib/python3.12/site-packages/nvidia/cudnn/lib
+Environment=STT_PORT=8012 STT_MODEL=turbo STT_IDLE_SECONDS=90
+ExecStart=/home/david/stt-env/bin/python /home/david/projects/claude-hub/services/stt/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
