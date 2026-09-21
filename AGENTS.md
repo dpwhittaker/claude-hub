@@ -73,7 +73,7 @@ Proxy = only Node process. Everything else (project apps, ttyd terminals) separa
 
 | URL | What it does |
 |---|---|
-| `/` | `landing.html`. Hardcoded cards for **Develop** (fresh claude in `~/projects`) and **Proxy** (this dir). Rest rendered dynamically from `/api/projects`. |
+| `/` | `landing.html`. Hardcoded cards for **Develop** (fresh claude in `~/projects`) and **Proxy** (this dir). Rest rendered dynamically from `/api/projects`. A **tag bar** above the grid (one chip per distinct badge, case-insensitive, plus All) filters the cards; the active tag is kept in `?tag=` (V72). `serveLanding` splices `lib/tag-filter.js` into the page at `/* @inject lib/tag-filter.js */` — the file's one templating hook. |
 | `/api/projects` | `GET` lists managed projects. `POST` creates new one (mkdir + AGENTS/README + `.project-meta.json` + `sudo systemctl enable --now ttyd@<name>`). |
 | `/api/projects/<name>` | `DELETE` stops `ttyd@<name>` plus any `extraUnits`, kills project's tmux session, removes folder — via `git worktree remove` when the sentinel names a `worktreeOf` parent. Needs `.project-meta.json` as sentinel. |
 | `/api/view-tree/<name>` | `GET` returns project's recursive tree as JSON. With `?path=<sub>` returns one level lazily — file browser uses to expand dim dirs (`node_modules`, gitignored, …) on demand. |
@@ -248,6 +248,7 @@ against a scratch `PROJECTS_ROOT`.
 | `lib/pwa-shell.js` | The per-project PWA shell (`/p/<proj>/`) — installable, home link in the term tabstrip, FAB cycling TERM→OPEN→VIEW (swaps the right half while split), long-press menu (refresh + sticky split preference, the only way in/out of split). |
 | `lib/split-layout.js` | The PWA shell's split-layout verdict, keyboard-immune (V58, B22): 900px+ wide and wider than the tallest height that width has had. |
 | `lib/project-cards.js` | Landing-card assembly: sentinel-over-README precedence + worktree ordering (V55). |
+| `lib/tag-filter.js` | Landing tag bar: `collectTags` (chips, case-insensitive, counted) + `hasTag` (card match); injected into `landing.html` (V72). |
 | `lib/readme-meta.js` | README text → `{title, description, tags}`. |
 | `lib/worktree.js` | Git-worktree teardown plan (V56). |
 | `lib/file-routes.js` | `routes` glob → URL rewriting (V54). |
@@ -259,13 +260,16 @@ against a scratch `PROJECTS_ROOT`.
 | `lib/term-reconnect.js` | Automatic reconnect + post-reopen refit for ttyd pages (V63, V64, B19). |
 | `lib/escape-html.js` | The one server-side HTML escaper. |
 
-Twelve helpers are shared between server and browser by injecting their source
-with `.toString()` (`tabKey`, `installTouchWheel`, `isEmbedder`,
+Fourteen helpers are shared between server and browser by injecting their
+source with `.toString()` (`tabKey`, `installTouchWheel`, `isEmbedder`,
 `tabsToReload`, `matchGlob`, `routeForPath`, `installOsc52Bridge`,
 `installKeyboardFit`, `installAndroidInput`, `installTermReconnect`,
-`makeSplitLayout`, `openAgentMenu`). **Those must stay
-self-contained** — no closures over module scope, no `require` inside them —
-because the browser only receives the function body.
+`makeSplitLayout`, `openAgentMenu`, `collectTags`, `hasTag`). **Those must
+stay self-contained** — no closures over module scope, no `require` inside
+them — because the browser only receives the function body. The last two go
+into `landing.html` rather than a template literal: `serveLanding` replaces
+the `/* @inject lib/tag-filter.js */` marker on every request, so the page
+stays editable on disk without a restart while the helpers come from `lib/`.
 
 ## Mobile terminal input (Android)
 

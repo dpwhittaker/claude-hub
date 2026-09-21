@@ -49,7 +49,47 @@
       letter-spacing: -0.01em;
       margin: 0 0 4px;
     }
-    .subtitle { color: var(--muted); font-size: 0.95rem; margin: 0 0 32px; }
+    .subtitle { color: var(--muted); font-size: 0.95rem; margin: 0 0 16px; }
+    /* Tag chips: one per distinct badge across the cards, plus "All". The
+       active chip is filled like a card badge; the rest are outlined so the
+       row reads as a control, not a second set of badges. */
+    .tagbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0 0 24px;
+    }
+    .tagbar:empty { margin-bottom: 16px; }
+    .tagbar .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 4px 11px;
+      border-radius: 999px;
+      border: 1px solid var(--edge);
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: color 0.15s, background 0.15s, border-color 0.15s;
+    }
+    .tagbar .chip:hover { color: var(--accent); border-color: var(--accent); }
+    .tagbar .chip[aria-pressed="true"] {
+      color: var(--accent);
+      background: rgba(125,211,252,0.14);
+      border-color: transparent;
+    }
+    .tagbar .chip.wt:hover { color: #fbbf24; border-color: #fbbf24; }
+    .tagbar .chip.wt[aria-pressed="true"] {
+      color: #fbbf24;
+      background: rgba(251,191,36,0.14);
+    }
+    .tagbar .chip .n { font-weight: 400; letter-spacing: 0; opacity: 0.7; }
+    .card.filtered-out { display: none; }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -316,9 +356,10 @@
   <div class="wrap">
     <h1>claude-hub</h1>
     <p class="subtitle">Pick where you're going.</p>
+    <div class="tagbar" id="tagbar" role="group" aria-label="Filter projects by tag"></div>
     <div class="grid">
 
-      <div class="card">
+      <div class="card" data-tags='["Admin"]'>
         <div class="badges"><span class="badge">Admin</span></div>
         <h2><a href="/term/develop/">Develop</a></h2>
         <p>Fresh Claude session in <code>~/projects</code> for cross-project chores. Each open spawns a new instance.</p>
@@ -328,7 +369,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" data-tags='["Infra"]'>
         <div class="badges"><span class="badge">Infra</span></div>
         <h2><a href="/view/claude-hub/AGENTS.md">claude-hub</a></h2>
         <p>The hub itself — persistent Claude Code sessions in the browser, on every device. Path-based reverse proxy, projects API, two-pane viewer, per-project PWA, systemd units.</p>
@@ -407,6 +448,8 @@
     </form>
   </dialog>
   <script>
+    /* @inject lib/tag-filter.js */
+
     const grid = document.querySelector('.grid');
     const addBtn = document.getElementById('add-project');
 
@@ -449,6 +492,7 @@
             return;
           }
           card.remove();
+          renderTagBar();
         } catch (err) {
           alert('Network error: ' + err.message);
           btn.disabled = false;
@@ -456,6 +500,65 @@
       });
       card.prepend(btn);
     }
+
+    // ---- Tag filter (SPEC §V72) ----
+    // Every filterable card carries its tags as a JSON array in `data-tags`,
+    // the two hardcoded cards included; the + / upload buttons are not cards
+    // and never hide. `collectTags` / `hasTag` are injected above from
+    // lib/tag-filter.js, so chip grouping is case-insensitive the same way
+    // the tests pin it. The active tag lives in `?tag=` so it survives the
+    // reload after creating a project and can be bookmarked.
+    const tagbar = document.getElementById('tagbar');
+    const TAG_PARAM = 'tag';
+    let activeTag = (new URLSearchParams(location.search).get(TAG_PARAM) || '').trim().toLowerCase();
+
+    function cardTags(card) {
+      try {
+        const v = JSON.parse(card.dataset.tags || '[]');
+        return Array.isArray(v) ? v : [];
+      } catch {
+        return [];
+      }
+    }
+    function filterableCards() {
+      return Array.from(grid.querySelectorAll('.card[data-tags]'));
+    }
+
+    function applyFilter() {
+      for (const card of filterableCards()) {
+        card.classList.toggle('filtered-out', !!activeTag && !hasTag(cardTags(card), activeTag));
+      }
+      for (const chip of tagbar.querySelectorAll('.chip')) {
+        chip.setAttribute('aria-pressed', String((chip.dataset.tag || '') === activeTag));
+      }
+      const u = new URL(location.href);
+      if (activeTag) u.searchParams.set(TAG_PARAM, activeTag);
+      else u.searchParams.delete(TAG_PARAM);
+      history.replaceState(null, '', u);
+    }
+
+    function renderTagBar() {
+      const cards = filterableCards();
+      const tags = collectTags(cards.map((c) => ({ tags: cardTags(c) })));
+      // A tag nobody carries (stale bookmark, last card of it just deleted)
+      // falls back to All rather than leaving an empty grid.
+      if (activeTag && !tags.some((t) => t.key === activeTag)) activeTag = '';
+      const chip = (key, label, count, cls) =>
+        `<button type="button" class="chip${cls}" data-tag="${escapeHtml(key)}" aria-pressed="false">`
+        + `${escapeHtml(label)} <span class="n">${count}</span></button>`;
+      tagbar.innerHTML = chip('', 'All', cards.length, '')
+        + tags.map((t) => chip(t.key, t.label, t.count, t.key === 'worktree' ? ' wt' : '')).join('');
+      applyFilter();
+    }
+
+    tagbar.addEventListener('click', (e) => {
+      const btn = e.target.closest('.chip');
+      if (!btn) return;
+      const key = btn.dataset.tag || '';
+      // Clicking the active chip (or All) clears the filter.
+      activeTag = key && key !== activeTag ? key : '';
+      applyFilter();
+    });
 
     function renderBadges(tags) {
       // Empty tags collapses to a single "Project" placeholder so the card
@@ -503,6 +606,7 @@
         const openUrl = p.openUrl || `/view/${encodeURIComponent(p.name)}/README.md`;
         const titleText = p.title || p.name;
         card.id = 'project-' + p.name;
+        card.dataset.tags = JSON.stringify(Array.isArray(p.tags) ? p.tags : []);
         card.innerHTML = `
           <div class="badges">${renderBadges(p.tags)}</div>
           <h2><a href="${escapeHtml(openUrl)}">${escapeHtml(titleText)}</a></h2>
@@ -527,6 +631,10 @@
         renderManaged(data.projects || []);
       } catch (e) {
         console.warn('failed to load projects', e);
+      } finally {
+        // Built once the cards are in — a bar that appeared before the fetch
+        // returned would show two chips and then jump.
+        renderTagBar();
       }
     }
 

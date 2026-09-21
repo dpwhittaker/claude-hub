@@ -42,6 +42,7 @@ const { effectiveTemplate, firebaseEnabled } = require('./lib/template-policy');
 const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const { parseFrontmatter, readmeMetaFromContent } = require('./lib/readme-meta');
 const { buildProjectCards } = require('./lib/project-cards');
+const { collectTags, hasTag } = require('./lib/tag-filter');
 const { worktreeRemovalPlan } = require('./lib/worktree');
 const { escapeHtml } = require('./lib/escape-html');
 const { renderViewShell } = require('./lib/view-shell');
@@ -1088,13 +1089,21 @@ function handleCreateProject(req, res) {
   });
 }
 
+// landing.html is read from disk per request (no restart to see an edit), but
+// it is not quite static: the tag-filter helpers are injected at this marker
+// so the browser runs the same `collectTags`/`hasTag` the tests do (V72), the
+// way the Browse shell inlines its helpers. Function replacer, not a string —
+// a `$` in the source would otherwise be read as a replacement pattern.
+const LANDING_INJECT_MARK = '/* @inject lib/tag-filter.js */';
+const LANDING_INJECT_SRC = `${collectTags.toString()}\n${hasTag.toString()}`;
 function serveLanding(res) {
-  fs.readFile(LANDING_PATH, (err, body) => {
+  fs.readFile(LANDING_PATH, 'utf8', (err, text) => {
     if (err) {
       res.writeHead(500, { 'Content-Type': 'text/plain' });
       res.end('Failed to read landing.html: ' + err.message);
       return;
     }
+    const body = text.replace(LANDING_INJECT_MARK, () => LANDING_INJECT_SRC);
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-cache',

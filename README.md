@@ -216,7 +216,7 @@ filesystem access to `~/projects`.
 | `server.js` | The proxy itself: routing, request handling, projects API, file viewer. No framework. |
 | `lib/` | Everything pure, so it's unit-testable without a server — the two page shells (`view-shell.js`, `pwa-shell.js`), card assembly, template scaffolding, route rewriting. |
 | `test/` | `node --test`. `test/helpers/fixture.js` boots `server.js` in-process for the integration cases. |
-| `landing.html` | Static landing page. Hardcoded cards for Develop + Proxy; fetches the rest from `/api/projects`. |
+| `landing.html` | Landing page. Hardcoded cards for Develop + Proxy; fetches the rest from `/api/projects`. A row of tag chips above the grid filters the cards (click again, or All, to clear). |
 | `services/claude-hub.service` | systemd unit for the proxy itself. |
 | `services/ttyd@.service` | Templated systemd unit. `systemctl enable --now ttyd@<project>` brings up a per-project terminal. |
 | `services/ttyd-develop.service`, `services/ttyd-shell.service` | Static admin terminal units (fresh claude in `~/projects`, raw bash). |
