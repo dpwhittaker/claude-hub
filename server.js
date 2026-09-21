@@ -34,7 +34,7 @@ const httpProxy = require('http-proxy');
 const { marked } = require('marked');
 const { WebSocketServer } = require('ws');
 const { allocatePort } = require('./lib/port-alloc');
-const { copyTemplate } = require('./lib/template');
+const { copyTemplate, nameSlug } = require('./lib/template');
 const { makeGhRepos, filterReposByFolders } = require('./lib/gh-repos');
 const { PROJECT_ID_RE, RESERVED_PROJECT_NAMES } = require('./lib/project-name');
 const { writeBootstrapPrompt } = require('./lib/bootstrap-prompt');
@@ -868,7 +868,8 @@ async function bootstrapCreateRepo(dir, name, visibility) {
   );
 }
 
-// Vite-based template scaffold (vite | game-2d | game-3d | game-3d-complex).
+// Vite-based template scaffold (vite | game-2d | game-3d | game-3d-complex |
+// evenhub).
 // Copies templates/<templateId>/ → project dir with `<NAME>`/`<PORT>`
 // placeholders replaced, stamps .project-meta.json, optionally overlays the
 // _firebase template + installs firebase, runs `npm install`, then enables the
@@ -881,13 +882,13 @@ async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {
   const port = allocatePort(PROJECTS_ROOT);
   const templateDir = path.join(__dirname, 'templates', templateId);
   try {
-    copyTemplate(templateDir, dir, { NAME: name, PORT: String(port) });
+    copyTemplate(templateDir, dir, { NAME: name, PORT: String(port), NAMESLUG: nameSlug(name) });
     // Firebase overlay copied over the base tree before install so `npm
     // install firebase` and the base install can be folded into one step.
     // npm merges firebase into package.json — avoids JSON-merge-via-placeholder
     // (SPEC §V45).
     if (firebase) {
-      copyTemplate(path.join(__dirname, 'templates', '_firebase'), dir, { NAME: name, PORT: String(port) });
+      copyTemplate(path.join(__dirname, 'templates', '_firebase'), dir, { NAME: name, PORT: String(port), NAMESLUG: nameSlug(name) });
     }
     // Write meta before npm install so a failed install still leaves a
     // recognizable managed project that DELETE /api/projects can clean up.

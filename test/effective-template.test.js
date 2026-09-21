@@ -58,3 +58,15 @@ test('firebaseEnabled forced false on none / clone / onboard (V45)', () => {
   assert.equal(firebaseEnabled({ firebase: true, github: { mode: 'clone' } }, 'none'), false);
   assert.equal(firebaseEnabled({ firebase: true, github: { mode: 'onboard' } }, 'none'), false);
 });
+
+test('evenhub passes through on non-clone, forced none on clone/onboard (V70)', () => {
+  assert.equal(effectiveTemplate({ template: 'evenhub' }), 'evenhub');
+  assert.equal(effectiveTemplate({ template: 'evenhub', github: { mode: 'create' } }), 'evenhub');
+  assert.equal(effectiveTemplate({ template: 'evenhub', github: { mode: 'clone' } }), 'none');
+  assert.equal(effectiveTemplate({ template: 'evenhub', github: { mode: 'onboard' } }), 'none');
+});
+
+test('evenhub is an npm template — the firebase overlay stays available (V70)', () => {
+  assert.equal(firebaseEnabled({ firebase: true }, 'evenhub'), true);
+  assert.equal(firebaseEnabled({ firebase: false }, 'evenhub'), false);
+});

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Zoom lock: the Even App hosts this page in a WebView, and a pinch-zoom
+         there leaves the companion UI stranded off-screen. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+    <title><NAME></title>
+
+    <!-- PWA. The manifest and the icon live in public/, so they are served from
+         the proxy prefix alongside the page: /<NAME>/manifest.webmanifest.
+         Relative hrefs keep that true wherever the app is mounted. -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="icon.svg" />
+    <link rel="apple-touch-icon" href="icon.svg" />
+    <meta name="theme-color" content="#232323" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="<NAME>" />
+
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        /* ER brand dark-theme surface (#232323) + Neutral-200 text (#E5E5E5). */
+        background: #232323;
+        color: #E5E5E5;
+        font: 15px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        touch-action: manipulation;
+        -webkit-text-size-adjust: 100%;
+        overscroll-behavior: none;
+      }
+      #app {
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        /* Safe-area padding matters once this is installed: standalone mode
+           has no browser chrome to keep content clear of the notch. */
+        padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));
+        text-align: center;
+      }
+      h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: 0.01em; }
+      #status {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 6px 12px; border-radius: 999px;
+        border: 1px solid #3a3a3a; background: #2b2b2b;
+        font-size: 13px;
+      }
+      #status::before {
+        content: ''; width: 8px; height: 8px; border-radius: 50%;
+        background: #8a8a8a;
+      }
+      #status[data-state='linked']::before { background: #7BE38B; }
+      #status[data-state='standalone']::before { background: #E3C77B; }
+      #detail { margin: 0; max-width: 34ch; color: #A3A3A3; font-size: 14px; }
+      #readout { margin: 0; font-size: 34px; font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <h1><NAME></h1>
+      <span id="status" data-state="connecting">Connecting…</span>
+      <p id="readout" hidden>0</p>
+      <p id="detail">Starting up.</p>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

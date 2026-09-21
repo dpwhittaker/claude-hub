@@ -1,0 +1,31 @@
+---
+tags: [WIP, glasses, pwa]
+---
+
+# <NAME>
+
+An Even Realities G2 smart-glasses app. Vite + TypeScript + `@evenrealities/even_hub_sdk`, served live at `/<NAME>/` and installable on the phone as a PWA.
+
+Replace this paragraph with a one-sentence card description after you know what you're building.
+
+## Put it on the glasses
+
+```bash
+npm run qr -- "https://<gpu-host>/<NAME>/"
+```
+
+Scan the QR with the Even Realities app. The phone loads this page in its
+WebView and the SDK draws on the glasses; edits hot-reload straight onto the
+display. No packaging step — `.ehpk` is only for store distribution.
+
+Opened in a plain browser instead, the same URL is just a web app you can
+install to the home screen.
+
+## Run
+
+`vite@<NAME>.service` already runs `npm run dev` at boot. To restart manually:
+
+```bash
+sudo systemctl restart vite@<NAME>.service
+journalctl -u vite@<NAME>.service -f
+```

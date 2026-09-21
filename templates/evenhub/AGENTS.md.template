@@ -1,0 +1,169 @@
+# <NAME> — AGENTS.md
+
+Even Realities G2 smart-glasses app. Vite + TypeScript + `@evenrealities/even_hub_sdk`, served live by claude-hub — installable as a PWA, no `.ehpk` packaging in the loop.
+
+## Workflow rule: commit + push every turn
+
+Every turn that changes code, config, assets, or docs ends with a commit —
+and a push if this project has a remote. Don't wait to be asked. One commit
+per logical change; run the build/tests first and fix what fails before
+committing. Restart the project's systemd unit when the running app needs the
+change to take effect. Skip only when the turn produced no working-tree changes.
+
+**Commit explicit paths, never `-A`.** Several Claude sessions can share this
+checkout (one per Develop tab), so `git add -A` sweeps up whatever a peer
+session has half-written. Name what you wrote:
+`git commit -m "…" -- src/foo.ts src/foo.test.ts`.
+
+## Workflow rule: git worktrees
+
+Parallel work goes in a worktree, not in this checkout — two agents editing
+one tree is the "peer swept my files" problem above, at feature scale. Claude
+Code's `isolation: "worktree"` drops a checkout at `~/projects/<NAME>_<task>/`;
+give it a `.project-meta.json` naming `worktreeOf: "<NAME>"` and its `branch`
+and it becomes its own claude-hub card with its own port, terminal and Browse
+pane, so it runs its own dev server instead of competing for this one's.
+
+**Never `rm -rf` a worktree** — this repo's `.git/worktrees/` keeps the
+registry entry and then refuses to reuse the path. Delete it from its card
+(which routes through `git worktree remove`), or
+`git -C ~/projects/<NAME> worktree remove --force <dir>`. A worktree also
+checks out this project's `README.md` byte-for-byte, so its card title and
+description have to come from its sentinel, not the README.
+
+## Workflow rule: the spec is the memory (SDD)
+
+`SPEC.md` at the root is this project's durable memory — goals (`§G`),
+constraints (`§C`), interfaces (`§I`), invariants (`§V`), tasks (`§T`) and
+bugs (`§B`), written compressed enough to reload on every request. It exists
+because your context window resets and the code does not: anything decided but
+not written down gets re-derived next session, differently. Read it before you
+change anything; update it in the same turn as the code, never "later". The
+loop is: read the spec → work against it → prove each `§V` you touched with a
+named test → **backprop** — every bug becomes a `§B` row and its class becomes
+a `§V` invariant, so the project stops re-making mistakes it has already made.
+
+The part that needs discipline is not writing the spec, it is retiring what a
+new requirement invalidated. `§V`/`§I` describe the present and get edited;
+`§T`/`§B` are logs and only get appended. Numbers are permanent addresses —
+never reused, even after retirement. Before appending an invariant, grep `§V`
+for its subject: a rule that changed gets **revised in place at its existing
+number**, tagged `(revised)` and carrying `⊥ <the old rule>` so nobody walks
+back into it — a rule whose concern is gone gets **deleted**, its retirement
+logged in the `§T` row that did the work.
+
+**Full protocol: `~/projects/claude-hub/SDD.md`** — section reference, the
+encoding and its symbol table, backprop, and the maintenance rules for keeping
+the spec true as the project grows. Browse it at
+`/view/claude-hub/SDD.md`.
+
+## How this app reaches the glasses
+
+There is no build-and-install step. claude-hub already serves this project at
+`/<NAME>/`, and the Even App loads that URL straight into its WebView:
+
+```bash
+npm run qr -- "https://<gpu-host>/<NAME>/"   # prints a QR in this terminal
+```
+
+Scan it with the Even Realities app. The page runs on the phone, the SDK
+bridge draws on the glasses, and Vite's HMR means an edit here lands on your
+face a second later. `<gpu-host>` is this machine's tailnet name — the phone
+has to be on the tailnet, and the URL must be the **https** one, because a
+service worker (and therefore installability) needs a secure context.
+
+Two consumers, one bundle:
+
+| Where it runs | What it gets |
+|---|---|
+| Even App WebView | companion page **and** the glasses bridge |
+| Any phone/desktop browser | companion page alone, installable to the home screen |
+
+**A bridge is not proof of glasses.** The SDK installs a bridge object on
+`window` in *any* browser and force-readies it after 100 ms, so
+`waitForEvenAppBridge()` usually resolves even on a desktop with no Even App in
+sight. The host's absence only shows up in the first call across the bridge:
+`createStartUpPageContainer` answers with a non-zero code and the SDK logs
+"Flutter handler not available". `startGlassesPage()` treats that as the
+ordinary standalone case and returns `null` — companion-only is a normal state,
+not an error to render.
+
+**And never top-level-`await waitForEvenAppBridge()`.** The other direction
+happens too: with no bridge object at all the promise never settles, and the
+installed PWA sits on a blank screen forever. `src/glasses.ts` wraps it in
+`connectBridge()`, a timeout race that returns `null` instead of hanging. Every
+new entry path goes through it.
+
+Packaging into an `.ehpk` (`evenhub pack`) is only for store distribution. If
+you ever do it, build with a **relative** base (`vite build --base=./`) — a
+packed app is loaded from the bundle root, not from `/<NAME>/`, and the
+proxy-shaped base would 404 every asset.
+
+## PWA
+
+- `public/manifest.webmanifest` — `start_url` and `scope` are `/<NAME>/`, the
+  same string as `base` in `vite.config.ts` and `proxyPrefix` in
+  `.project-meta.json`. Change one, change all three or the install breaks.
+- `public/sw.js` — deliberately cache-nothing, same shape as claude-hub's own
+  service worker. It exists so the phone offers "Add to Home Screen". This page
+  is a live view onto a dev server; a cache here would serve a stale bundle to
+  the glasses and read as a code bug.
+- `public/icon.svg` — placeholder mark, SVG because claude-hub's `copyTemplate`
+  reads template files as UTF-8 and would corrupt a PNG. Your project is not a
+  template: drop real 192/512 PNGs into `public/` and list them in the manifest
+  when you want a proper iOS home-screen icon.
+
+## Glasses UI, the short version
+
+- Canvas is **576 x 288**, 4-bit greyscale (16 shades of green). No colour, no
+  camera, no speaker.
+- `src/glasses.ts` owns everything SDK-shaped: one full-screen text container,
+  event routing, teardown. `src/main.ts` owns the phone page.
+- Events: taps/double-taps/lifecycle arrive on `event.sysEvent`, scroll on
+  `event.textEvent` — never mix them. `CLICK_EVENT` is `0` and protobuf omits
+  zero-valued fields, so a single tap arrives with `eventType` undefined; the
+  default must be resolved inside the envelope check, not after it.
+- Double-tap must always reach `shutDownPageContainer` — it is the user's only
+  way out of the app.
+- Deeper API/design references live in the `everything-evenhub` plugin skills
+  (`/everything-evenhub:sdk-reference`, `:glasses-ui`, `:design-guidelines`,
+  `:handle-input`, `:device-features`).
+
+## app.json
+
+The Even Hub manifest. Not needed to run via QR, but it is where permissions
+are declared (`network`, `g2-microphone`, `phone-microphone`, `location`,
+`album`, `camera`), and `evenhub pack` validates it hard:
+
+- `package_id` — reverse-domain, **lowercase letters and digits only**, no
+  hyphens, each segment starting with a letter. Scaffolded as
+  `com.example.<NAMESLUG>`; change `example` to something you own.
+- `name` — **20 characters max**.
+- `edition` — must stay `"202601"`.
+
+## claude-hub conventions
+
+- **Dev server** runs via `vite@<NAME>.service` (systemd, `Restart=always`). Don't `npm run dev` manually — the unit owns the port.
+- **Reverse-proxied** at `/<NAME>/` by claude-hub. `vite.config.ts` sets `base: '/<NAME>/'` and `server.port: <PORT>` to match `.project-meta.json`.
+- **Entry point** is `src/main.ts`. No framework — plain TS and the SDK.
+- **Card metadata** comes from `README.md`: H1 = title, first paragraph = description, frontmatter `tags: [...]` = badges.
+
+## What to do first
+
+1. Ask the user what to build.
+2. Update `README.md` (H1, first paragraph, tags) and `app.json` (`name`, `package_id`).
+3. Edit `src/glasses.ts` (what the G2 shows) and `src/main.ts` (what the phone shows).
+4. New deps: `npm install <pkg>` here; the unit reloads on file change.
+
+## Restarting the dev server
+
+```bash
+sudo systemctl restart vite@<NAME>.service
+journalctl -u vite@<NAME>.service -f
+```
+
+## Testing without hardware
+
+`npm run simulate` runs the desktop simulator against this project's dev
+server. It needs a display on the machine it runs on — over a browser terminal
+you will usually be better off scanning the QR onto the real glasses.

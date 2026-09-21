@@ -135,7 +135,7 @@ sudo systemctl enable --now <unit>`. `services/ttyd-attach.sh` installs to
 | `services/ttyd@.service` | Templated. `systemctl enable --now ttyd@<proj>__<sN>` brings up `unix:/run/ttyd/<proj>__<sN>.sock` running `ttyd-attach.sh <proj>__<sN>` — joins or creates the tmux session of that name, running the tab's agent: `claude --session-id/--resume <uuid>` or plain `codex`, per `{uuid, agent}` in `<proj>/.develop-sessions.json`. A bare `ttyd@<name>` (no `__`) is the legacy/admin form and runs `claude --continue`, omitted on first launch when no prior session exists to avoid an exit-loop. |
 | `services/ttyd-develop.service` | Admin: fresh `claude` in `~/projects` per browser connection. No tmux. |
 | `services/ttyd-shell.service` | Admin: raw `bash -l`. No claude, no tmux. |
-| `services/vite@.service` | Templated. `systemctl enable --now vite@<name>` runs `npm run dev` in `~/projects/<name>` under `Restart=always`. Enabled during any vite-family template scaffold (`vite` / `game-2d` / `game-3d` / `game-3d-complex` all share this one unit). |
+| `services/vite@.service` | Templated. `systemctl enable --now vite@<name>` runs `npm run dev` in `~/projects/<name>` under `Restart=always`. Enabled during any vite-family template scaffold (`vite` / `game-2d` / `game-3d` / `game-3d-complex` / `evenhub` all share this one unit). |
 | `services/jekyll@.service` | Templated. `systemctl enable --now jekyll@<name>` runs `~/projects/<name>/serve-local.sh` (`bundle exec jekyll serve`) under `Restart=always`, system PATH (Ruby/bundler, no nvm). Enabled only for the `jekyll` template — the one non-vite family. |
 
 `/run/ttyd/` shared across every ttyd instance. All three units carry `RuntimeDirectoryPreserve=yes` for that reason — without it, one instance stop = systemd wipes whole dir, orphans every other socket. Don't remove that line.
@@ -402,7 +402,7 @@ curl -s   http://127.0.0.1:8002/api/view-tree/<project> | jq .
 ## Project creation
 
 Default template = **Vite (React + TypeScript)**. `POST /api/projects` body
-field `template: 'none' | 'vite' | 'game-2d' | 'game-3d' | 'game-3d-complex' | 'jekyll'`
+field `template: 'none' | 'vite' | 'game-2d' | 'game-3d' | 'game-3d-complex' | 'jekyll' | 'evenhub'`
 (default `'vite'`; unknown coerced to `'vite'`; forced to `'none'` when
 `github.mode ∈ {clone, onboard}`). Optional `firebase: bool` opt-in (forced
 false on `none`/clone/onboard/`jekyll`). Clone source on the dialog comes from
@@ -422,13 +422,16 @@ Ruby/Bundler project with its own `jekyll@<name>.service`.
 | `game-3d` | react-three-fiber + Three + rapier + zustand ("Simple 3D") | `src/App.tsx` | `vite@` |
 | `game-3d-complex` | Babylon.js + Havok + inspector ("Complex 3D") | `src/main.ts` | `vite@` |
 | `jekyll` | Jekyll + minima (Ruby, Markdown site) | `README.md` (`permalink: /`) | `jekyll@` |
+| `evenhub` | Even Realities G2 glasses app (Vite + TS + `@evenrealities/even_hub_sdk`), companion page installable as a PWA | `src/main.ts` (phone) + `src/glasses.ts` (G2) | `vite@` |
 
 `scaffoldProject(dir, name, template, {firebase})` dispatches: `jekyll` →
 `bootstrapJekyll`, everything else → `bootstrapTemplate`.
 
 Vite-family scaffold (`bootstrapTemplate`):
 
-1. `templates/<template>/` copied with `<NAME>` + `<PORT>` placeholders replaced (`template` id == dir name, 1:1).
+1. `templates/<template>/` copied with `<NAME>`, `<PORT>` and `<NAMESLUG>` placeholders replaced (`template` id == dir name, 1:1).
+   `<NAMESLUG>` is the name reduced to lowercase alphanumerics with a letter forced in front (`lib/template.js`'s
+   `nameSlug`) — only `evenhub` uses it, for the reverse-domain `package_id` in `app.json`.
 2. Free port ≥ 5173 allocated by scanning sibling projects' `.project-meta.json` `proxyTarget`.
 3. If `firebase` → `templates/_firebase/` overlaid (adds `src/firebase.ts`, `.env.example`, `firebase.json`, `.firebaserc`).
 4. `.project-meta.json` stamped: `template: '<template>'`, `proxyTarget`, `proxyPrefix: /<name>`, `stripPrefix: false`, `openUrl: /<name>/`, `extraUnits: ['vite@<name>.service']`.
@@ -463,6 +466,8 @@ base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
 
 - **Stale node process** — `server.js` lives in V8 memory; edits don't apply until `systemctl restart claude-hub.service`. `landing.html` is read per request, no restart needed. Same for anything under `lib/` — it's `require`d into the same process.
 - **Game template = vite project** — `game-2d`/`game-3d`/`game-3d-complex` ride the one `vite@<name>.service`, not a per-template unit. New template? Make it a vite project (reuse `vite@`) — or, like `jekyll`, give it its own scaffolder + `<kind>@<name>.service` and dispatch it in `scaffoldProject`.
+- **`evenhub` is served, never packed** — the G2 loads the app from the live proxy URL (`evenhub qr --url https://<gpu-host>/<name>/`), and the same page installs on the phone as a PWA. No `.ehpk` in the dev loop; if you ever pack for the store, build with a **relative** base (`vite build --base=./`), because a packed app is not served from `/<name>/`. Two rules keep both halves alive: nothing may top-level-`await waitForEvenAppBridge()` (it never settles outside the Even App WebView, so the installed PWA would hang blank — `src/glasses.ts`'s `connectBridge()` races it against a timeout), and `public/sw.js` caches nothing (it exists for installability; a cache would serve the glasses a stale bundle). `vite.config.ts` `base` == manifest `start_url`/`scope` == sentinel `proxyPrefix`, all one string.
+- **Template trees are UTF-8 only** — `copyTemplate` reads and writes every file as text, so a PNG committed under `templates/` arrives corrupted. That is why `templates/evenhub/public/icon.svg` is an SVG. Scaffolded projects have no such limit.
 - **Jekyll template is the non-vite exception** — `jekyll` is Ruby/Bundler, scaffolded by `bootstrapJekyll` (not `bootstrapTemplate`), runs under `jekyll@<name>.service`, ports allocated from the 4000s (not 5173+), no firebase. `serve-local.sh` carries the baked `--baseurl /<name>` + port; the unit just execs it. README.md (`permalink: /`) is the site index.
 - **Greenfield bootstrap prompt is stack-aware** — `writeBootstrapPrompt(dir, name, 'greenfield', {templateId, firebase})` injects a `STACK[templateId]` blurb so a fresh session greets oriented. New template → add a `STACK` entry in `lib/bootstrap-prompt.js`.
 - **Vite base path splits** — dev base = `/<NAME>/` (proxy needs it, V20). Static deploy: `build:pages` bakes `/<NAME>/`, `build:firebase` bakes `/`. Don't unify.

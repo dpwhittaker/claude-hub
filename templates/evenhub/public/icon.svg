@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="<NAME>">
+  <!-- Maskable-safe: every drawn pixel sits inside the centre 80% so a round
+       or squircle mask can't clip it. Replace with your own mark; if you want
+       a polished iOS home-screen icon, add real 192/512 PNGs under public/
+       and list them in manifest.webmanifest alongside this file. -->
+  <rect width="512" height="512" fill="#232323"/>
+  <g fill="none" stroke="#7BE38B" stroke-width="18" stroke-linecap="round">
+    <rect x="76" y="196" width="150" height="120" rx="28"/>
+    <rect x="286" y="196" width="150" height="120" rx="28"/>
+    <path d="M226 246h60"/>
+    <path d="M76 246H56m400 0h-20"/>
+  </g>
+</svg>

@@ -1,0 +1,54 @@
+# SPEC
+
+Durable memory for this project — reload it at the start of every session.
+Format, encoding & the maintenance protocol (how a new requirement retires an
+old one): `~/projects/claude-hub/SDD.md`, browsable at `/view/claude-hub/SDD.md`.
+
+## §G GOAL
+
+? one line — what this app must do on the glasses. agree it w/ the user &
+rewrite before the first feature (§T.1). ⊥ leave this placeholder standing.
+
+## §C CONSTRAINTS
+
+- Vite 7 + TypeScript 5.9 + `@evenrealities/even_hub_sdk` 0.0.15. npm, ESM, no framework.
+- G2 canvas = 576x288 px, 4-bit greyscale (16 shades). ⊥ colour, camera, speaker. input = temple touchpad + optional R1 ring.
+- dev server = `vite@<NAME>.service` (systemd, `Restart=always`), owns port `<PORT>`. ⊥ `npm run dev` by hand — 2nd process → `EADDRINUSE` or a stale instance the proxy hits instead.
+- reverse-proxied at `/<NAME>/` by claude-hub. `base` in `vite.config.ts` ! = manifest `start_url`/`scope` = `.project-meta.json` `proxyPrefix`.
+- `server.allowedHosts` ! ⊇ `.ts.net`. hub proxies `changeOrigin: false` ∴ upstream sees CLIENT `Host`; Vite 7 403s unknown hosts.
+- delivery = live URL via `evenhub qr --url`. ⊥ `.ehpk` packing in the dev loop (store distribution only, & that build needs `--base=./`).
+- service worker ⇒ secure context ∴ reach it over the **https** tailnet URL, ⊥ plain http from another device.
+
+## §I INTERFACES
+
+- url: `GET /<NAME>/` → companion page, through claude-hub. same url = Even App WebView target & PWA `start_url`.
+- `src/glasses.ts`: `connectBridge(timeoutMs?) → EvenAppBridge | null`, `startGlassesPage(bridge, content) → GlassesSession {render, onTap, close}`
+- `public/manifest.webmanifest` — `start_url`/`scope` `/<NAME>/`; `public/sw.js` — pass-through, scope `/<NAME>/`
+- `app.json` — Even Hub manifest: `package_id` (lowercase alnum segments, ⊥ hyphens), `name` (≤20 chars), `permissions[]`
+- card: `README.md` H1 → title, ¶1 → description, frontmatter `tags: [...]` → badges
+
+## §V INVARIANTS
+
+- V1: `base` in `vite.config.ts` = `/<NAME>/` = manifest `start_url` = manifest `scope` = sentinel `proxyPrefix`. any ≠ → assets 404 through the proxy, or the install scope drops the page it was installed from.
+- V2: `server.allowedHosts` ⊇ `['.ts.net', 'localhost']`. ⊥ a concrete FQDN (commits the machine's tailnet name). loopback passes while the tailnet URL 403s ∴ test through the REAL url — the one the glasses load.
+- V3: a bridge ⊥ proof of glasses. the SDK installs one on `window` in ANY browser & force-readies it after 100ms ∴ `waitForEvenAppBridge()` RESOLVES standalone; the host's absence shows up only in the first call across it — `createStartUpPageContainer` → non-zero, SDK logs "Flutter handler not available". ∴ detect companion-only from the RESULT CODE, ⊥ from the promise.
+- V4: the companion page renders & the service worker registers BEFORE any bridge call. installability ⊥ depend on the glasses being present.
+- V5: `public/sw.js` caches nothing. this page is a live view onto a dev server ∴ a cache serves a stale bundle to the glasses & reads as a code bug. add caching only w/ a versioned cache & a reason.
+- V6: double-tap → `shutDownPageContainer` checked at the ROOT of the event handler, before the tap branch, whichever envelope carried it. it is the user's only exit.
+- V7: tap/double-tap/lifecycle ← `event.sysEvent`; scroll ← `event.textEvent`. ⊥ mix. `CLICK_EVENT` is 0 & protobuf omits zero-valued fields ∴ the `?? CLICK_EVENT` default resolves INSIDE the envelope check — outside it, every scroll/exit/audio frame fires the tap handler.
+- V8: `app.json` `package_id` = lowercase letters+digits per dot-segment, each starting w/ a letter; `name` ≤ 20 chars; `edition` = `202601`. `evenhub pack` rejects otherwise.
+- V9: `README.md` H1/¶1/`tags` = the landing card's title/description/badges. ⊥ let them drift from §G.
+- V10: still ⊥ top-level `await waitForEvenAppBridge()` — it can also never settle (no bridge object at all), which hangs the installed PWA blank. all bridge access goes through `connectBridge()`'s timeout race → `null`.
+- V11: a host-less bridge is the NORMAL standalone case: `startGlassesPage` → `null`, page says "No glasses". ⊥ throw / render an error — that is what every plain-browser visit would show.
+
+## §T TASKS
+
+id|status|task|cites
+---|---|---|---
+T1|.|agree §G w/ user; rewrite §G + `README.md` H1/¶1/`tags` + `app.json` `name`/`package_id` to match|V8,V9
+T2|.|first feature. add §I rows for surface it adds, §V for rules it must hold|-
+
+## §B BUGS
+
+id|date|cause|fix
+---|---|---|---

@@ -11,7 +11,7 @@ const { copyTemplate } = require('../lib/template');
 // the bare `none` path (server.js's own templates) does the same.
 
 const REPO = path.join(__dirname, '..');
-const TEMPLATES = ['vite', 'game-2d', 'game-3d', 'game-3d-complex', 'jekyll'];
+const TEMPLATES = ['vite', 'game-2d', 'game-3d', 'game-3d-complex', 'jekyll', 'evenhub'];
 // Fixed order: an agent reads top-down and stops early, so the order is
 // part of the invariant, not decoration.
 const RULES = [

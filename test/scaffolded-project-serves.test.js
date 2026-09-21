@@ -1,4 +1,4 @@
-// B21: none of the four vite templates set `server.allowedHosts`, so a
+// B21: none of the vite templates set `server.allowedHosts`, so a
 // scaffolded project 403'd — "Blocked request. This host is not allowed." —
 // on the tailnet URL while answering fine on 127.0.0.1. Every hand-built
 // project already carried the setting; the templates never picked it up.
@@ -20,7 +20,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { startFixture } = require('./helpers/fixture');
 
-const TEMPLATES = ['vite', 'game-2d', 'game-3d', 'game-3d-complex'];
+const TEMPLATES = ['vite', 'game-2d', 'game-3d', 'game-3d-complex', 'evenhub'];
 
 // A stand-in tailnet name. The real FQDN is deliberately NOT in this repo —
 // the leading-dot suffix wildcard is what makes that possible.
