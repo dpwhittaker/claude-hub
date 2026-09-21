@@ -72,6 +72,52 @@ test('greenfield prompt has no stack line for template none / no opts', () => {
   }
 });
 
+// V73 — the prompt steers a new session to the hub's existing tags. The old
+// wording ("short tags like Game, Tool, API, Library, Service plus WIP or
+// Stable") grew a new chip per project.
+
+test('V73: both flavors list the hub\'s tags and say to reuse before coining', () => {
+  for (const flavor of ['greenfield', 'scan-existing']) {
+    const d = scratch();
+    try {
+      writeBootstrapPrompt(d, 'demo', flavor, { hubTags: ['AI', 'Bible', 'Games'] });
+      const txt = fs.readFileSync(path.join(d, '.claude-bootstrap.txt'), 'utf8');
+      assert.match(txt, /already in use on this hub are: AI, Bible, Games/, flavor);
+      assert.match(txt, /add a new tag only if none/i, flavor);
+      assert.doesNotMatch(txt, /short tags like/, flavor);
+      assert.doesNotMatch(txt, /'Tool', 'API'/, flavor);
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true });
+    }
+  }
+});
+
+test('V73: an empty hub points at the chip row instead of inventing examples', () => {
+  for (const hubTags of [undefined, [], ['', '  ', 42]]) {
+    const d = scratch();
+    try {
+      writeBootstrapPrompt(d, 'demo', 'greenfield', { hubTags });
+      const txt = fs.readFileSync(path.join(d, '.claude-bootstrap.txt'), 'utf8');
+      assert.match(txt, /chip row lists the tags already in use/);
+      assert.doesNotMatch(txt, /already in use on this hub are:/);
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true });
+    }
+  }
+});
+
+test('V73: tags are categories — the prompt never suggests a status flag', () => {
+  const d = scratch();
+  try {
+    writeBootstrapPrompt(d, 'demo', 'greenfield', { hubTags: ['Games'] });
+    const txt = fs.readFileSync(path.join(d, '.claude-bootstrap.txt'), 'utf8');
+    assert.match(txt, /no 'WIP' or 'Stable'/);
+    assert.doesNotMatch(txt, /plus a status flag/);
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
 test('unknown flavor falls back to greenfield', () => {
   const d = scratch();
   try {

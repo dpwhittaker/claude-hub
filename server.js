@@ -41,7 +41,7 @@ const { writeBootstrapPrompt } = require('./lib/bootstrap-prompt');
 const { effectiveTemplate, firebaseEnabled } = require('./lib/template-policy');
 const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const { parseFrontmatter, readmeMetaFromContent } = require('./lib/readme-meta');
-const { buildProjectCards } = require('./lib/project-cards');
+const { buildProjectCards, WORKTREE_TAG } = require('./lib/project-cards');
 const { collectTags, hasTag } = require('./lib/tag-filter');
 const { worktreeRemovalPlan } = require('./lib/worktree');
 const { escapeHtml } = require('./lib/escape-html');
@@ -393,8 +393,9 @@ files at \`/view/${name}/\`.
 1. Ask the user what they want to build here.
 2. Update \`README.md\`: rewrite the H1 (card title), rewrite the first
    paragraph (card description), and set \`tags: [...]\` in the YAML
-   frontmatter (card badges) — short tags like \`Game\`, \`Tool\`, \`API\`,
-   \`Library\`, \`Service\`, plus status flags like \`WIP\` or \`Stable\`.
+   frontmatter (card badges + the landing page's filter chips). Reuse a tag
+   already on the hub — the chip row above the cards lists them — and add a
+   new one only if none fits. Tags are categories, not status: no \`WIP\`.
 3. Fill in \`SPEC.md\`: rewrite \`§G\` to the goal you just agreed, add the
    \`§C\` constraints the stack imposes, and flip \`§T.1\` to \`x\`.
 4. Start scaffolding.
@@ -447,7 +448,7 @@ id|date|cause|fix
 
 function readmeTemplate(name) {
   return `---
-tags: [WIP]
+tags: []
 ---
 
 # ${name}
@@ -498,6 +499,15 @@ function listManagedProjects() {
     ...card,
     termUrl: `/term/${lookupActiveTermKey(card.name)}/`,
   }));
+}
+
+// The tags in use across the hub right now, handed to the bootstrap prompt so
+// a new session picks from them instead of coining its own (V73). The
+// auto-derived `worktree` badge is not vocabulary.
+function currentHubTags() {
+  return collectTags(listManagedProjects())
+    .filter((t) => t.key !== WORKTREE_TAG)
+    .map((t) => t.label);
 }
 
 // Resolve the term key for a project (e.g. for the PWA shell / card link).
@@ -808,7 +818,7 @@ async function bootstrapNoGithub(dir, name) {
     path.join(dir, '.project-meta.json'),
     JSON.stringify({ name, createdAt: new Date().toISOString() }, null, 2) + '\n',
   );
-  writeBootstrapPrompt(dir, name, 'greenfield');
+  writeBootstrapPrompt(dir, name, 'greenfield', { hubTags: currentHubTags() });
 }
 
 async function bootstrapClone(dir, name, source) {
@@ -835,7 +845,7 @@ async function bootstrapClone(dir, name, source) {
       github: { mode: 'clone', source },
     }, null, 2) + '\n',
   );
-  writeBootstrapPrompt(dir, name, 'scan-existing');
+  writeBootstrapPrompt(dir, name, 'scan-existing', { hubTags: currentHubTags() });
 }
 
 async function ghInitPush(dir, name, visibility) {
@@ -924,7 +934,7 @@ async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {
     fs.rmSync(dir, { recursive: true, force: true });
     throw new Error(templateId + ' scaffold failed: ' + e.message, { cause: e });
   }
-  writeBootstrapPrompt(dir, name, 'greenfield', { templateId, firebase });
+  writeBootstrapPrompt(dir, name, 'greenfield', { templateId, firebase, hubTags: currentHubTags() });
   return port;
 }
 
@@ -978,7 +988,7 @@ async function bootstrapJekyll(dir, name) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw new Error('jekyll scaffold failed: ' + e.message, { cause: e });
   }
-  writeBootstrapPrompt(dir, name, 'greenfield', { templateId: 'jekyll' });
+  writeBootstrapPrompt(dir, name, 'greenfield', { templateId: 'jekyll', hubTags: currentHubTags() });
   return port;
 }
 
@@ -1021,7 +1031,7 @@ function handleCreateProject(req, res) {
     const firebase = firebaseEnabled(body, template);
     try {
       if (gh.mode === 'onboard') {
-        await bootstrapOnboard(dir, name);
+        await bootstrapOnboard(dir, name, { hubTags: currentHubTags() });
       } else if (gh.mode === 'clone') {
         // Cloned repos bring their own structure; ignore the template field.
         const source = String(gh.source || '').trim();

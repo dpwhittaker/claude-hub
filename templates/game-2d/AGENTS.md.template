@@ -62,7 +62,7 @@ the spec true as the project grows. Browse it at
 - **Dev server** runs via `vite@<NAME>.service` (systemd, `Restart=always`). Don't `npm run dev` manually — the unit owns the port.
 - **Reverse-proxied** at `/<NAME>/` by claude-hub. `vite.config.ts` sets `base: '/<NAME>/'` and `server.port: <PORT>` to match `.project-meta.json`.
 - **Entry point** is `src/main.ts` — it constructs the `Phaser.Game` and registers scenes. No React.
-- **Card metadata** comes from `README.md`: H1 = title, first paragraph = description, frontmatter `tags: [...]` = badges.
+- **Card metadata** comes from `README.md`: H1 = title, first paragraph = description, frontmatter `tags: [...]` = badges and the landing page's filter chips. Reuse a tag already on the hub (the chip row above the cards lists them) rather than coining a new one; add a tag only if none fits. Tags are categories, not status — no `WIP`.
 
 ## What to do first
 

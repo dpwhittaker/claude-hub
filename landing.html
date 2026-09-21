@@ -359,7 +359,10 @@
     <div class="tagbar" id="tagbar" role="group" aria-label="Filter projects by tag"></div>
     <div class="grid">
 
-      <div class="card" data-tags='["Admin"]'>
+      <!-- The two hardcoded cards are filterable (any tag filter hides them)
+           but carry no tags of their own: Admin / Infra are labels, not
+           project categories, so they never become chips (V73). -->
+      <div class="card" data-tags='[]'>
         <div class="badges"><span class="badge">Admin</span></div>
         <h2><a href="/term/develop/">Develop</a></h2>
         <p>Fresh Claude session in <code>~/projects</code> for cross-project chores. Each open spawns a new instance.</p>
@@ -369,7 +372,7 @@
         </div>
       </div>
 
-      <div class="card" data-tags='["Infra"]'>
+      <div class="card" data-tags='[]'>
         <div class="badges"><span class="badge">Infra</span></div>
         <h2><a href="/view/claude-hub/AGENTS.md">claude-hub</a></h2>
         <p>The hub itself — persistent Claude Code sessions in the browser, on every device. Path-based reverse proxy, projects API, two-pane viewer, per-project PWA, systemd units.</p>

@@ -65,8 +65,11 @@ the spec true as the project grows. Browse it at
 - **Reverse-proxied** at `/<NAME>/` by claude-hub (`stripPrefix: false`, so the
   `/<NAME>` baseurl is required — already wired into `serve-local.sh`).
 - **Card metadata** comes from `README.md`: H1 = title, first paragraph =
-  description, frontmatter `tags: [...]` = badges. `README.md` is also the site
-  index (`permalink: /`).
+  description, frontmatter `tags: [...]` = badges and the landing page's filter
+  chips. Reuse a tag already on the hub (the chip row above the cards lists
+  them) rather than coining a new one; add a tag only if none fits. Tags are
+  categories, not status — no `WIP`. `README.md` is also the site index
+  (`permalink: /`).
 - **`Gemfile.local`, not `Gemfile`**: GitHub Pages' build looks for a file named
   literally `Gemfile`, so `Gemfile.local` is invisible to the deploy and only
   drives the local preview. Bundler installs into a project-local

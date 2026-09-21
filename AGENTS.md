@@ -118,9 +118,17 @@ Title, description, tags come from **`README.md`** unless the sentinel overrides
 
 - **Title**: first H1.
 - **Description**: first paragraph after H1, inline markdown stripped.
-- **Tags** (badge pills): `tags: [...]` in YAML frontmatter at top of README.md. Absent → card shows `Project`.
+- **Tags** (badge pills + the landing page's filter chips): `tags: [...]` in YAML frontmatter at top of README.md. Absent → card shows `Project`.
 
-`.project-meta.json`'s `title` / `description` win when present — the escape hatch a worktree needs, since it checks out its parent's README byte-for-byte. Tags always come from the README; a `worktreeOf` sentinel prepends the `worktree` badge to them. Parsing lives in `lib/readme-meta.js`, card assembly + ordering in `lib/project-cards.js`.
+**Tag vocabulary is deliberately small** (V73). Tags are categories, not
+status — as of September 2026 they are `AI`, `Bible`, `Games`, `Glasses`,
+`Theater`, plus the auto-derived `worktree`. There is no enum in code: the hub
+reads the tags in use off the cards and hands them to every new session's
+bootstrap prompt ("the tags already in use on this hub are: …; add a new tag
+only if none fits"), and the same instruction sits in `agentsTemplate()` and
+every `templates/*/AGENTS.md.template`. Reuse before coining; no `WIP`.
+
+`.project-meta.json`'s `title` / `description` win when present — the escape hatch a worktree needs, since it checks out its parent's README byte-for-byte. Tags come from the README, except that a `worktreeOf` card wears its *parent's* tags behind the `worktree` badge — its own README is whatever the branch carries, and a retag on main has to reach every worktree at once. Parsing lives in `lib/readme-meta.js`, card assembly + ordering in `lib/project-cards.js`.
 
 ## systemd units
 
@@ -212,7 +220,9 @@ Three things follow from `worktreeOf`, all of them because a worktree is *not*
 an independent project:
 
 - **The card can't trust the README.** The checkout carries the parent's
-  README verbatim, so title + description come from the sentinel (V55).
+  README verbatim, so title + description come from the sentinel (V55). Tags
+  go the other way: the card takes the *parent card's* tags, so retagging the
+  parent on main reaches every worktree without a commit on each branch.
 - **It sorts with its parent, not by age.** A worktree created months after
   its parent still renders directly beneath it, ahead of newer projects. The
   `<parent>_<task>` naming alone can't do this — a plain `createdAt` sort

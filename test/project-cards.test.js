@@ -118,9 +118,43 @@ test('buildProjectCards maps then sorts in one pass', () => {
   const out = buildProjectCards([
     { name: 'p_wt', meta: { createdAt: '2026-08-01', worktreeOf: 'p' }, readme: { tags: ['Game'] } },
     { name: 'later', meta: { createdAt: '2026-02-01' }, readme: {} },
-    { name: 'p', meta: { createdAt: '2026-01-01' }, readme: { title: 'Parent' } },
+    { name: 'p', meta: { createdAt: '2026-01-01' }, readme: { title: 'Parent', tags: ['Games'] } },
   ]);
   assert.deepEqual(out.map((p) => p.name), ['p', 'p_wt', 'later']);
-  assert.deepEqual(out[1].tags, ['worktree', 'Game']);
+  assert.deepEqual(out[1].tags, ['worktree', 'Games']);
   assert.equal(out[0].title, 'Parent');
+});
+
+// V55 (revised) — a worktree's category is its parent's. The branch checkout
+// carries whatever README that branch has; when the parent is retagged on
+// main, the worktree cards must follow at once rather than advertise the old
+// tags (and mint chips for them, V73) until the branch merges.
+
+test('V55 (revised): a worktree wears its parent\'s tags, not its branch README\'s', () => {
+  const out = buildProjectCards([
+    { name: 'p', meta: { createdAt: '2026-01-01' }, readme: { tags: ['Games'] } },
+    {
+      name: 'p_wt',
+      meta: { createdAt: '2026-08-01', worktreeOf: 'p' },
+      readme: { tags: ['Game', 'Social', '3D', 'WIP'] },
+    },
+  ]);
+  assert.deepEqual(out.map((p) => p.name), ['p', 'p_wt']);
+  assert.deepEqual(out[1].tags, ['worktree', 'Games']);
+  assert.deepEqual(out[0].tags, ['Games'], 'parent untouched');
+});
+
+test('V55 (revised): a worktree of an untagged parent is just `worktree`', () => {
+  const out = buildProjectCards([
+    { name: 'p', meta: { createdAt: '2026-01-01' }, readme: {} },
+    { name: 'p_wt', meta: { createdAt: '2026-08-01', worktreeOf: 'p' }, readme: { tags: ['Game'] } },
+  ]);
+  assert.deepEqual(out[1].tags, ['worktree']);
+});
+
+test('V55 (revised): orphaned worktree falls back to its own README tags', () => {
+  const out = buildProjectCards([
+    { name: 'ghost_wt', meta: { createdAt: '2026-08-01', worktreeOf: 'ghost' }, readme: { tags: ['Game'] } },
+  ]);
+  assert.deepEqual(out[0].tags, ['worktree', 'Game']);
 });
