@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { startFixture } = require('./helpers/fixture');
@@ -185,27 +186,44 @@ test('V90: titles API round-trips and the sessions list prefers hub title → tr
   } finally { await fx.close(); }
 });
 
-test('V92: activity API sets busy/waiting/idle and the sessions list carries activity + lastActive', async () => {
+test('V92/V90: a live claude session (Claude registry) supplies status, its current id and the newest name; the hub follows the id', async () => {
+  const regDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v2reg-'));
+  process.env.HUB_CLAUDE_SESSIONS_DIR = regDir;
   const fx = await startFixture({ seed });
   try {
-    const uuid = '11111111-1111-1111-1111-111111111111';
+    const LIVE = '33333333-3333-3333-3333-333333333333';
+    // Pretend the seeded v1 tab's tmux session runs THIS process (alive pid) and moved to a new id after a /clear.
+    fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'renamed-by-user', nameSource: 'user', nameSince: Date.now(), status: 'waiting', updatedAt: Date.now() }));
+    // The tab must count as running for the registry to apply: seed a tmux entry by name.
+    let tmuxOk = true;
+    try { execFileSync('tmux', ['new-session', '-d', '-s', 'proj__s1', 'sleep 30']); } catch { tmuxOk = false; }
+    if (!tmuxOk) return; // no tmux on this box — nothing to assert
     let s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
-    assert.equal(s.activity, null);
-    assert.equal(typeof s.running, 'boolean');
-    assert.equal((await post(fx.url + '/api/v2/activity', { uuid, state: 'busy' })).status, 200);
+    assert.equal(s.running, true);
+    assert.equal(s.activity, 'waiting');
+    assert.equal(s.uuid, LIVE, 'the live id replaces the launch id');
+    assert.equal(s.title, 'renamed-by-user');
+    assert.ok(s.lastActive > Date.now() - 5000);
+    const map = JSON.parse(fs.readFileSync(path.join(fx.projectsRoot, 'proj', '.develop-sessions.json'), 'utf8'));
+    assert.equal(map.sessions.s1.uuid, LIVE, 'the v1 map follows so a reboot resumes the right conversation');
+    // A newer hub auto-title beats the user's older name; an older one does not.
+    await post(fx.url + '/api/v2/titles', { uuid: LIVE, title: 'Auto Title Later' });
     s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    assert.equal(s.title, 'Auto Title Later');
+    fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'renamed-again', nameSource: 'user', nameSince: Date.now() + 60000, status: 'idle', updatedAt: Date.now() }));
+    s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    assert.equal(s.title, 'renamed-again', 'a /rename after the auto title wins');
+    assert.equal(s.activity, 'idle');
+    // A derived placeholder name never shows.
+    fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'proj-1a', nameSource: 'derived', nameSince: Date.now() + 120000, status: 'busy', updatedAt: Date.now() }));
+    s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    assert.equal(s.title, 'Auto Title Later');
     assert.equal(s.activity, 'busy');
-    assert.ok(s.lastActive > Date.now() - 5000, 'a hook event counts as activity');
-    assert.equal((await post(fx.url + '/api/v2/activity', { uuid, state: 'waiting' })).body.state, 'waiting');
-    assert.equal((await post(fx.url + '/api/v2/activity', { uuid, state: 'idle' })).body.state, 'idle');
-    assert.equal((await post(fx.url + '/api/v2/activity', { uuid, state: 'nope' })).status, 400);
-    assert.equal((await post(fx.url + '/api/v2/activity', { uuid: 'x', state: 'busy' })).status, 400);
-    // a shell session with no transcript: lastActive falls back to createdAt
-    const c = await post(fx.url + '/api/v2/sessions', { cwd: 'proj', agent: 'shell' });
-    const sh = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === c.body.id);
-    assert.equal(sh.activity, null);
-    assert.ok(sh.lastActive >= Date.parse(c.body.createdAt));
-  } finally { await fx.close(); }
+  } finally {
+    try { execFileSync('tmux', ['kill-session', '-t', '=proj__s1']); } catch {}
+    delete process.env.HUB_CLAUDE_SESSIONS_DIR;
+    await fx.close();
+  }
 });
 
 test('V85: services API lists {services, tailnet}; actions on unknown units are 404 before any sudo', async () => {

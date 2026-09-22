@@ -2510,9 +2510,21 @@ async function tmuxListSessions() {
   } catch { return []; }
 }
 
+// A v1 tab whose claude moved to a new session id (resume / clear): keep the
+// map in step so ttyd-attach.sh resumes that conversation after a reboot.
+function updateLegacyUuid(s, sessionId) {
+  const { project, tabId } = termSessionsLib.parseTermKey(s.termKey);
+  if (!project || !tabId) return;
+  const dir = path.join(PROJECTS_ROOT, project);
+  const map = termSessionsLib.readSessionsMap(dir);
+  if (!map.sessions[tabId] || map.sessions[tabId].uuid === sessionId) return;
+  map.sessions[tabId].uuid = sessionId;
+  termSessionsLib.writeSessionsMap(dir, map);
+}
+
 const v2Router = makeV2Router({
   projectsRoot: PROJECTS_ROOT, hubDir: HUB_STATE_DIR, sendJson, readJsonBody, execFileP, marked,
-  readProjectRoutes, readProjectProxyPrefix, listLegacySessions, tmuxListSessions, claudeBin: CLAUDE_BIN,
+  readProjectRoutes, readProjectProxyPrefix, listLegacySessions, tmuxListSessions, updateLegacyUuid, claudeBin: CLAUDE_BIN,
 });
 
 const server = http.createServer(async (req, res) => {

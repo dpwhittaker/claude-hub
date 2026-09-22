@@ -308,15 +308,21 @@ up as it drifts: `services/session-title-hook.mjs` runs on `Stop`, forks a
 detached worker (the hook itself exits in milliseconds) that asks Haiku for a
 3–7 word title — told to keep the current one unless the work has clearly
 moved on — and POSTs it to `/api/v2/titles`, keyed by the conversation uuid.
-`/rename` still works: the transcript's `custom-title` is read when no hub
-title exists. A second hook, `services/session-activity-hook.mjs`, reports
-busy / waiting / idle on prompt submit, tool use, permission prompts and
-Stop, which is what makes a session's dot pulse (working) or turn amber
-(waiting on you) on Home. Install both once with
-`node services/install-session-hooks.mjs` (`--remove` undoes it);
-`SESSION_TITLES=0` disables both for a shell. The title worker's own
-`claude -p` runs with `HUB_TITLE_WORKER=1`, which is what stops it titling
-itself.
+For a LIVE session the hub reads Claude Code's own registry,
+`~/.claude/sessions/<pid>.json` (`lib/claude-registry.js`): the session id it
+is actually on (a `--resume` or `/clear` mints a new one, and the hub follows
+it into the tab's record so a reboot resumes the right conversation), its
+name with its source (`/rename` = `user`, Claude's own = `auto`, the
+`folder-1a` placeholder = `derived`, which is never shown), and its status,
+which is what makes the dot on Home pulse (busy) or turn amber (waiting on
+you). The newest name by time wins between a `/rename` and the auto-titler,
+so each can override the other. A stopped session falls back to the
+transcript on disk (`custom-title.json`, then the records). Install the hook
+once with `node services/install-session-hooks.mjs` (`--remove` undoes it);
+`SESSION_TITLES=0` disables it for a shell. The worker's own `claude -p` runs
+with `HUB_TITLE_WORKER=1`, which is what stops it titling itself. Hooks are
+read when a session starts, so a session older than the install never runs
+it — the registry needs no hook, which is why it does the live work.
 
 **Where things open.** A new tab lands in the panel with the largest area,
 not the one last clicked. Home rows carry no buttons: a session row opens
