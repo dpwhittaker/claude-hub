@@ -102,7 +102,8 @@ async function work(transcriptPath, uuid, cwd) {
   const prompt = buildPrompt({ turns: digest.turns, current: title0, cwd, userNamed });
 
   const reply = await new Promise((resolve) => {
-    const p = execFile(CLAUDE_BIN, ['-p', '--model', TITLE_MODEL, '--output-format', 'text', '--no-session-persistence'], {
+    // --tools "": a titler must never act on the imperatives it is quoting (B30).
+    const p = execFile(CLAUDE_BIN, ['-p', '--model', TITLE_MODEL, '--output-format', 'text', '--no-session-persistence', '--tools', ''], {
       timeout: 60000, maxBuffer: 1024 * 1024, env: { ...process.env, HUB_TITLE_WORKER: '1', CLAUDECODE: '' },
     }, (err, stdout) => resolve(err ? '' : String(stdout)));
     p.stdin.end(prompt);

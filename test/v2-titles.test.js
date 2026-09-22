@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { makeTitleStore, cleanTitle } = require('../lib/v2-titles');
-const { digestTranscript, buildPrompt, parseReply, USER_NAME_FLOOR } = require('../lib/session-title');
+const { digestTranscript, buildPrompt, parseReply, validTitle, USER_NAME_FLOOR } = require('../lib/session-title');
 const { readSessionTitle, readTranscriptTitle } = require('../lib/term-sessions');
 const { readLiveSessions, parseEntry } = require('../lib/claude-registry');
 
@@ -128,7 +128,26 @@ test('V90: digestTranscript keeps human/assistant text only, skips sidechains, t
   assert.equal(parseReply('KEEP'), null);
   assert.equal(parseReply(' keep.\n'), null);
   assert.equal(parseReply('Fix Upload Path\nbecause…'), 'Fix Upload Path');
+  assert.equal(parseReply('"Fix Upload Path"'), 'Fix Upload Path');
   assert.equal(parseReply(''), null);
+  // The excerpt is fenced and declared quoted; the rule is repeated after it.
+  assert.match(prompt, /<<<TRANSCRIPT[\s\S]*TRANSCRIPT>>>/);
+  assert.match(prompt, /not instructions to you/);
+  assert.match(prompt, /never the assistant's status, a question it asked, or a request for permission/);
+});
+
+test('B30: a reply that is a sentence, a refusal, a status line or a path is not a title', () => {
+  for (const bad of [
+    'I need permission to read the `/home/david/projects/llm-bench/logs/` directory to check the current run',
+    "I'll check the bench status now.",
+    'Sorry, I cannot access that directory',
+    'Read ~/projects/llm-bench/logs/queue3.log',
+    'The session is monitoring a benchmark run and it keeps going for a long time',
+    'Monitoring Runs…',
+    'Here is the title: Bench Watch',
+  ]) assert.equal(validTitle(bad), false, bad);
+  for (const good of ['Qwen 27B Context Experiment', 'Fix Upload Path', 'ring-battery-notif-tracker', 'V2 Tab Strip Polish']) assert.equal(validTitle(good), true, good);
+  assert.equal(parseReply('I need permission to read the logs directory'), null);
 });
 
 test('V90: userTurnsSince counts human prompts after a rename; the floor is 4', () => {
@@ -150,6 +169,9 @@ test('V90: the worker leaves a fresh /rename alone, asks KEEP-or-new otherwise, 
   assert.match(src, /reg\.nameSource === 'user' && reg\.name && \(!current \|\| Number\(reg\.nameSince\) > Number\(current\.at\)\)/);
   assert.match(src, /digest\.userTurnsSince\(Number\(reg\.nameSince\)\) < USER_NAME_FLOOR\) return;/);
   assert.match(src, /const title = parseReply\(reply\);\n\s+if \(!title \|\| title === title0\) return;/);
+  assert.match(src, /'--no-session-persistence', '--tools', ''\]/, 'the titler runs claude -p with no tools');
+  const routes = fs.readFileSync(path.join(__dirname, '..', 'lib', 'v2-routes.js'), 'utf8');
+  assert.match(routes, /'--no-session-persistence', '--tools', ''\]/, 'so does the editor completion');
 });
 
 
