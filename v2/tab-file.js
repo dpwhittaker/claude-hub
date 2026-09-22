@@ -23,6 +23,7 @@
     });
     return hljsReady;
   }
+  Hub.loadHljs = loadHljs;
 
   // CodeMirror from esm.sh. One import graph per page; a failure falls back
   // to a textarea so editing never depends on the CDN.

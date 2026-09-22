@@ -309,10 +309,20 @@ detached worker (the hook itself exits in milliseconds) that asks Haiku for a
 3–7 word title — told to keep the current one unless the work has clearly
 moved on — and POSTs it to `/api/v2/titles`, keyed by the conversation uuid.
 `/rename` still works: the transcript's `custom-title` is read when no hub
-title exists. Install once with `node services/install-title-hook.mjs`
-(`--remove` undoes it); `SESSION_TITLES=0` disables it for a shell. The
-worker's own `claude -p` runs with `HUB_TITLE_WORKER=1`, which is what stops
-it titling itself.
+title exists. A second hook, `services/session-activity-hook.mjs`, reports
+busy / waiting / idle on prompt submit, tool use, permission prompts and
+Stop, which is what makes a session's dot pulse (working) or turn amber
+(waiting on you) on Home. Install both once with
+`node services/install-session-hooks.mjs` (`--remove` undoes it);
+`SESSION_TITLES=0` disables both for a shell. The title worker's own
+`claude -p` runs with `HUB_TITLE_WORKER=1`, which is what stops it titling
+itself.
+
+**Where things open.** A new tab lands in the panel with the largest area,
+not the one last clicked. Home rows carry no buttons: a session row opens
+its terminal (end it from the tab's context menu), a service row opens a
+service tab — the served site when there is one, else the unit file — whose
+bar has Site / Unit / Logs and Start · Stop · Restart.
 
 `?profile=<id>` on `/v2/` loads that profile for the page without changing the
 device's remembered pick — use `ai-testing` when driving the UI from a test

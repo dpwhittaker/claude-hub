@@ -6,6 +6,7 @@ const path = require('node:path');
 const { makeTitleStore, cleanTitle } = require('../lib/v2-titles');
 const { digestTranscript, buildPrompt } = require('../lib/session-title');
 const { readSessionTitle } = require('../lib/term-sessions');
+const { makeActivity } = require('../lib/v2-activity');
 
 const U1 = '11111111-2222-3333-4444-555555555555';
 
@@ -81,7 +82,35 @@ test('V90: the hook is inert for its own worker and its installer merges by comm
   assert.match(src, /detached: true, stdio: 'ignore'/, 'the hook never waits on the model');
   assert.match(src, /stop_hook_active\) quit\(\)/);
   assert.match(src, /--no-session-persistence/);
-  const inst = fs.readFileSync(path.join(__dirname, '..', 'services', 'install-title-hook.mjs'), 'utf8');
+  const inst = fs.readFileSync(path.join(__dirname, '..', 'services', 'install-session-hooks.mjs'), 'utf8');
   assert.match(inst, /timeout: 5/);
-  assert.match(inst, /settings\.hooks\.Stop = remove \? kept : \[\.\.\.kept, ENTRY\]/);
+  assert.match(inst, /settings\.hooks\[event\] = remove \? kept : \[\.\.\.kept, \.\.\.entries\]/);
+});
+
+test('V92: activity store — states, stale busy reads idle, bad input refused', () => {
+  let t = 1000;
+  const a = makeActivity({ now: () => t, staleMs: 500 });
+  assert.equal(a.get(U1), null);
+  assert.deepEqual(a.set(U1, 'busy'), { uuid: U1, state: 'busy', at: 1000 });
+  assert.equal(a.get(U1.toUpperCase()).state, 'busy');
+  t = 1400;
+  assert.equal(a.get(U1).state, 'busy');
+  t = 1600;
+  assert.equal(a.get(U1).state, 'idle', 'a busy that never saw its Stop expires');
+  assert.equal(a.get(U1).stale, true);
+  a.set(U1, 'idle'); t = 99999;
+  assert.equal(a.get(U1).state, 'idle', 'idle never goes stale');
+  assert.throws(() => a.set(U1, 'sleeping'), (e) => e.statusCode === 400);
+  assert.throws(() => a.set('nope', 'busy'), (e) => e.statusCode === 400);
+});
+
+test('V92: the activity hook maps events to states and the installer covers both hooks', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'session-activity-hook.mjs'), 'utf8');
+  assert.match(src, /'UserPromptSubmit' \|\| ev === 'PostToolUse'\) state = 'busy'/);
+  assert.match(src, /ev === 'Stop' && !data\.stop_hook_active\) state = 'idle'/);
+  assert.match(src, /permission_prompt'\) state = 'waiting'/);
+  assert.match(src, /HUB_TITLE_WORKER === '1'\) quit\(\)/);
+  const inst = fs.readFileSync(path.join(__dirname, '..', 'services', 'install-session-hooks.mjs'), 'utf8');
+  for (const ev of ['Stop', 'UserPromptSubmit', 'PostToolUse', 'PreToolUse', 'Notification']) assert.match(inst, new RegExp('^\\s+' + ev + ':', 'm'), ev);
+  assert.match(inst, /OURS = new Set\(\[TITLE, ACTIVITY\]\)/);
 });

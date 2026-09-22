@@ -189,10 +189,23 @@
     }
   }
 
+  // New tabs land in the panel with the LARGEST area (V93) — not the one
+  // last clicked, which is usually the Home panel the click came from.
+  function largestPanelId() {
+    let best = null; let bestArea = -1;
+    for (const body of layoutEl.querySelectorAll('.panel-body')) {
+      const r = body.getBoundingClientRect();
+      const area = r.width * r.height;
+      if (area > bestArea) { bestArea = area; best = body.dataset.panel; }
+    }
+    return best;
+  }
   function targetPanelId(prefer) {
     const ps = L.panels(state.layout);
     if (prefer && ps.some((p) => p.id === prefer)) return prefer;
     if (state.narrow && state.narrowPanel && ps.some((p) => p.id === state.narrowPanel)) return state.narrowPanel;
+    const largest = largestPanelId();
+    if (largest && ps.some((p) => p.id === largest)) return largest;
     if (state.focusedPanel && ps.some((p) => p.id === state.focusedPanel)) return state.focusedPanel;
     return ps[0].id;
   }
@@ -329,7 +342,32 @@
       closable ? el('button', { class: 'close', title: 'Close', onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); Hub.closeTab(id); } }, '×') : null);
     tabEl.addEventListener('pointerdown', (e) => onTabPointerDown(e, id, p.id));
     tabEl.addEventListener('auxclick', (e) => { if (e.button === 1) { e.preventDefault(); Hub.closeTab(id); } });
+    tabEl.addEventListener('contextmenu', (e) => { e.preventDefault(); if (drag) return; tabContextMenu(id, e.clientX, e.clientY); });
     return tabEl;
+  }
+
+  // Right-click / long-press on a tab. The only place a session can be ended
+  // now that rows carry no buttons (V93).
+  function tabContextMenu(id, x, y) {
+    const t = state.tabs[id];
+    if (!t) return;
+    const items = [];
+    if (t.kind === 'term' && t.sessionId) {
+      items.push(['End session', async () => {
+        if (!(await Hub.confirm('End session?', 'The tmux session and its agent are killed. A Claude conversation can be resumed later by its id.', 'End', true))) return;
+        try { await api('/api/v2/sessions/' + t.sessionId, { method: 'DELETE' }); Hub.closeTabsWhere((x) => x.kind === 'term' && x.termKey === t.termKey); if (Hub.sessions) Hub.sessions.at = 0; }
+        catch (e) { toast(e.message, true); }
+      }]);
+    }
+    if (t.kind === 'term' && !t.sessionId) items.push(['v1 tab — end it from the old Develop pane', null]);
+    if (t.kind !== 'home') items.push(['Close tab', () => Hub.closeTab(id)]);
+    if (!items.length) return;
+    const menu = el('div', { class: 'ctx-menu', style: { left: Math.min(x, innerWidth - 220) + 'px', top: Math.min(y, innerHeight - 40 * items.length) + 'px' } },
+      ...items.map(([label, fn]) => el('button', { class: 'ctx-item', disabled: !fn, onclick: () => { close(); if (fn) fn(); } }, label)));
+    const close = () => { menu.remove(); document.removeEventListener('pointerdown', onDown, true); };
+    const onDown = (e) => { if (!menu.contains(e.target)) close(); };
+    document.body.append(menu);
+    setTimeout(() => document.addEventListener('pointerdown', onDown, true), 0);
   }
 
   function refreshTabLabels() {

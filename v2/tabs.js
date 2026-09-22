@@ -176,32 +176,111 @@
     },
   });
 
-  // ---- service / url: a live site in an iframe with a thin bar ----
-  function urlKind(kind) {
-    return {
-      icon: kind === 'service' ? 'service' : 'globe',
-      title: (t) => t.title || t.unit || t.url,
-      mount(tab, el) {
-        const f = iframe(tab.url);
-        const state = Hub.el('span', { class: 'dot' + (tab.active === 'active' ? ' on' : '') });
-        const bar = Hub.el('div', { class: 'tabbar' },
-          kind === 'service' ? state : null,
-          Hub.el('span', { class: 'path mono', title: tab.url }, kind === 'service' ? tab.unit : tab.url),
-          Hub.el('span', { class: 'spacer' }),
-          kind === 'service' ? Hub.el('button', { class: 'btn muted', title: 'Restart the unit', onclick: async (e) => {
-            e.target.disabled = true;
-            try { await Hub.api(`/api/v2/services/${encodeURIComponent(tab.unit)}/restart`, { method: 'POST', body: {} }); Hub.toast('restarted ' + tab.unit); setTimeout(() => { f.src = tab.url; }, 1500); }
-            catch (err) { Hub.toast(err.message, true); }
-            e.target.disabled = false;
-          } }, '↻ restart') : null,
-          Hub.el('button', { class: 'btn muted', title: 'Reload', onclick: () => { f.src = tab.url; } }, '⟳'),
-          Hub.el('a', { class: 'btn muted', href: tab.url, target: '_blank', rel: 'noopener', title: 'Open in a new browser tab' }, '↗'),
-        );
-        el.append(bar, f);
-        return { refresh: () => { f.src = tab.url; } };
-      },
-    };
-  }
-  Hub.registerKind('service', urlKind('service'));
-  Hub.registerKind('url', urlKind('url'));
+  // ---- url: any site in an iframe with a thin bar ----
+  Hub.registerKind('url', {
+    icon: 'globe',
+    title: (t) => t.title || t.url,
+    mount(tab, el) {
+      const f = iframe(tab.url);
+      el.append(Hub.el('div', { class: 'tabbar' },
+        Hub.el('span', { class: 'path mono', title: tab.url }, tab.url),
+        Hub.el('span', { class: 'spacer' }),
+        Hub.el('button', { class: 'btn muted', title: 'Reload', onclick: () => { f.src = tab.url; } }, Hub.icon('refresh')),
+        Hub.el('a', { class: 'btn muted', href: tab.url, target: '_blank', rel: 'noopener', title: 'Open in a new browser tab' }, Hub.icon('popout'))), f);
+      return { refresh: () => { f.src = tab.url; } };
+    },
+  });
+
+  // ---- service: Site (when it serves one) / Unit file / Logs, plus
+  // start · stop · restart in the bar — the only place these live (V93) ----
+  Hub.registerKind('service', {
+    icon: 'service',
+    title: (t) => t.title || t.unit,
+    mount(tab, root, ctx) {
+      const { el, api, toast } = Hub;
+      let mode = tab.mode || (tab.url ? 'site' : 'unit');
+      let state = { active: tab.active || 'unknown', sub: '' };
+      const dot = el('span', { class: 'dot' });
+      const btns = {};
+      const seg = el('div', { class: 'seg' }, ...[['site', 'Site'], ['unit', 'Unit'], ['logs', 'Logs']].map(([m, l]) => (btns[m] = el('button', { onclick: () => setMode(m) }, l))));
+      btns.site.disabled = !tab.url;
+      const startStop = el('button', { class: 'btn muted', onclick: () => act(state.active === 'active' ? 'stop' : 'start') });
+      const restart = el('button', { class: 'btn muted', title: 'Restart', onclick: () => act('restart') }, Hub.icon('refresh'), ' Restart');
+      const status = el('span', { class: 'hint' });
+      const bar = el('div', { class: 'tabbar' }, seg, dot, el('span', { class: 'path mono', title: tab.unit }, tab.unit), status, el('span', { class: 'spacer' }), startStop, restart,
+        tab.url ? el('a', { class: 'btn muted', href: tab.url, target: '_blank', rel: 'noopener', title: 'Open the site in a new browser tab' }, Hub.icon('popout')) : null);
+      const view = el('div', { class: 'view' });
+      root.append(el('div', { class: 'filetab' }, bar, view));
+      let siteFrame = null; let logsTimer = null;
+
+      function paintState() {
+        dot.className = 'dot' + (state.active === 'active' ? ' on' : state.active === 'failed' ? ' bad' : '');
+        startStop.replaceChildren(Hub.icon(state.active === 'active' ? 'stop' : 'play'), ' ', state.active === 'active' ? 'Stop' : 'Start');
+        status.textContent = state.sub ? state.sub : '';
+      }
+      async function refreshState() {
+        try {
+          const d = await api('/api/v2/services');
+          const me = d.services.find((x) => x.unit === tab.unit);
+          if (me) { state = { active: me.active, sub: me.sub }; ctx.update({ active: me.active }, { silent: true }); }
+          paintState();
+        } catch {}
+      }
+      async function act(action) {
+        startStop.disabled = restart.disabled = true;
+        try {
+          await api(`/api/v2/services/${encodeURIComponent(tab.unit)}/${action}`, { method: 'POST', body: {} });
+          toast(action + ' ' + tab.unit);
+          setTimeout(() => { refreshState(); if (mode === 'site' && siteFrame && action !== 'stop') siteFrame.src = tab.url; }, 1200);
+        } catch (e) { toast(e.message, true); }
+        finally { startStop.disabled = restart.disabled = false; }
+      }
+      function setMode(m) {
+        if (m === 'site' && !tab.url) m = 'unit';
+        mode = m;
+        ctx.update({ mode: m }, { silent: true });
+        for (const [k, b] of Object.entries(btns)) b.classList.toggle('on', k === m);
+        clearInterval(logsTimer); logsTimer = null;
+        // The site iframe stays mounted (hidden) so switching to Logs and back never reloads it.
+        for (const c of Array.from(view.children)) { if (c === siteFrame) c.hidden = true; else c.remove(); }
+        if (m === 'site') showSite();
+        else if (m === 'unit') showUnit();
+        else showLogs();
+      }
+      function showSite() {
+        if (!siteFrame) { siteFrame = iframe(tab.url); view.append(siteFrame); }
+        siteFrame.hidden = false;
+      }
+      async function showUnit() {
+        const pre = el('pre', { class: 'code' }, 'loading…');
+        view.append(pre);
+        try {
+          const u = await api(`/api/v2/services/${encodeURIComponent(tab.unit)}/unit`);
+          const code = el('code', { class: 'language-ini' }, u.content);
+          pre.innerHTML = ''; pre.append(code);
+          status.textContent = u.path;
+          const h = await (Hub.loadHljs ? Hub.loadHljs() : null);
+          if (h) h.highlightElement(code);
+        } catch (e) { pre.textContent = e.message; }
+      }
+      function showLogs() {
+        const pre = el('pre', { class: 'code logs' }, 'loading…');
+        view.append(pre);
+        let last = '';
+        const tick = async () => {
+          try {
+            const d = await api(`/api/v2/services/${encodeURIComponent(tab.unit)}/logs?n=400`);
+            const text = d.lines.join('\n') || '(no output)';
+            if (text !== last) { const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8; pre.textContent = text; last = text; if (atEnd) pre.scrollTop = pre.scrollHeight; }
+          } catch (e) { pre.textContent = e.message; }
+        };
+        tick().then(() => { pre.scrollTop = pre.scrollHeight; });
+        logsTimer = setInterval(() => { if (root.classList.contains('shown')) tick(); }, 3000);
+      }
+      paintState();
+      refreshState();
+      setMode(mode);
+      return { refresh: () => { refreshState(); if (mode === 'site' && siteFrame) siteFrame.src = tab.url; }, onShow: refreshState, destroy: () => clearInterval(logsTimer) };
+    },
+  });
 })();

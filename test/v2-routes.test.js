@@ -185,6 +185,29 @@ test('V90: titles API round-trips and the sessions list prefers hub title → tr
   } finally { await fx.close(); }
 });
 
+test('V92: activity API sets busy/waiting/idle and the sessions list carries activity + lastActive', async () => {
+  const fx = await startFixture({ seed });
+  try {
+    const uuid = '11111111-1111-1111-1111-111111111111';
+    let s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    assert.equal(s.activity, null);
+    assert.equal(typeof s.running, 'boolean');
+    assert.equal((await post(fx.url + '/api/v2/activity', { uuid, state: 'busy' })).status, 200);
+    s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    assert.equal(s.activity, 'busy');
+    assert.ok(s.lastActive > Date.now() - 5000, 'a hook event counts as activity');
+    assert.equal((await post(fx.url + '/api/v2/activity', { uuid, state: 'waiting' })).body.state, 'waiting');
+    assert.equal((await post(fx.url + '/api/v2/activity', { uuid, state: 'idle' })).body.state, 'idle');
+    assert.equal((await post(fx.url + '/api/v2/activity', { uuid, state: 'nope' })).status, 400);
+    assert.equal((await post(fx.url + '/api/v2/activity', { uuid: 'x', state: 'busy' })).status, 400);
+    // a shell session with no transcript: lastActive falls back to createdAt
+    const c = await post(fx.url + '/api/v2/sessions', { cwd: 'proj', agent: 'shell' });
+    const sh = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === c.body.id);
+    assert.equal(sh.activity, null);
+    assert.ok(sh.lastActive >= Date.parse(c.body.createdAt));
+  } finally { await fx.close(); }
+});
+
 test('V85: services API lists {services, tailnet}; actions on unknown units are 404 before any sudo', async () => {
   const fx = await startFixture({ seed });
   try {
@@ -200,5 +223,6 @@ test('V85: services API lists {services, tailnet}; actions on unknown units are 
     assert.equal((await post(fx.url + '/api/v2/services/definitely-not-a-unit.service/restart', {})).status, 404);
     assert.equal((await post(fx.url + '/api/v2/services/..%2Fx.service/restart', {})).status, 404);
     assert.equal((await json(fx.url + '/api/v2/services/definitely-not-a-unit.service/logs')).status, 404);
+    assert.equal((await json(fx.url + '/api/v2/services/definitely-not-a-unit.service/unit')).status, 404);
   } finally { await fx.close(); }
 });

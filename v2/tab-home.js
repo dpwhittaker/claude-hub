@@ -276,15 +276,6 @@
     });
   };
 
-  Hub.showLogs = async function showLogs(unit) {
-    Hub.sheet(async (card, close) => {
-      const pre = el('pre', { class: 'code mono', style: { fontSize: '11px', maxHeight: '60vh', overflow: 'auto', whiteSpace: 'pre-wrap' } }, 'loading…');
-      card.append(el('h2', null, unit), pre, el('div', { class: 'buttons' }, el('button', { class: 'btn muted', onclick: close }, 'Close')));
-      try { const d = await api(`/api/v2/services/${encodeURIComponent(unit)}/logs?n=300`); pre.textContent = d.lines.join('\n') || '(no output)'; pre.scrollTop = pre.scrollHeight; }
-      catch (e) { pre.textContent = e.message; }
-    });
-  };
-
   // ---------- home tab ----------
   Hub.registerKind('home', {
     icon: 'home',
@@ -337,34 +328,36 @@
       }
       applyFolds();
 
+      // Dot: grey = stopped, green = running, pulsing green = the agent is
+      // working right now, amber = it is waiting on you (V92). No buttons —
+      // ending a session is on the tab's context menu.
       function sessionRow(s) {
         const title = s.title || (s.cwd ? Hub.basename(s.cwd) : '~/projects');
-        const sub = (s.cwd ? '~/projects/' + s.cwd : '~/projects') + (s.title ? '' : '');
-        const row = el('li', { class: 'row', title: s.termKey },
-          el('span', { class: 'dot' + (s.running ? ' on' : '') }),
+        const sub = (s.cwd ? '~/projects/' + s.cwd : '~/projects');
+        const dotCls = 'dot' + (s.running ? ' on' : '') + (s.running && s.activity === 'busy' ? ' busy' : '') + (s.running && s.activity === 'waiting' ? ' waiting' : '');
+        const when = s.lastActive ? Hub.fmtAgo(s.lastActive) : '';
+        const row = el('li', { class: 'row', title: s.termKey + (s.activity ? ' · ' + s.activity : '') },
+          el('span', { class: dotCls }),
           el('span', { class: 'badge ' + s.agent }, s.agent),
-          el('span', { class: 'main' }, el('span', { class: 't' }, title), el('span', { class: 's' }, sub + (s.kind === 'legacy' ? ' · v1 tab' : ''))),
-          el('span', { class: 'acts' },
-            el('button', { title: s.kind === 'hub' ? 'End this session (kills the tmux session)' : 'v1 tabs are closed from the old Develop pane', onclick: async (ev) => { ev.stopPropagation(); if (s.kind !== 'hub') return; if (!(await Hub.confirm('End session?', 'The tmux session and its agent are killed. A Claude conversation can be resumed later by its id.', 'End', true))) return; try { await api('/api/v2/sessions/' + s.id, { method: 'DELETE' }); Hub.closeTabsWhere((t) => t.kind === 'term' && t.termKey === s.termKey); Hub.sessions.at = 0; refresh(); } catch (e) { toast(e.message, true); } } }, Hub.icon('x'))));
+          el('span', { class: 'main' }, el('span', { class: 't' }, title), el('span', { class: 's' }, sub + (s.kind === 'legacy' ? ' · v1 tab' : '') + (when ? ' · ' + when : ''))));
         row.onclick = () => Hub.openSessionTab(s);
         return row;
       }
 
+      // Services sort by when this device last opened them; a first-timer
+      // sorts by name.
+      const VISITS = 'hub.services.visits';
+      function visits() { try { return JSON.parse(localStorage.getItem(VISITS) || '{}') || {}; } catch { return {}; } }
+      function noteVisit(unit) { const v = visits(); v[unit] = Date.now(); try { localStorage.setItem(VISITS, JSON.stringify(v)); } catch {} }
+
+      // Click → the served site when there is one, else the unit file; the
+      // tab's bar carries start / stop / restart / logs.
       function serviceRow(s) {
         const row = el('li', { class: 'row', title: s.description || s.unit },
           el('span', { class: 'dot' + (s.active === 'active' ? ' on' : s.active === 'failed' ? ' bad' : '') }),
-          el('span', { class: 'main' }, el('span', { class: 't' }, s.title), el('span', { class: 's' }, (s.sub || s.active) + (s.project ? ' · ' + s.project : '') + (s.url ? ' · ' + s.url : ''))),
-          el('span', { class: 'acts' },
-            el('button', { title: 'Logs', onclick: (ev) => { ev.stopPropagation(); Hub.showLogs(s.unit); } }, Hub.icon('logs')),
-            el('button', { title: 'Restart', onclick: (ev) => { ev.stopPropagation(); act(s.unit, 'restart'); } }, Hub.icon('refresh')),
-            el('button', { title: s.active === 'active' ? 'Stop' : 'Start', onclick: (ev) => { ev.stopPropagation(); act(s.unit, s.active === 'active' ? 'stop' : 'start'); } }, Hub.icon(s.active === 'active' ? 'stop' : 'play'))));
-        row.onclick = () => { if (s.url) Hub.openTab({ kind: 'service', unit: s.unit, url: s.url, title: s.title, active: s.active }); else Hub.showLogs(s.unit); };
+          el('span', { class: 'main' }, el('span', { class: 't' }, s.title), el('span', { class: 's' }, (s.sub || s.active) + (s.project ? ' · ' + s.project : '') + (s.url ? ' · ' + s.url : ''))));
+        row.onclick = () => { noteVisit(s.unit); Hub.openTab({ kind: 'service', unit: s.unit, url: s.url || null, title: s.title, active: s.active, mode: s.url ? 'site' : 'unit' }); };
         return row;
-      }
-
-      async function act(unit, action) {
-        try { await api(`/api/v2/services/${encodeURIComponent(unit)}/${action}`, { method: 'POST', body: {} }); toast(action + ' ' + unit); setTimeout(refresh, 800); }
-        catch (e) { toast(e.message, true); }
       }
 
       let busy = false;
@@ -373,11 +366,12 @@
         try {
           const [ss, sv] = await Promise.all([Hub.loadSessions(), api('/api/v2/services')]);
           sessionsUl.innerHTML = '';
-          const list = ss.list.slice().sort((a, b) => (b.running - a.running) || (a.cwd || '').localeCompare(b.cwd || ''));
+          const list = ss.list.slice().sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0) || (a.cwd || '').localeCompare(b.cwd || ''));
           if (!list.length) sessionsUl.append(el('li', { class: 'empty-note' }, 'no sessions yet — press + New'));
           for (const s of list) sessionsUl.append(sessionRow(s));
           servicesUl.innerHTML = '';
-          for (const s of sv.services) servicesUl.append(serviceRow(s));
+          const seen = visits();
+          for (const s of sv.services.slice().sort((a, b) => (seen[b.unit] || 0) - (seen[a.unit] || 0) || a.title.localeCompare(b.title))) servicesUl.append(serviceRow(s));
           tailnetUl.innerHTML = '';
           for (const t of sv.tailnet) for (const m of t.mounts) {
             const url = t.url + (m.path === '/' ? '/' : m.path);

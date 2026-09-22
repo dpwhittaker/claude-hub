@@ -2498,10 +2498,15 @@ function listLegacySessions() {
   return out;
 }
 
+// [{name, activity}] — activity = tmux's last-activity epoch seconds, the
+// "most recent response" a shell or codex session can report (V92).
 async function tmuxListSessions() {
   try {
-    const { stdout } = await execFileP('tmux', ['list-sessions', '-F', '#{session_name}'], { timeout: 3000 });
-    return stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+    const { stdout } = await execFileP('tmux', ['list-sessions', '-F', '#{session_name}\t#{session_activity}'], { timeout: 3000 });
+    return stdout.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+      const [name, activity] = l.split('\t');
+      return { name, activity: Number(activity) * 1000 || 0 };
+    });
   } catch { return []; }
 }
 
