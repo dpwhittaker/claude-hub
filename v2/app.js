@@ -99,6 +99,9 @@
     document.getElementById('picker').hidden = true;
     ensureNotEmpty();
     renderAll();
+    // Whatever titles the profile carried are a first paint only; the live
+    // ones arrive from the sessions list right away (V94).
+    if (Hub.loadSessions) Hub.loadSessions().catch(() => {});
   }
 
   function showPicker(profiles) {
@@ -182,7 +185,11 @@
     if (!state.profile || state.saving) { if (state.saving) persist(600); return; }
     state.saving = true;
     const tabs = {};
-    for (const [id, t] of Object.entries(state.tabs)) { const { _dirty, ...rest } = t; tabs[id] = rest; }
+    for (const [id, t] of Object.entries(state.tabs)) {
+      const { _dirty, ...rest } = t;
+      if (rest.kind === 'term') rest.title = null; // live, never shared (B29)
+      tabs[id] = rest;
+    }
     try {
       const r = await api('/api/v2/profiles/' + state.profile.id, { method: 'PUT', body: { layout: state.layout, tabs, rev: state.profile.rev } });
       state.profile.rev = r.rev;
@@ -256,11 +263,14 @@
     return id;
   };
 
-  Hub.updateTab = function updateTab(id, patch, { silent } = {}) {
+  // `persist: false` = a live value (a session title) that every page
+  // derives for itself and must never write into the shared profile — an
+  // older page's copy would otherwise overwrite a newer page's (B29).
+  Hub.updateTab = function updateTab(id, patch, { silent, persist: save = true } = {}) {
     if (!state.tabs[id]) return;
     Object.assign(state.tabs[id], patch);
     refreshTabLabels();
-    persist(silent ? 2000 : 400);
+    if (save) persist(silent ? 2000 : 400);
   };
 
   Hub.closeTab = async function closeTab(id) {

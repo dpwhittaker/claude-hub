@@ -51,3 +51,11 @@ test('V94: the page syncs session titles at load and reloads itself when the cli
   assert.match(app, /some\(\(m\) => m\.dirty\)\) \{ toast\('hub updated/, 'never reloads over unsaved edits');
   assert.match(app, /await flush\(\);\n\s+location\.reload\(\)/, 'saves the layout before reloading');
 });
+
+test('B29: session titles are live per page, never written into the shared profile', () => {
+  const app = read('app.js');
+  const home = read('tab-home.js');
+  assert.match(home, /Hub\.updateTab\(id, \{ title: s\.title \|\| null \}, \{ persist: false \}\)/);
+  assert.match(app, /if \(rest\.kind === 'term'\) rest\.title = null;/, 'flush strips term titles');
+  assert.match(app, /renderAll\(\);\n\s+\/\/ Whatever titles[\s\S]*?Hub\.loadSessions\(\)\.catch/, 'a profile (re)load resyncs titles at once');
+});

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { makeTitleStore, cleanTitle } = require('../lib/v2-titles');
-const { digestTranscript, buildPrompt } = require('../lib/session-title');
+const { digestTranscript, buildPrompt, parseReply, USER_NAME_FLOOR } = require('../lib/session-title');
 const { readSessionTitle, readTranscriptTitle } = require('../lib/term-sessions');
 const { readLiveSessions, parseEntry } = require('../lib/claude-registry');
 
@@ -111,21 +111,45 @@ test('V90: digestTranscript keeps human/assistant text only, skips sidechains, t
   assert.ok(d.turns[2].text.length <= 601, 'long turns are truncated');
   const prompt = buildPrompt({ turns: d.turns, current: d.title, cwd: 'claude-hub' });
   assert.match(prompt, /Current title: upload-fix/);
+  assert.match(prompt, /reply with exactly the word KEEP/);
   assert.match(prompt, /USER: Please fix the upload path bug/);
   assert.match(prompt, /3 to 7 words/);
   assert.doesNotMatch(prompt, /subagent noise/);
   // Empty transcript → nothing to title.
-  assert.deepEqual(digestTranscript(''), { turns: [], title: null, assistantTurns: 0 });
-  // A user-chosen name is presented as such, to be kept verbatim.
+  const empty = digestTranscript('');
+  assert.deepEqual({ turns: empty.turns, title: empty.title, assistantTurns: empty.assistantTurns }, { turns: [], title: null, assistantTurns: 0 });
+  // No current title → a title is asked for outright, no KEEP.
+  assert.doesNotMatch(buildPrompt({ turns: d.turns, current: null }), /KEEP/);
+  // A user-chosen name is presented as such.
   const p2 = buildPrompt({ turns: d.turns, current: 'my-own-name', userNamed: true });
-  assert.match(p2, /chosen by the USER, keep it VERBATIM[^\n]*: my-own-name/);
+  assert.match(p2, /typed by the USER[^\n]*: my-own-name/);
   assert.doesNotMatch(p2, /Current title: my-own-name/);
+  // Replies: KEEP (any casing/punctuation) → null; otherwise the first line.
+  assert.equal(parseReply('KEEP'), null);
+  assert.equal(parseReply(' keep.\n'), null);
+  assert.equal(parseReply('Fix Upload Path\nbecause…'), 'Fix Upload Path');
+  assert.equal(parseReply(''), null);
 });
 
-test('V90: the worker treats a /rename newer than the last auto title as user-named', () => {
+test('V90: userTurnsSince counts human prompts after a rename; the floor is 4', () => {
+  const t0 = Date.parse('2026-09-22T21:00:00Z');
+  const lines = [];
+  for (let i = 0; i < 6; i++) {
+    lines.push({ type: 'user', timestamp: new Date(t0 + i * 60000).toISOString(), message: { role: 'user', content: 'prompt ' + i } });
+    lines.push({ type: 'assistant', timestamp: new Date(t0 + i * 60000 + 30000).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'reply ' + i }] } });
+  }
+  const d = digestTranscript(lines.map((o) => JSON.stringify(o)).join('\n'));
+  assert.equal(d.userTurnsSince(t0 + 2.5 * 60000), 3, 'prompts 3, 4, 5 come after the rename');
+  assert.equal(d.userTurnsSince(0), 6);
+  assert.equal(d.userTurnsSince(Date.now()), 0);
+  assert.equal(USER_NAME_FLOOR, 4);
+});
+
+test('V90: the worker leaves a fresh /rename alone, asks KEEP-or-new otherwise, and posts nothing on KEEP', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'session-title-hook.mjs'), 'utf8');
   assert.match(src, /reg\.nameSource === 'user' && reg\.name && \(!current \|\| Number\(reg\.nameSince\) > Number\(current\.at\)\)/);
-  assert.match(src, /buildPrompt\(\{ turns: digest\.turns, current: title0, cwd, userNamed \}\)/);
+  assert.match(src, /digest\.userTurnsSince\(Number\(reg\.nameSince\)\) < USER_NAME_FLOOR\) return;/);
+  assert.match(src, /const title = parseReply\(reply\);\n\s+if \(!title \|\| title === title0\) return;/);
 });
 
 

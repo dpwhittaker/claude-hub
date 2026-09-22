@@ -26,7 +26,7 @@
     for (const [id, t] of Object.entries(Hub.state.tabs)) {
       if (t.kind !== 'term') continue;
       const s = byKey.get(t.termKey);
-      if (s && (s.title || null) !== (t.title || null)) Hub.updateTab(id, { title: s.title || null }, { silent: true });
+      if (s && (s.title || null) !== (t.title || null)) Hub.updateTab(id, { title: s.title || null }, { persist: false });
     }
     return Hub.sessions;
   };

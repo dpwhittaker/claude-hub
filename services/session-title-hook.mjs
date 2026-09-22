@@ -19,7 +19,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { digestTranscript, buildPrompt, TITLE_MODEL } = require('../lib/session-title.js');
+const { digestTranscript, buildPrompt, parseReply, TITLE_MODEL, USER_NAME_FLOOR } = require('../lib/session-title.js');
 
 const HUB = process.env.CLAUDE_HUB_URL || 'http://127.0.0.1:8002';
 const REGISTRY = process.env.HUB_CLAUDE_SESSIONS_DIR || `${process.env.HOME}/.claude/sessions`;
@@ -94,16 +94,21 @@ async function work(transcriptPath, uuid, cwd) {
   const reg = registryEntry(uuid);
   let title0 = (current && current.title) || digest.title;
   let userNamed = false;
-  if (reg && reg.nameSource === 'user' && reg.name && (!current || Number(reg.nameSince) > Number(current.at))) { title0 = reg.name; userNamed = true; }
+  if (reg && reg.nameSource === 'user' && reg.name && (!current || Number(reg.nameSince) > Number(current.at))) {
+    // Not even asked until the user has moved on by USER_NAME_FLOOR prompts.
+    if (digest.userTurnsSince(Number(reg.nameSince)) < USER_NAME_FLOOR) return;
+    title0 = reg.name; userNamed = true;
+  }
   const prompt = buildPrompt({ turns: digest.turns, current: title0, cwd, userNamed });
 
-  const title = await new Promise((resolve) => {
+  const reply = await new Promise((resolve) => {
     const p = execFile(CLAUDE_BIN, ['-p', '--model', TITLE_MODEL, '--output-format', 'text', '--no-session-persistence'], {
       timeout: 60000, maxBuffer: 1024 * 1024, env: { ...process.env, HUB_TITLE_WORKER: '1', CLAUDECODE: '' },
     }, (err, stdout) => resolve(err ? '' : String(stdout)));
     p.stdin.end(prompt);
   });
-  if (!title.trim()) return;
+  const title = parseReply(reply);
+  if (!title || title === title0) return;               // KEEP → nothing to post
   try {
     await fetch(`${HUB}/api/v2/titles`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
