@@ -60,7 +60,9 @@ test('V94: /api/v2/version changes when a served client file changes', async () 
     assert.match(a, /^\d+$/);
     const f = path.join(__dirname, '..', 'v2', 'app.css');
     const st = fs.statSync(f);
-    fs.utimesSync(f, st.atime, new Date(st.mtimeMs + 5000));
+    // Well into the future: any other client file may have been edited more
+    // recently than this one, and the stamp is the NEWEST mtime.
+    fs.utimesSync(f, st.atime, new Date(Date.now() + 600000));
     try {
       const b = (await json(fx.url + '/api/v2/version')).body.version;
       assert.notEqual(b, a);
