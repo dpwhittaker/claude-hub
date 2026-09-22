@@ -40,6 +40,12 @@ module.exports = [
     files: ['upload-dialog.js'],
     languageOptions: { globals: { ...globals.browser } },
   },
+  // The hub v2 shell: classic browser scripts sharing `window.Hub`, with
+  // lib/v2-layout.js served to them wrapped as `window.HubLayout`.
+  {
+    files: ['v2/**/*.js'],
+    languageOptions: { sourceType: 'script', globals: { ...globals.browser } },
+  },
   // The glasses relay hook + its installer are ESM scripts run by node.
   {
     files: ['services/**/*.mjs'],

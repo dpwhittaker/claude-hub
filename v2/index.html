@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>claude-hub</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#0d1320">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="/v2/app.css">
+</head>
+<body>
+  <!-- The workspace. #layout holds panel chrome (tab strips, gutters, drop
+       zones); #stage holds every tab's content, absolutely positioned over
+       its panel body, so iframes never move in the DOM (V86). -->
+  <header id="topbar">
+    <button id="menu-btn" class="icon-btn" title="Tabs" aria-label="Open tab menu">☰</button>
+    <button id="profile-chip" class="chip" title="Switch profile"><span class="dot"></span><span class="name">…</span></button>
+    <div id="topbar-title" class="title"></div>
+    <div class="spacer"></div>
+    <button id="new-tab-btn" class="icon-btn" title="New tab">+</button>
+  </header>
+  <main id="workspace">
+    <div id="layout"></div>
+    <div id="stage"></div>
+    <div id="drop-overlay" hidden></div>
+  </main>
+  <div id="sheet" class="sheet" hidden></div>
+  <div id="picker" class="picker" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="/v2/lib/v2-layout.js"></script>
+  <script src="/v2/tabs.js"></script>
+  <script src="/v2/tab-home.js"></script>
+  <script src="/v2/tab-file.js"></script>
+  <script src="/v2/app.js"></script>
+</body>
+</html>

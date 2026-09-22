@@ -1,0 +1,28 @@
+[Unit]
+Description=ttyd terminal for hub v2 sessions (browser → tmux attach → agent, id from the URL)
+Documentation=man:ttyd(1)
+After=network.target
+
+[Service]
+Type=simple
+# EDIT BEFORE INSTALLING: User= must match the account that owns the repo.
+User=david
+RuntimeDirectory=ttyd
+RuntimeDirectoryMode=0755
+# /run/ttyd is shared with every other ttyd unit — never let one stop wipe it.
+RuntimeDirectoryPreserve=yes
+WorkingDirectory=/home/david
+# HUB_STATE_DIR is where claude-hub writes session records (lib/v2-sessions.js).
+Environment=HUB_STATE_DIR=/home/david/.claude-hub
+# ttyd flags:
+#   -i /run/ttyd/hub.sock  unix socket; claude-hub proxies /term/hub/ to it
+#   -W                     writable
+#   -a                     --url-arg: ?arg=<id> in the page URL becomes $1 of the command
+#   -b /term/hub           base path so xterm assets load through the proxy
+ExecStart=/usr/bin/ttyd -i /run/ttyd/hub.sock -W -a -b /term/hub -t titleFixed=hub -t disableLeaveAlert=true /usr/local/bin/ttyd-attach-hub.sh
+Restart=always
+RestartSec=2
+LimitNOFILE=512
+
+[Install]
+WantedBy=multi-user.target

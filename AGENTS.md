@@ -249,6 +249,63 @@ git -C ~/projects/<parent> worktree list
 git -C ~/projects/<parent> worktree prune   # drop stale entries
 ```
 
+## Hub v2 (`/v2/`)
+
+The next UI, served beside everything above (nothing in v1 changed; the
+landing page links to it as **Hub v2**, and it will replace `/` once it has
+everything). It drops the *project* as the unit of organisation:
+
+- **Profiles** — `~/.claude-hub/profiles/<id>/profile.json` holds one
+  person's open tabs + layout (`rev`-checked on every save, so two devices
+  never silently clobber each other) and `CLAUDE.md` beside it is appended
+  to every Claude session that profile launches. Which profile a browser
+  uses is `localStorage['hub.profile']`; the server never picks. Made for
+  "her science teaching vs. my Bible study vs. my games".
+- **Sessions** — claude / codex / a plain shell in *any* folder under
+  `~/projects`. One record per session at `~/.claude-hub/sessions/<id>.json`,
+  one tmux session `hub-<id>`, and ONE ttyd unit for all of them:
+  `services/ttyd-hub.service` runs ttyd with `--url-arg`, so the tab loads
+  `/term/hub/?arg=<id>` and `services/ttyd-attach-hub.sh <id>` attaches.
+  Creating a session is a file write, not a `sudo systemctl enable`. The v1
+  `<project>__sN` tabs are listed beside them so nothing running is lost.
+- **Services** — discovered, not registered: every regular unit file in
+  `/etc/systemd/system` that runs as `david` or works under `$HOME`, plus
+  `vite@`/`jekyll@` instances and sentinel `extraUnits`, minus the ttyd
+  family. Start / stop / restart / logs, and `tailscale serve status` shown
+  as tailnet entries. `~/.claude-hub/services.json` adds a URL or title to a
+  unit, or opts a unit in by name.
+- **Files** — anywhere under `~/projects` (`lib/v2-paths.js` `resolveUnder`
+  is the whole security story). A file tab has Raw / View / Edit / Diff:
+  highlighted source, the rendered thing (markdown, image, pdf, the live
+  page for html behind a dev server or a `routes` rule), CodeMirror 6 from
+  esm.sh with `Ctrl+Space` completion through `claude -p` (Tab keeps, Esc
+  drops; textarea fallback if the CDN is unreachable), and a unified diff
+  against HEAD or any commit that touched the file. Saves carry the mtime
+  they loaded and get a 409 instead of clobbering an agent's write.
+- **Layout** — `lib/v2-layout.js` is a pure tree of proportional splits
+  and panels shared with the browser (`window.HubLayout`). Drag a tab to a
+  panel edge to split, to its centre to move, onto a strip to reorder, to
+  the workspace edge for a full-length panel; gutters resize. Contents live
+  in `#stage`, absolutely positioned over their panel body, so an iframe
+  never reloads when the layout changes. Width ≤ 75 % of height is *narrow*:
+  one tab at a time, panels become groups in the ☰ menu.
+
+Code: `lib/v2-routes.js` (router, one early hook in `server.js`),
+`lib/v2-{paths,fs,profiles,sessions,services,layout}.js`, client in `v2/`
+(classic scripts sharing `window.Hub`; `tabs.js` registers tab kinds,
+`tab-home.js` the launcher + file browser, `tab-file.js` the file modes,
+`app.js` the workspace). `HUB_STATE_DIR` overrides `~/.claude-hub`; the test
+fixture always points it at a scratch dir. Install the unit once:
+
+```bash
+sudo install -m 755 services/ttyd-attach-hub.sh /usr/local/bin/ttyd-attach-hub.sh
+sudo install -m 644 services/ttyd-hub.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now ttyd-hub.service
+```
+
+Still to come: the glasses (Omni) client on top of the same JSON API, and
+the `/v2/` → `/` swap.
+
 ## Where the code lives
 
 `server.js` is routing, request handling and disk access — everything that

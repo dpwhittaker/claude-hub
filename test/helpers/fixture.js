@@ -21,6 +21,10 @@ const path = require('path');
 async function startFixture(opts = {}) {
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-hub-test-'));
   process.env.PROJECTS_ROOT = projectsRoot;
+  // Hub v2 state (profiles, sessions) — a scratch dir too, so no test can
+  // ever write into the real ~/.claude-hub.
+  const hubStateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-hub-state-'));
+  process.env.HUB_STATE_DIR = hubStateDir;
   // Avoid clashing with the systemd unit on 8002.
   process.env.PROXY_PORT = '0';
 
@@ -38,11 +42,13 @@ async function startFixture(opts = {}) {
   return {
     url,
     projectsRoot,
+    hubStateDir,
     server,
     close: () =>
       new Promise((resolve) => {
         server.close(() => {
           fs.rmSync(projectsRoot, { recursive: true, force: true });
+          fs.rmSync(hubStateDir, { recursive: true, force: true });
           resolve();
         });
       }),

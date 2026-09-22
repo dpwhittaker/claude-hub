@@ -50,6 +50,8 @@ const { renderShellHtml } = require('./lib/pwa-shell');
 const termSessionsLib = require('./lib/term-sessions');
 const termRelayLib = require('./lib/term-relay');
 const scaffoldInstall = require('./lib/scaffold-install');
+const { makeV2Router } = require('./lib/v2-routes');
+const { HLJS_LANG } = require('./lib/lang-map');
 const crypto = require('node:crypto');
 
 const PORT = Number(process.env.PROXY_PORT) || 8002;
@@ -1636,18 +1638,7 @@ function isViewableProject(name) {
   }
 }
 
-// Languages keyed off file extension. highlight.js auto-detects what it doesn't
-// know, but giving it a hint produces faster, more accurate colouring.
-const HLJS_LANG = {
-  '.ts': 'typescript', '.tsx': 'typescript', '.js': 'javascript', '.jsx': 'javascript',
-  '.mjs': 'javascript', '.cjs': 'javascript', '.json': 'json', '.css': 'css',
-  '.html': 'xml', '.xml': 'xml', '.svg': 'xml', '.yaml': 'yaml', '.yml': 'yaml',
-  '.toml': 'ini', '.ini': 'ini', '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash',
-  '.py': 'python', '.rs': 'rust', '.go': 'go', '.java': 'java', '.kt': 'kotlin',
-  '.swift': 'swift', '.rb': 'ruby', '.sql': 'sql', '.dockerfile': 'dockerfile',
-  '.gradle': 'gradle', '.gitignore': 'plaintext', '.env': 'plaintext',
-  '.txt': 'plaintext', '.log': 'plaintext', '.conf': 'ini',
-};
+// Languages keyed off file extension — shared with the v2 file API (lib/lang-map.js).
 
 const RENDER_AS_TEXT_MAX_BYTES = 2 * 1024 * 1024; // 2 MB cap for code/text view
 const BINARY_EXTS = new Set([
@@ -2477,8 +2468,61 @@ function handleViewRequest(req, res, urlPath) {
   res.end(html);
 }
 
+// ---------- Hub v2 (/v2/ shell + /api/v2/*) ----------
+// State (profiles, sessions) lives OUTSIDE the projects tree so it is never a
+// file a tab could browse into or a repo could commit. Published to the
+// environment so ttyd-attach-hub.sh reads the same records.
+const HUB_STATE_DIR = process.env.HUB_STATE_DIR || path.join(os.homedir(), '.claude-hub');
+process.env.HUB_STATE_DIR = HUB_STATE_DIR;
+
+// The v1 develop tabs (`<project>__sN`, one ttyd unit each) listed beside the
+// v2 sessions so a v2 workspace can open every conversation already running.
+function listLegacySessions() {
+  const out = [];
+  let entries;
+  try { entries = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    if (!e.isDirectory() || !PROJECT_ID_RE.test(e.name) || e.name.startsWith('.')) continue;
+    const dir = path.join(PROJECTS_ROOT, e.name);
+    if (!fs.existsSync(path.join(dir, termSessionsLib.SESSIONS_FILE))) continue;
+    const map = termSessionsLib.readSessionsMap(dir);
+    for (const [id, entry] of Object.entries(map.sessions)) {
+      const key = termSessionsLib.joinTermKey(e.name, id);
+      out.push({
+        id: key, kind: 'legacy', cwd: e.name, agent: entry.agent, uuid: entry.uuid, profile: null,
+        title: entry.agent === 'claude' ? termSessionsLib.readSessionTitle(dir, entry.uuid) : null,
+        createdAt: null, termKey: key, termUrl: `/term/${key}/`,
+      });
+    }
+  }
+  return out;
+}
+
+async function tmuxListSessions() {
+  try {
+    const { stdout } = await execFileP('tmux', ['list-sessions', '-F', '#{session_name}'], { timeout: 3000 });
+    return stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  } catch { return []; }
+}
+
+const v2Router = makeV2Router({
+  projectsRoot: PROJECTS_ROOT, hubDir: HUB_STATE_DIR, sendJson, readJsonBody, execFileP, marked,
+  readProjectRoutes, readProjectProxyPrefix, listLegacySessions, tmuxListSessions, claudeBin: CLAUDE_BIN,
+});
+
 const server = http.createServer(async (req, res) => {
   const url = req.url || '/';
+
+  // Hub v2: the /v2/ shell and everything under /api/v2/. Handled first so
+  // nothing in the v1 dispatcher below needs to know it exists.
+  if (url === '/v2' || url.startsWith('/v2/') || url.startsWith('/v2?') || url.startsWith('/api/v2/')) {
+    try {
+      if (await v2Router.handle(req, res, url)) return;
+    } catch (e) {
+      if (!res.headersSent) sendJson(res, 500, { error: e.message });
+      return;
+    }
+  }
 
   // Legacy redirect: the raw-shell admin terminal was called `wsl` back when
   // this ran under WSL2. Keep old bookmarks working. 301 to the same subpath
