@@ -116,6 +116,16 @@ test('V90: digestTranscript keeps human/assistant text only, skips sidechains, t
   assert.doesNotMatch(prompt, /subagent noise/);
   // Empty transcript → nothing to title.
   assert.deepEqual(digestTranscript(''), { turns: [], title: null, assistantTurns: 0 });
+  // A user-chosen name is presented as such, to be kept verbatim.
+  const p2 = buildPrompt({ turns: d.turns, current: 'my-own-name', userNamed: true });
+  assert.match(p2, /chosen by the USER, keep it VERBATIM[^\n]*: my-own-name/);
+  assert.doesNotMatch(p2, /Current title: my-own-name/);
+});
+
+test('V90: the worker treats a /rename newer than the last auto title as user-named', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'session-title-hook.mjs'), 'utf8');
+  assert.match(src, /reg\.nameSource === 'user' && reg\.name && \(!current \|\| Number\(reg\.nameSince\) > Number\(current\.at\)\)/);
+  assert.match(src, /buildPrompt\(\{ turns: digest\.turns, current: title0, cwd, userNamed \}\)/);
 });
 
 

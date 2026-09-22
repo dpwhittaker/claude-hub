@@ -22,6 +22,7 @@ const require = createRequire(import.meta.url);
 const { digestTranscript, buildPrompt, TITLE_MODEL } = require('../lib/session-title.js');
 
 const HUB = process.env.CLAUDE_HUB_URL || 'http://127.0.0.1:8002';
+const REGISTRY = process.env.HUB_CLAUDE_SESSIONS_DIR || `${process.env.HOME}/.claude/sessions`;
 const CLAUDE_BIN = process.env.CLAUDE_BIN || `${process.env.HOME}/.local/bin/claude`;
 const MIN_GAP_MS = 20000;
 const SELF = fileURLToPath(import.meta.url);
@@ -50,6 +51,19 @@ const child = spawn(process.execPath, [SELF, '--work', data.transcript_path, dat
 child.unref();
 quit();
 
+function registryEntry(uuid) {
+  try {
+    for (const n of fs.readdirSync(REGISTRY)) {
+      if (!n.endsWith('.json')) continue;
+      try {
+        const o = JSON.parse(fs.readFileSync(`${REGISTRY}/${n}`, 'utf8'));
+        if (o && o.sessionId === uuid) return o;
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 async function work(transcriptPath, uuid, cwd) {
   let current = null;
   try {
@@ -74,7 +88,14 @@ async function work(transcriptPath, uuid, cwd) {
   } catch { return; }
   const digest = digestTranscript(jsonl);
   if (digest.assistantTurns === 0 || digest.turns.length === 0) return;
-  const prompt = buildPrompt({ turns: digest.turns, current: (current && current.title) || digest.title, cwd });
+  // A name the user typed with /rename (Claude's registry says so) is the
+  // current title when it is newer than our last auto title, and the model
+  // is told to keep it verbatim unless the work has clearly changed.
+  const reg = registryEntry(uuid);
+  let title0 = (current && current.title) || digest.title;
+  let userNamed = false;
+  if (reg && reg.nameSource === 'user' && reg.name && (!current || Number(reg.nameSince) > Number(current.at))) { title0 = reg.name; userNamed = true; }
+  const prompt = buildPrompt({ turns: digest.turns, current: title0, cwd, userNamed });
 
   const title = await new Promise((resolve) => {
     const p = execFile(CLAUDE_BIN, ['-p', '--model', TITLE_MODEL, '--output-format', 'text', '--no-session-persistence'], {
