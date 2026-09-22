@@ -53,6 +53,21 @@ test('v2 shell + layout lib are served; /v2 redirects to /v2/', async () => {
   } finally { await fx.close(); }
 });
 
+test('V94: /api/v2/version changes when a served client file changes', async () => {
+  const fx = await startFixture({ seed });
+  try {
+    const a = (await json(fx.url + '/api/v2/version')).body.version;
+    assert.match(a, /^\d+$/);
+    const f = path.join(__dirname, '..', 'v2', 'app.css');
+    const st = fs.statSync(f);
+    fs.utimesSync(f, st.atime, new Date(st.mtimeMs + 5000));
+    try {
+      const b = (await json(fx.url + '/api/v2/version')).body.version;
+      assert.notEqual(b, a);
+    } finally { fs.utimesSync(f, st.atime, st.mtime); }
+  } finally { await fx.close(); }
+});
+
 test('V82: profiles round-trip through the API with rev conflicts', async () => {
   const fx = await startFixture({ seed });
   try {

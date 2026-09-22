@@ -45,6 +45,7 @@
 
   // ---------- profile ----------
   async function boot() {
+    checkVersion();
     state.narrow = isNarrow();
     document.body.classList.toggle('narrow', state.narrow);
     installVvh();
@@ -59,7 +60,29 @@
     else if (forced) { toast('no profile "' + forced + '"', true); showPicker(profiles); }
     else if (saved && profiles.some((p) => p.id === saved)) await loadProfile(saved);
     else showPicker(profiles);
-    setInterval(() => { if (!document.hidden && state.profile && Hub.loadSessions) Hub.loadSessions().catch(() => {}); }, 20000);
+    // Titles/activity follow the sessions list: at load, every 20 s while
+    // visible, and the moment the page comes back into view.
+    const sync = () => { if (!document.hidden && state.profile && Hub.loadSessions) Hub.loadSessions().catch(() => {}); };
+    sync();
+    setInterval(sync, 20000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { sync(); checkVersion(); } });
+    setInterval(checkVersion, 60000);
+  }
+
+  // An open page keeps running the code it loaded; when the hub's client
+  // files change, reload — unless an editor holds unsaved work, in which
+  // case say so and try again later (V94).
+  let loadedVersion = null;
+  async function checkVersion() {
+    if (document.hidden) return;
+    let v;
+    try { v = (await api('/api/v2/version')).version; } catch { return; }
+    if (loadedVersion === null) { loadedVersion = v; return; }
+    if (v === loadedVersion) return;
+    if ([...mounted.values()].some((m) => m.dirty)) { toast('hub updated — reload when your edits are saved'); return; }
+    clearTimeout(saveTimer);
+    await flush();
+    location.reload();
   }
 
   async function loadProfile(id, { persist = true } = {}) {

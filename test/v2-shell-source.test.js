@@ -42,3 +42,12 @@ test('V89: one SVG icon vocabulary — fork for repos, upload tray, >_ terminal;
   assert.match(home, /liveHere\(e\.path\)/, 'folders with a running session are marked live');
   assert.match(home, /Already open in this folder/, 'terminal dialog lists what already runs here');
 });
+
+test('V94: the page syncs session titles at load and reloads itself when the client files change', () => {
+  const app = read('app.js');
+  assert.match(app, /sync\(\);\n\s+setInterval\(sync, 20000\)/, 'immediate sync then a 20 s poll');
+  assert.match(app, /visibilitychange/, 'resync when the page comes back');
+  assert.match(app, /api\('\/api\/v2\/version'\)/);
+  assert.match(app, /some\(\(m\) => m\.dirty\)\) \{ toast\('hub updated/, 'never reloads over unsaved edits');
+  assert.match(app, /await flush\(\);\n\s+location\.reload\(\)/, 'saves the layout before reloading');
+});
