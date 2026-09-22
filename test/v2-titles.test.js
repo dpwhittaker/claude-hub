@@ -54,11 +54,13 @@ test('V90: readTranscriptTitle — custom-title.json first, then a custom-title 
   assert.ok(t.at > 0, 'the json file carries a time (its mtime)');
 });
 
-test('V92: the registry parser keeps live interactive sessions keyed by tmux session; newest wins a pane; statuses normalise', () => {
+test('V92: the registry parser keeps live sessions keyed by tmux session; the pane\'s own interactive cli process wins, not a nested run; statuses normalise', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'v2reg-'));
-  const write = (pid, o) => fs.writeFileSync(path.join(dir, pid + '.json'), JSON.stringify({ pid, sessionId: U1, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'proj-1a', nameSource: 'derived', status: 'idle', updatedAt: 10, ...o }));
-  write(11, { status: 'shell', updatedAt: 5 });
-  write(12, { sessionId: '22222222-2222-3333-4444-555555555555', status: 'busy', name: 'Real Name', nameSource: 'user', nameSince: 7, updatedAt: 20 });
+  const write = (pid, o) => fs.writeFileSync(path.join(dir, pid + '.json'), JSON.stringify({ pid, sessionId: U1, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'proj-1a', nameSource: 'derived', status: 'idle', kind: 'interactive', entrypoint: 'cli', startedAt: 100, updatedAt: 10, ...o }));
+  // The pane's own claude: started first, currently running a shell command.
+  write(11, { status: 'shell', startedAt: 100, updatedAt: 5, name: 'Real Name', nameSource: 'user', nameSince: 7 });
+  // A `claude -p` the session's harness spawned seconds ago (B31): newer, busier, and NOT the tab.
+  write(12, { sessionId: '22222222-2222-3333-4444-555555555555', status: 'busy', entrypoint: 'sdk-cli', startedAt: 900, updatedAt: 999 });
   write(13, { tmux: '', status: 'waiting' });                 // no tmux → not a hub tab
   write(14, { tmux: 'other__s2:@2.%2', status: 'waiting' });
   fs.writeFileSync(path.join(dir, '15.json'), 'not json');
@@ -66,12 +68,17 @@ test('V92: the registry parser keeps live interactive sessions keyed by tmux ses
   const live = readLiveSessions({ dir, isAlive: (pid) => pid !== 14 });
   assert.deepEqual([...live.keys()], ['proj__s1'], 'dead pids and pane-less entries are dropped');
   const e = live.get('proj__s1');
-  assert.equal(e.pid, 12, 'the most recently updated claimant of the pane wins');
-  assert.equal(e.sessionId, '22222222-2222-3333-4444-555555555555');
-  assert.equal(e.status, 'busy');
+  assert.equal(e.pid, 11, 'the pane\'s own interactive cli process wins over the nested sdk-cli run');
+  assert.equal(e.sessionId, U1);
+  assert.equal(e.status, 'idle', 'shell reads idle');
   assert.equal(e.name, 'Real Name');
   assert.equal(e.nameSource, 'user');
   assert.equal(e.nameSince, 7);
+  // Two interactive cli claimants (a user ran `claude` inside the pane's shell): the earlier one is the tab.
+  write(12, { entrypoint: 'cli', startedAt: 900, updatedAt: 999, status: 'busy' });
+  assert.equal(readLiveSessions({ dir, isAlive: () => true }).get('proj__s1').pid, 11);
+  // …unless the earlier one is gone (a resume started a fresh process).
+  assert.equal(readLiveSessions({ dir, isAlive: (pid) => pid !== 11 }).get('proj__s1').pid, 12);
   assert.equal(parseEntry(JSON.stringify({ pid: 1, sessionId: 'a', status: 'shell', nameSource: 'weird' })).status, 'idle');
   assert.equal(parseEntry(JSON.stringify({ pid: 1, sessionId: 'a', nameSource: 'weird' })).nameSource, 'derived');
   assert.equal(parseEntry('{}'), null);
