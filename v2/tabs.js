@@ -34,6 +34,44 @@
     return parent;
   };
 
+  // Inline SVG icons (24-box, stroked, currentColor) so the toolbar, rows and
+  // tab strips share one vocabulary instead of whatever glyphs a font has.
+  const ICONS = {
+    folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+    file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+    fork: '<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/>',
+    terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
+    refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+    popout: '<path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/><path d="m21 3-9 9"/><path d="M15 3h6v6"/>',
+    home: '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+    service: '<rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>',
+    logs: '<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="14" y1="18" y2="18"/>',
+    pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+    x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+    stop: '<rect width="14" height="14" x="5" y="5" rx="2"/>',
+  };
+  Hub.ICONS = ICONS;
+  Hub.icon = function icon(name, cls) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('class', 'ic' + (cls ? ' ' + cls : ''));
+    svg.setAttribute('aria-hidden', 'true');
+    svg.innerHTML = ICONS[name] || '';
+    return svg;
+  };
+  // "<icon> +" — the new-thing buttons all read the same way.
+  Hub.iconPlus = function iconPlus(name) {
+    return [Hub.icon(name), Hub.el('span', { class: 'plus' }, '+')];
+  };
+
   Hub.api = async function api(path, { method = 'GET', body, raw = false } = {}) {
     const init = { method, headers: {} };
     if (body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
@@ -129,7 +167,7 @@
 
   // ---- term: a live agent session ----
   Hub.registerKind('term', {
-    icon: '▤',
+    icon: 'terminal',
     title: (t) => t.title || (t.cwd ? Hub.basename(t.cwd) : '~/projects'),
     mount(tab, el) {
       const f = iframe(tab.termUrl);
@@ -141,7 +179,7 @@
   // ---- service / url: a live site in an iframe with a thin bar ----
   function urlKind(kind) {
     return {
-      icon: kind === 'service' ? '◉' : '⧉',
+      icon: kind === 'service' ? 'service' : 'globe',
       title: (t) => t.title || t.unit || t.url,
       mount(tab, el) {
         const f = iframe(tab.url);

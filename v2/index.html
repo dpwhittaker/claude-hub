@@ -17,12 +17,13 @@
   <!-- The workspace. #layout holds panel chrome (tab strips, gutters, drop
        zones); #stage holds every tab's content, absolutely positioned over
        its panel body, so iframes never move in the DOM (V86). -->
+  <!-- Narrow mode only: the menu, the profile chip and the active tab's
+       title. In wide mode the chip sits at the start of the top-left tab
+       strip instead, so no line is spent above the panels. -->
   <header id="topbar">
     <button id="menu-btn" class="icon-btn" title="Tabs" aria-label="Open tab menu">☰</button>
-    <button id="profile-chip" class="chip" title="Switch profile"><span class="dot"></span><span class="name">…</span></button>
+    <span id="topbar-chip"></span>
     <div id="topbar-title" class="title"></div>
-    <div class="spacer"></div>
-    <button id="new-tab-btn" class="icon-btn" title="New tab">+</button>
   </header>
   <main id="workspace">
     <div id="layout"></div>

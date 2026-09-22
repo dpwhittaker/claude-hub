@@ -32,7 +32,10 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monosp
 .chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip .dot, .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--profile); flex: 0 0 auto; }
 .chip:hover { border-color: var(--accent); }
-body:not(.narrow) #menu-btn { display: none; }
+body:not(.narrow) #topbar { display: none; }
+#topbar-title .ico svg { width: 14px; height: 14px; vertical-align: -2px; }
+svg.ic { width: 16px; height: 16px; flex: 0 0 auto; }
+.plus { font-weight: 700; line-height: 1; margin-left: 1px; }
 
 /* ---------- workspace ---------- */
 #workspace { position: relative; flex: 1 1 auto; min-height: 0; }
@@ -50,27 +53,31 @@ body:not(.narrow) #menu-btn { display: none; }
 .split.dir-col > .gutter::after { height: 2px; }
 .gutter:hover::after, .gutter.active::after { background: var(--accent); }
 .panel { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; background: var(--bg-0); }
-.panel.focused .tabstrip { box-shadow: inset 0 2px 0 var(--profile); }
+/* The divider runs under the inactive tabs (an inset shadow on the strip);
+   the active tab paints over it in the content colour and carries the accent
+   on TOP, so it reads as attached to its content rather than fenced off. */
 .tabstrip { flex: 0 0 var(--tabstrip-h); display: flex; align-items: stretch; background: var(--bg-1);
-  border-bottom: 1px solid var(--edge); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; user-select: none; }
+  box-shadow: inset 0 -1px 0 var(--edge); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; user-select: none; }
 .tabstrip::-webkit-scrollbar { display: none; }
+.strip-chip { display: inline-flex; align-items: center; padding: 0 6px 0 4px; position: sticky; left: 0; z-index: 2;
+  background: var(--bg-1); box-shadow: inset 0 -1px 0 var(--edge); border-right: 1px solid var(--edge); }
+.strip-chip .chip { padding: 1px 8px 1px 5px; font-size: 0.74rem; max-width: 160px; }
 .tab { display: inline-flex; align-items: center; gap: 6px; padding: 0 6px 0 10px; font-size: 0.78rem; color: var(--muted);
   white-space: nowrap; border-right: 1px solid var(--edge); cursor: pointer; max-width: 220px; flex: 0 0 auto; position: relative;
   touch-action: pan-x; }
-.tab .ico { opacity: 0.8; font-size: 0.75rem; }
+.tab.pinned { padding-right: 12px; }
+.tab .ico { opacity: 0.8; font-size: 0.75rem; display: inline-flex; }
+.tab .ico svg { width: 13px; height: 13px; }
 .tab .label { overflow: hidden; text-overflow: ellipsis; }
 .tab .close { border: none; background: transparent; color: inherit; font-size: 0.95rem; line-height: 1; padding: 2px 4px;
   border-radius: 4px; cursor: pointer; opacity: 0.55; }
 .tab .close:hover { opacity: 1; background: rgba(252,165,165,0.15); color: var(--bad); }
 .tab:hover { background: var(--bg-2); color: var(--fg); }
-.tab.active { background: var(--bg-0); color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
+.tab.active { background: var(--bg-0); color: var(--fg); box-shadow: inset 0 2px 0 var(--accent); z-index: 1; }
 .tab.dirty .label::after { content: ' •'; color: var(--warn); }
 .tab.ghost { position: fixed; z-index: 50; pointer-events: none; opacity: 0.85; background: var(--bg-3); border: 1px solid var(--accent);
   border-radius: 6px; height: 26px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
 .tab.dragging { opacity: 0.35; }
-.tab-add { border: none; background: transparent; color: var(--muted); padding: 0 10px; cursor: pointer; font-size: 1rem; flex: 0 0 auto; }
-.tab-add:hover { color: var(--accent); }
-.strip-spacer { flex: 1 1 auto; min-width: 24px; }
 .drop-marker { position: absolute; top: 4px; bottom: 4px; width: 2px; background: var(--accent); pointer-events: none; z-index: 4; }
 .panel-body { flex: 1 1 auto; min-height: 0; position: relative; }
 .panel-body.empty::before { content: 'Empty panel — drop a tab here or press +'; position: absolute; inset: 0; display: grid; place-items: center;
@@ -130,8 +137,12 @@ select.sel:focus, input.inp:focus, textarea.inp:focus { outline: none; border-co
 .row .main .s { color: var(--muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .acts { display: none; gap: 2px; flex: 0 0 auto; }
 .row:hover .acts, .row:focus-within .acts { display: inline-flex; }
-.row .acts button { border: none; background: transparent; color: var(--muted); border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 0.8rem; }
+.row .acts button { border: none; background: transparent; color: var(--muted); border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 0.8rem;
+  display: inline-flex; align-items: center; }
 .row .acts button:hover { color: var(--accent); background: rgba(125,211,252,0.12); }
+.row .acts button svg { width: 14px; height: 14px; }
+.row > .hint { font-size: 0.72rem; color: var(--muted); }
+.here .row { cursor: pointer; }
 .badge { display: inline-block; font-size: 0.6rem; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px; border-radius: 999px;
   border: 1px solid var(--edge); color: var(--muted); flex: 0 0 auto; }
 .badge.claude { color: var(--accent); border-color: rgba(125,211,252,0.4); }
@@ -150,13 +161,19 @@ select.sel:focus, input.inp:focus, textarea.inp:focus { outline: none; border-co
 .crumbs .sep { opacity: 0.5; }
 .crumbs .spacer { flex: 1; }
 .crumbs .tools { display: inline-flex; gap: 2px; }
-.crumbs .tools button { font-size: 0.85rem; }
+.crumbs .tools button { font-size: 0.85rem; display: inline-flex; align-items: center; gap: 1px; padding: 3px 6px; }
+.crumbs .tools button svg { width: 15px; height: 15px; }
 .entries { list-style: none; margin: 0; padding: 4px 4px 24px; overflow: auto; flex: 1 1 auto; min-height: 0; }
 .entry { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 0.84rem; min-height: 30px; }
 .entry:hover { background: var(--bg-2); }
 .entry.dim { opacity: 0.5; }
-.entry .ico { width: 16px; text-align: center; color: var(--accent); flex: 0 0 auto; font-size: 0.8rem; }
+/* Folders blue, repos wear the fork, green when a terminal is open there;
+   files stay muted. */
+.entry .ico { width: 16px; text-align: center; color: var(--accent); flex: 0 0 auto; font-size: 0.8rem; display: inline-flex; justify-content: center; }
+.entry .ico svg { width: 15px; height: 15px; }
 .entry.file .ico { color: var(--muted); }
+.entry.dir.live .ico { color: var(--good); }
+.entry.up .ico { color: var(--muted); }
 .entry .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entry .meta { color: var(--muted); font-size: 0.7rem; flex: 0 0 auto; }
 .entry.git-M .nm, .entry.git-MM .nm, .entry.git-AM .nm { color: #fde68a; }
@@ -164,8 +181,13 @@ select.sel:focus, input.inp:focus, textarea.inp:focus { outline: none; border-co
 .entry.git-dirty .nm { color: #86efac; }
 .entry .acts { display: none; gap: 2px; }
 .entry:hover .acts { display: inline-flex; }
-.entry .acts button { border: none; background: transparent; color: var(--muted); border-radius: 4px; padding: 1px 5px; cursor: pointer; font-size: 0.72rem; }
+.entry .acts button { border: none; background: transparent; color: var(--muted); border-radius: 4px; padding: 1px 5px; cursor: pointer; font-size: 0.72rem;
+  display: inline-flex; align-items: center; gap: 1px; }
 .entry .acts button:hover { color: var(--accent); background: rgba(125,211,252,0.12); }
+.entry .acts button svg { width: 13px; height: 13px; }
+.btn svg { width: 13px; height: 13px; vertical-align: -2px; }
+.menu-tab .ico { display: inline-flex; }
+.menu-tab .ico svg { width: 15px; height: 15px; }
 
 /* ---------- file tab ---------- */
 .filetab { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }

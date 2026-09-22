@@ -6,8 +6,29 @@
   const Hub = window.Hub;
   const { el, api, toast } = Hub;
 
+  // ---------- sessions cache ----------
+  // One fetch shared by the browser (folder colouring) and the new-session
+  // dialog (what already runs here). `byCwd` maps a folder path to its
+  // sessions; running ones colour the folder green.
+  Hub.sessions = { list: [], byCwd: new Map(), at: 0 };
+  Hub.loadSessions = async function loadSessions(maxAgeMs = 0) {
+    if (maxAgeMs && Date.now() - Hub.sessions.at < maxAgeMs) return Hub.sessions;
+    const { sessions } = await api('/api/v2/sessions');
+    const byCwd = new Map();
+    for (const s of sessions) {
+      const k = s.cwd || '';
+      if (!byCwd.has(k)) byCwd.set(k, []);
+      byCwd.get(k).push(s);
+    }
+    Hub.sessions = { list: sessions, byCwd, at: Date.now() };
+    return Hub.sessions;
+  };
+  Hub.openSessionTab = function openSessionTab(s) {
+    Hub.openTab({ kind: 'term', sessionId: s.kind === 'hub' ? s.id : null, termUrl: s.termUrl, termKey: s.termKey, cwd: s.cwd, agent: s.agent, title: s.title || null });
+  };
+
   // ---------- file browser ----------
-  // opts: { path, onOpenFile(entry), onOpenFolderTab(path), onPathChange(path) }
+  // opts: { path, onOpenFile(entry, mode), onPathChange(path) }
   Hub.makeBrowser = function makeBrowser(opts) {
     let cur = opts.path || '';
     const root = el('div', { class: 'browser' });
@@ -22,7 +43,10 @@
       list.innerHTML = '';
       list.append(el('li', { class: 'empty-note' }, 'loading…'));
       try {
-        lastData = await api('/api/v2/fs/list?path=' + encodeURIComponent(cur));
+        [lastData] = await Promise.all([
+          api('/api/v2/fs/list?path=' + encodeURIComponent(cur)),
+          Hub.loadSessions(3000).catch(() => null),
+        ]);
         render();
       } catch (e) {
         list.innerHTML = '';
@@ -43,15 +67,19 @@
       });
       crumbs.append(el('span', { class: 'spacer' }));
       const tools = el('span', { class: 'tools' },
-        el('button', { title: 'New folder', onclick: newFolder }, '📁+'),
-        el('button', { title: 'New file (opens in the editor)', onclick: newFile }, '📄+'),
-        el('button', { title: 'Upload files here', onclick: upload }, '⬆'),
-        cur === '' ? el('button', { title: 'New repo from a template, clone, or onboard a folder', onclick: () => Hub.newRepoDialog(() => load(cur)) }, '✚ repo') : null,
-        el('button', { title: 'Open a Claude / Codex / shell session here', onclick: () => Hub.newSessionDialog({ cwd: cur }) }, '▤+'),
-        opts.onOpenFolderTab ? el('button', { title: 'Open this folder as its own tab', onclick: () => opts.onOpenFolderTab(cur) }, '⧉') : null,
-        el('button', { title: 'Refresh', onclick: () => load(cur) }, '⟳'),
+        el('button', { title: 'New folder', onclick: newFolder }, Hub.iconPlus('folder')),
+        el('button', { title: 'New file (opens in the editor)', onclick: newFile }, Hub.iconPlus('file')),
+        el('button', { title: 'Upload files here', onclick: upload }, Hub.icon('upload')),
+        cur === '' ? el('button', { title: 'New repo from a template, clone, or onboard a folder', onclick: () => Hub.newRepoDialog(() => load(cur)) }, Hub.iconPlus('fork')) : null,
+        el('button', { title: 'Open a terminal here (Claude, Codex or a shell)', onclick: () => Hub.newSessionDialog({ cwd: cur }) }, Hub.iconPlus('terminal')),
+        el('button', { title: 'Refresh', onclick: () => load(cur) }, Hub.icon('refresh')),
       );
       crumbs.append(tools);
+    }
+
+    function liveHere(p) {
+      const list = Hub.sessions.byCwd.get(p) || [];
+      return list.some((s) => s.running);
     }
 
     function render() {
@@ -59,21 +87,20 @@
       list.innerHTML = '';
       if (cur) {
         const up = cur.includes('/') ? cur.slice(0, cur.lastIndexOf('/')) : '';
-        list.append(el('li', { class: 'entry dir', onclick: () => load(up) }, el('span', { class: 'ico' }, '↑'), el('span', { class: 'nm' }, '..')));
+        list.append(el('li', { class: 'entry dir up', onclick: () => load(up) }, el('span', { class: 'ico' }, '↑'), el('span', { class: 'nm' }, '..')));
       }
       if (!lastData.entries.length) list.append(el('li', { class: 'empty-note' }, 'empty folder'));
       for (const e of lastData.entries) {
-        const cls = ['entry', e.kind, e.dim ? 'dim' : '', e.git ? 'git-' + e.git : ''].join(' ');
-        const li = el('li', { class: cls, title: e.path });
+        const live = e.kind === 'dir' && liveHere(e.path);
+        const cls = ['entry', e.kind, e.dim ? 'dim' : '', e.git ? 'git-' + e.git : '', e.repo ? 'repo' : '', live ? 'live' : ''].join(' ');
+        const li = el('li', { class: cls, title: e.path + (live ? ' — a terminal is open here' : '') });
         if (e.kind === 'dir') {
-          Hub.append(li, el('span', { class: 'ico' }, e.repo ? '◆' : '▶'), el('span', { class: 'nm' }, e.name),
-            e.project ? el('span', { class: 'badge' }, 'project') : null,
+          Hub.append(li, el('span', { class: 'ico' }, Hub.icon(e.repo ? 'fork' : 'folder')), el('span', { class: 'nm' }, e.name),
             el('span', { class: 'acts' },
-              el('button', { title: 'Session here', onclick: (ev) => { ev.stopPropagation(); Hub.newSessionDialog({ cwd: e.path }); } }, '▤+'),
-              el('button', { title: 'Open as tab', onclick: (ev) => { ev.stopPropagation(); Hub.openTab({ kind: 'browse', path: e.path }); } }, '⧉')));
+              el('button', { title: 'Terminal here', onclick: (ev) => { ev.stopPropagation(); Hub.newSessionDialog({ cwd: e.path }); } }, Hub.iconPlus('terminal'))));
           li.onclick = () => load(e.path);
         } else {
-          Hub.append(li, el('span', { class: 'ico' }, '◈'), el('span', { class: 'nm' }, e.name),
+          Hub.append(li, el('span', { class: 'ico' }, Hub.icon('file')), el('span', { class: 'nm' }, e.name),
             el('span', { class: 'meta' }, Hub.fmtSize(e.size)),
             el('span', { class: 'acts' },
               ...e.modes.filter((m) => m !== e.defaultMode).map((m) => el('button', { title: m, onclick: (ev) => { ev.stopPropagation(); open(e, m); } }, m))));
@@ -129,7 +156,25 @@
   // ---------- dialogs ----------
   Hub.newSessionDialog = function newSessionDialog({ cwd = '' } = {}) {
     Hub.sheet((card, close) => {
+      const here = el('div', { class: 'here' });
       const cwdInp = el('input', { class: 'inp', type: 'text', value: cwd, placeholder: '(root of ~/projects)' });
+      function renderHere() {
+        here.innerHTML = '';
+        const list = (Hub.sessions.byCwd.get(cwdInp.value.trim()) || []).slice().sort((a, b) => (b.running - a.running));
+        if (!list.length) return;
+        here.append(el('h4', null, 'Already open in this folder'));
+        for (const s of list) {
+          here.append(el('div', { class: 'row', onclick: () => { close(); Hub.openSessionTab(s); } },
+            el('span', { class: 'dot' + (s.running ? ' on' : '') }),
+            el('span', { class: 'badge ' + s.agent }, s.agent),
+            el('span', { class: 'main' }, el('span', { class: 't' }, s.title || (s.cwd ? Hub.basename(s.cwd) : '~/projects')),
+              el('span', { class: 's' }, (s.running ? 'running' : 'stopped') + (s.kind === 'legacy' ? ' · v1 tab' : ''))),
+            el('span', { class: 'hint' }, 'open →')));
+        }
+        here.append(el('h4', null, 'Or start a new one'));
+      }
+      Hub.loadSessions(3000).then(renderHere).catch(() => {});
+      cwdInp.addEventListener('input', renderHere);
       const promptInp = el('textarea', { class: 'inp', rows: 3, placeholder: 'optional — typed into the session once it starts' });
       const err = el('div', { class: 'err' });
       let agent = 'claude';
@@ -140,11 +185,13 @@
         try {
           const s = await api('/api/v2/sessions', { method: 'POST', body: { cwd: cwdInp.value.trim(), agent, profile: Hub.state.profile.id, prompt: promptInp.value || undefined } });
           close();
-          Hub.openTab({ kind: 'term', sessionId: s.id, termUrl: s.termUrl, termKey: s.termKey, cwd: s.cwd, agent: s.agent, title: null });
+          Hub.openSessionTab(s);
+          Hub.sessions.at = 0;
         } catch (e) { err.textContent = e.message; go.disabled = false; }
       } }, 'Launch');
       card.append(
-        el('h2', null, 'New session'),
+        el('h2', null, 'Terminal in ' + (cwd ? '~/projects/' + cwd : '~/projects')),
+        here,
         el('label', { class: 'field' }, el('span', null, 'Folder (under ~/projects)'), cwdInp),
         el('label', { class: 'field' }, el('span', null, 'Agent'), radios),
         el('label', { class: 'field' }, el('span', null, 'First prompt'), promptInp),
@@ -237,7 +284,7 @@
 
   // ---------- home tab ----------
   Hub.registerKind('home', {
-    icon: '⌂',
+    icon: 'home',
     title: () => 'Home',
     mount(tab, root, ctx) {
       const sessionsUl = el('ul', { class: 'rows' });
@@ -246,15 +293,14 @@
       const browser = Hub.makeBrowser({
         path: tab.path || '',
         onPathChange: (p) => ctx.update({ path: p }, { silent: true }),
-        onOpenFolderTab: (p) => Hub.openTab({ kind: 'browse', path: p }),
       });
       const home = el('div', { class: 'home' },
         el('div', { class: 'launch' },
           el('div', { class: 'col' },
-            el('h3', null, 'Sessions', el('span', { class: 'spacer' }), el('button', { class: 'btn', onclick: () => Hub.newSessionDialog({ cwd: browser.path }) }, '+ New')),
+            el('h3', null, 'Sessions', el('span', { class: 'spacer' }), el('button', { class: 'btn', onclick: () => Hub.newSessionDialog({ cwd: browser.path }) }, Hub.iconPlus('terminal'), ' New')),
             sessionsUl),
           el('div', { class: 'col' },
-            el('h3', null, 'Services', el('span', { class: 'spacer' }), el('button', { class: 'btn muted', onclick: () => refresh() }, '⟳')),
+            el('h3', null, 'Services', el('span', { class: 'spacer' }), el('button', { class: 'btn muted', onclick: () => refresh() }, Hub.icon('refresh'))),
             servicesUl,
             el('h3', { style: { marginTop: '14px' } }, 'Tailnet'),
             tailnetUl)),
@@ -269,9 +315,9 @@
           el('span', { class: 'badge ' + s.agent }, s.agent),
           el('span', { class: 'main' }, el('span', { class: 't' }, title), el('span', { class: 's' }, sub + (s.kind === 'legacy' ? ' · v1 tab' : ''))),
           el('span', { class: 'acts' },
-            el('button', { title: 'Rename', onclick: async (ev) => { ev.stopPropagation(); if (s.kind !== 'hub') { toast('v1 tabs are named by Claude', true); return; } const t = await Hub.ask({ title: 'Session title', value: s.title || '' }); if (t === null) return; try { await api('/api/v2/sessions/' + s.id, { method: 'PATCH', body: { title: t || null } }); refresh(); } catch (e) { toast(e.message, true); } } }, '✎'),
-            el('button', { title: s.kind === 'hub' ? 'End this session (kills the tmux session)' : 'v1 tabs are closed from the old Develop pane', onclick: async (ev) => { ev.stopPropagation(); if (s.kind !== 'hub') return; if (!(await Hub.confirm('End session?', 'The tmux session and its agent are killed. A Claude conversation can be resumed later by its id.', 'End', true))) return; try { await api('/api/v2/sessions/' + s.id, { method: 'DELETE' }); Hub.closeTabsWhere((t) => t.kind === 'term' && t.termKey === s.termKey); refresh(); } catch (e) { toast(e.message, true); } } }, '✕')));
-        row.onclick = () => Hub.openTab({ kind: 'term', sessionId: s.kind === 'hub' ? s.id : null, termUrl: s.termUrl, termKey: s.termKey, cwd: s.cwd, agent: s.agent, title: s.title || null });
+            el('button', { title: 'Rename', onclick: async (ev) => { ev.stopPropagation(); if (s.kind !== 'hub') { toast('v1 tabs are named by Claude', true); return; } const t = await Hub.ask({ title: 'Session title', value: s.title || '' }); if (t === null) return; try { await api('/api/v2/sessions/' + s.id, { method: 'PATCH', body: { title: t || null } }); refresh(); } catch (e) { toast(e.message, true); } } }, Hub.icon('pencil')),
+            el('button', { title: s.kind === 'hub' ? 'End this session (kills the tmux session)' : 'v1 tabs are closed from the old Develop pane', onclick: async (ev) => { ev.stopPropagation(); if (s.kind !== 'hub') return; if (!(await Hub.confirm('End session?', 'The tmux session and its agent are killed. A Claude conversation can be resumed later by its id.', 'End', true))) return; try { await api('/api/v2/sessions/' + s.id, { method: 'DELETE' }); Hub.closeTabsWhere((t) => t.kind === 'term' && t.termKey === s.termKey); Hub.sessions.at = 0; refresh(); } catch (e) { toast(e.message, true); } } }, Hub.icon('x'))));
+        row.onclick = () => Hub.openSessionTab(s);
         return row;
       }
 
@@ -280,9 +326,9 @@
           el('span', { class: 'dot' + (s.active === 'active' ? ' on' : s.active === 'failed' ? ' bad' : '') }),
           el('span', { class: 'main' }, el('span', { class: 't' }, s.title), el('span', { class: 's' }, (s.sub || s.active) + (s.project ? ' · ' + s.project : '') + (s.url ? ' · ' + s.url : ''))),
           el('span', { class: 'acts' },
-            el('button', { title: 'Logs', onclick: (ev) => { ev.stopPropagation(); Hub.showLogs(s.unit); } }, '≡'),
-            el('button', { title: 'Restart', onclick: (ev) => { ev.stopPropagation(); act(s.unit, 'restart'); } }, '↻'),
-            el('button', { title: s.active === 'active' ? 'Stop' : 'Start', onclick: (ev) => { ev.stopPropagation(); act(s.unit, s.active === 'active' ? 'stop' : 'start'); } }, s.active === 'active' ? '■' : '▶')));
+            el('button', { title: 'Logs', onclick: (ev) => { ev.stopPropagation(); Hub.showLogs(s.unit); } }, Hub.icon('logs')),
+            el('button', { title: 'Restart', onclick: (ev) => { ev.stopPropagation(); act(s.unit, 'restart'); } }, Hub.icon('refresh')),
+            el('button', { title: s.active === 'active' ? 'Stop' : 'Start', onclick: (ev) => { ev.stopPropagation(); act(s.unit, s.active === 'active' ? 'stop' : 'start'); } }, Hub.icon(s.active === 'active' ? 'stop' : 'play'))));
         row.onclick = () => { if (s.url) Hub.openTab({ kind: 'service', unit: s.unit, url: s.url, title: s.title, active: s.active }); else Hub.showLogs(s.unit); };
         return row;
       }
@@ -296,9 +342,9 @@
       async function refresh() {
         if (busy) return; busy = true;
         try {
-          const [ss, sv] = await Promise.all([api('/api/v2/sessions'), api('/api/v2/services')]);
+          const [ss, sv] = await Promise.all([Hub.loadSessions(), api('/api/v2/services')]);
           sessionsUl.innerHTML = '';
-          const list = ss.sessions.slice().sort((a, b) => (b.running - a.running) || (a.cwd || '').localeCompare(b.cwd || ''));
+          const list = ss.list.slice().sort((a, b) => (b.running - a.running) || (a.cwd || '').localeCompare(b.cwd || ''));
           if (!list.length) sessionsUl.append(el('li', { class: 'empty-note' }, 'no sessions yet — press + New'));
           for (const s of list) sessionsUl.append(sessionRow(s));
           servicesUl.innerHTML = '';
@@ -315,13 +361,14 @@
       }
       refresh();
       let timer = setInterval(() => { if (root.classList.contains('shown')) refresh(); }, 15000);
-      return { refresh, onShow: refresh, destroy: () => clearInterval(timer) };
+      const onShow = () => { refresh(); browser.load(browser.path); };
+      return { refresh, onShow, destroy: () => clearInterval(timer) };
     },
   });
 
   // ---------- browse tab: just the browser ----------
   Hub.registerKind('browse', {
-    icon: '▶',
+    icon: 'folder',
     title: (t) => (t.path ? Hub.basename(t.path) : '~/projects') + '/',
     mount(tab, root, ctx) {
       const browser = Hub.makeBrowser({ path: tab.path || '', onPathChange: (p) => ctx.update({ path: p }) });

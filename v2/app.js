@@ -22,7 +22,9 @@
   const stage = document.getElementById('stage');
   const overlay = document.getElementById('drop-overlay');
   const topTitle = document.getElementById('topbar-title');
-  const DEDUPE_KEY = { file: (t) => t.path, browse: (t) => t.path, term: (t) => t.termKey, service: (t) => t.unit, url: (t) => t.url };
+  // Home is a singleton: it is where every other tab gets opened from, so it
+  // can neither be closed nor duplicated (V89). The rest dedupe on their target.
+  const DEDUPE_KEY = { home: () => 'home', file: (t) => t.path, browse: (t) => t.path, term: (t) => t.termKey, service: (t) => t.unit, url: (t) => t.url };
 
   // ---------- viewport ----------
   function installVvh() {
@@ -64,8 +66,6 @@
     document.documentElement.style.setProperty('--profile', p.color);
     document.title = p.name + ' · claude-hub';
     localStorage.setItem('hub.profile', p.id);
-    const chip = document.getElementById('profile-chip');
-    chip.querySelector('.name').textContent = p.name;
     document.getElementById('picker').hidden = true;
     ensureNotEmpty();
     renderAll();
@@ -132,7 +132,7 @@
               const r = await api('/api/v2/profiles/' + p.id, { method: 'PUT', body: { name: name.value, color: color.value, instructions: instr.value } });
               state.profile = { ...state.profile, name: r.name, color: r.color, rev: r.rev, instructions: r.instructions };
               document.documentElement.style.setProperty('--profile', r.color);
-              document.getElementById('profile-chip').querySelector('.name').textContent = r.name;
+              renderAll();
               close(); toast('profile saved');
             } catch (e) { err.textContent = e.message; }
           } }, 'Save')),
@@ -165,16 +165,21 @@
   // ---------- tabs ----------
   function newTabId() { let id; do { id = L.randomId('t'); } while (state.tabs[id]); return id; }
 
+  // Exactly one Home tab, first in the top-left panel. Restores it if a
+  // profile somehow lost it, and folds any duplicates from older saves.
   function ensureNotEmpty() {
-    const ps = L.panels(state.layout);
-    if (ps.length === 1 && ps[0].tabs.length === 0) {
-      const id = newTabId();
-      state.tabs[id] = { kind: 'home', title: 'Home' };
-      state.layout = L.addTab(state.layout, ps[0].id, id);
-    }
-    // Drop tab records the layout no longer references (belt and braces).
     const live = new Set(L.allTabs(state.layout));
     for (const id of Object.keys(state.tabs)) if (!live.has(id)) delete state.tabs[id];
+    const homes = L.allTabs(state.layout).filter((id) => state.tabs[id] && state.tabs[id].kind === 'home');
+    for (const extra of homes.slice(1)) { state.layout = L.removeTab(state.layout, extra); delete state.tabs[extra]; }
+    if (homes.length === 0) {
+      const first = L.panels(state.layout)[0];
+      const id = newTabId();
+      state.tabs[id] = { kind: 'home', title: 'Home' };
+      const wasActive = first.active;
+      state.layout = L.addTab(state.layout, first.id, id, 0);
+      if (wasActive) state.layout = L.setActive(state.layout, first.id, wasActive);
+    }
   }
 
   function targetPanelId(prefer) {
@@ -216,6 +221,7 @@
   };
 
   Hub.closeTab = async function closeTab(id) {
+    if (state.tabs[id] && state.tabs[id].kind === 'home') return;
     const m = mounted.get(id);
     if (m && m.dirty && !(await Hub.confirm('Discard unsaved changes?', Hub.basename(state.tabs[id]?.path || ''), 'Discard', true))) return;
     if (m) { try { m.handle?.destroy?.(); } catch {} m.el.remove(); mounted.delete(id); }
@@ -241,7 +247,11 @@
     const def = Hub.kinds[t.kind];
     return (def && def.title ? def.title(t) : t.title) || t.kind;
   }
-  function tabIcon(t) { return (Hub.kinds[t.kind] || {}).icon || '•'; }
+  // An icon name from Hub.ICONS becomes an SVG; anything else is a literal glyph.
+  function tabIcon(t) {
+    const ic = (Hub.kinds[t.kind] || {}).icon || '•';
+    return Hub.ICONS[ic] ? Hub.icon(ic) : ic;
+  }
 
   function mountTab(id) {
     if (mounted.has(id)) return mounted.get(id);
@@ -263,10 +273,18 @@
   }
 
   // ---------- render ----------
+  function profileChip() {
+    const p = state.profile || { name: '…' };
+    return el('button', { class: 'chip', title: 'Profile: ' + p.name + ' — click to switch or edit', onclick: profileSheet },
+      el('span', { class: 'dot' }), el('span', { class: 'name' }, p.name));
+  }
+
   function renderAll() {
     if (!state.layout) return;
     layoutEl.innerHTML = '';
     if (!state.narrow) layoutEl.append(buildNode(state.layout, []));
+    const bar = document.getElementById('topbar-chip');
+    bar.replaceChildren(profileChip());
     refreshTopbar();
     place();
   }
@@ -283,8 +301,9 @@
 
   function buildPanel(p) {
     const strip = el('div', { class: 'tabstrip', dataset: { panel: p.id } });
+    // The profile chip lives at the start of the top-left strip (V89).
+    if (L.panels(state.layout)[0].id === p.id) strip.append(el('span', { class: 'strip-chip' }, profileChip()));
     for (const id of p.tabs) strip.append(buildTabEl(p, id));
-    strip.append(el('span', { class: 'strip-spacer' }), el('button', { class: 'tab-add', title: 'New tab', onclick: () => Hub.openTab({ kind: 'home', title: 'Home' }, { panelId: p.id }) }, '+'));
     strip.addEventListener('wheel', (e) => { if (!e.shiftKey && Math.abs(e.deltaY) > Math.abs(e.deltaX)) { strip.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
     const body = el('div', { class: 'panel-body' + (p.tabs.length ? '' : ' empty'), dataset: { panel: p.id } });
     const panel = el('div', { class: 'panel' + (p.id === state.focusedPanel ? ' focused' : ''), dataset: { panel: p.id } }, strip, body);
@@ -296,10 +315,11 @@
     const t = state.tabs[id];
     if (!t) return el('span');
     const m = mounted.get(id);
-    const tabEl = el('div', { class: 'tab' + (p.active === id ? ' active' : '') + (m && m.dirty ? ' dirty' : ''), dataset: { tab: id, panel: p.id }, title: t.path || t.cwd || t.url || tabTitle(t) },
+    const closable = t.kind !== 'home';
+    const tabEl = el('div', { class: 'tab' + (p.active === id ? ' active' : '') + (m && m.dirty ? ' dirty' : '') + (closable ? '' : ' pinned'), dataset: { tab: id, panel: p.id }, title: t.path || t.cwd || t.url || tabTitle(t) },
       el('span', { class: 'ico' }, tabIcon(t)),
       el('span', { class: 'label' }, tabTitle(t)),
-      el('button', { class: 'close', title: 'Close', onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); Hub.closeTab(id); } }, '×'));
+      closable ? el('button', { class: 'close', title: 'Close', onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); Hub.closeTab(id); } }, '×') : null);
     tabEl.addEventListener('pointerdown', (e) => onTabPointerDown(e, id, p.id));
     tabEl.addEventListener('auxclick', (e) => { if (e.button === 1) { e.preventDefault(); Hub.closeTab(id); } });
     return tabEl;
@@ -316,10 +336,10 @@
   }
 
   function refreshTopbar() {
-    if (!state.narrow) { topTitle.textContent = ''; return; }
+    if (!state.narrow) { topTitle.replaceChildren(); return; }
     const p = L.findPanel(state.layout, state.narrowPanel) || L.panels(state.layout)[0];
     const t = p && state.tabs[p.active];
-    topTitle.textContent = t ? tabIcon(t) + ' ' + tabTitle(t) : '';
+    topTitle.replaceChildren(...(t ? [el('span', { class: 'ico' }, tabIcon(t)), ' ', tabTitle(t)] : []));
   }
 
   // Position every shown tab over its panel body; hide the rest.
@@ -542,22 +562,20 @@
         for (const id of p.tabs) {
           const t = state.tabs[id];
           if (!t) continue;
-          g.append(el('div', { class: 'menu-tab' + (p.id === state.narrowPanel && p.active === id ? ' active' : ''), onclick: () => { close(); focusTab(id); } },
+          g.append(Hub.append(el('div', { class: 'menu-tab' + (p.id === state.narrowPanel && p.active === id ? ' active' : ''), onclick: () => { close(); focusTab(id); } }),
             el('span', { class: 'ico' }, tabIcon(t)), el('span', { class: 'label' }, tabTitle(t)),
-            el('button', { class: 'close', onclick: (e) => { e.stopPropagation(); close(); Hub.closeTab(id); } }, '×')));
+            t.kind === 'home' ? null : el('button', { class: 'close', onclick: (e) => { e.stopPropagation(); close(); Hub.closeTab(id); } }, '×')));
         }
         card.append(g);
       });
       card.append(el('div', { class: 'buttons' },
         el('button', { class: 'btn muted', onclick: () => { close(); profileSheet(); } }, 'Profile…'),
-        el('button', { class: 'btn', onclick: () => { close(); Hub.openTab({ kind: 'home', title: 'Home' }); } }, '+ New tab')));
+        el('button', { class: 'btn', onclick: () => { close(); Hub.openTab({ kind: 'home', title: 'Home' }); } }, Hub.icon('home'), ' Home')));
     });
   }
 
   // ---------- wiring ----------
   document.getElementById('menu-btn').addEventListener('click', tabMenu);
-  document.getElementById('new-tab-btn').addEventListener('click', () => Hub.openTab({ kind: 'home', title: 'Home' }));
-  document.getElementById('profile-chip').addEventListener('click', profileSheet);
   window.addEventListener('beforeunload', (e) => {
     if ([...mounted.values()].some((m) => m.dirty)) { e.preventDefault(); e.returnValue = ''; }
   });
