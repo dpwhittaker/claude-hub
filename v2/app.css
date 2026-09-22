@@ -118,14 +118,23 @@ select.sel:focus, input.inp:focus, textarea.inp:focus { outline: none; border-co
 .empty-note { color: var(--muted); font-style: italic; padding: 14px; font-size: 0.85rem; }
 .err { color: var(--bad); font-size: 0.82rem; padding: 8px 12px; }
 
-/* ---------- home tab ---------- */
-.home { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
-.home .launch { display: grid; grid-template-columns: 1fr; gap: 0; min-height: 0; overflow: auto; border-bottom: 1px solid var(--edge); }
-.home .col { min-width: 0; padding: 8px 10px; border-right: 1px solid var(--edge); }
-.home .col:last-child { border-right: none; }
-.home h3 { margin: 4px 0 8px; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
-  display: flex; align-items: center; gap: 8px; }
-.home h3 .spacer { flex: 1; }
+/* ---------- home tab: three foldable sections ----------
+   Narrow container → an accordion (stacked, headers always visible, open
+   sections share the height). Wide container → sessions | services over the
+   explorer, same headers, same folding. */
+.home { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.sec { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 0 0 auto; border-bottom: 1px solid var(--edge); }
+.sec.open { flex: 1 1 0; }
+.sec-h { margin: 0; padding: 6px 10px; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
+  display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; background: var(--bg-1); flex: 0 0 auto; min-height: 32px; }
+.sec-h:hover { color: var(--fg); }
+.sec-h .spacer { flex: 1; }
+.sec-h .chev { display: inline-block; width: 12px; transition: transform 0.12s; transform: rotate(-90deg); font-size: 0.8rem; }
+.sec.open .sec-h .chev { transform: none; }
+.sec-body { display: none; min-height: 0; flex: 1 1 auto; overflow: auto; padding: 4px 6px 8px; flex-direction: column; }
+.sec.open .sec-body { display: flex; }
+.sec-explorer .sec-body { padding: 0; overflow: hidden; }
+.sec h4 { margin: 12px 4px 4px; font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 .home ul.rows { list-style: none; margin: 0; padding: 0; }
 .row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: 0.84rem; min-height: 32px; }
 .row:hover { background: var(--bg-2); }
@@ -149,7 +158,6 @@ select.sel:focus, input.inp:focus, textarea.inp:focus { outline: none; border-co
 .badge.codex { color: #c4b5fd; border-color: rgba(196,181,253,0.4); }
 .badge.shell { color: var(--good); border-color: rgba(134,239,172,0.4); }
 .badge.legacy { color: var(--warn); border-color: rgba(251,191,36,0.4); }
-.home .files { display: flex; flex-direction: column; min-height: 0; }
 
 /* ---------- file browser ---------- */
 .browser { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
@@ -265,7 +273,13 @@ body.narrow #topbar .title { flex: 1 1 auto; color: var(--fg); }
 
 /* ---------- container-responsive pieces ---------- */
 @container (min-width: 640px) {
-  .home .launch { grid-template-columns: 1fr 1fr; }
+  .home { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .home.no-explorer { grid-template-rows: minmax(0, 1fr) auto; }
+  .home.no-launch { grid-template-rows: auto minmax(0, 1fr); }
+  .home.no-explorer.no-launch { grid-template-rows: auto auto; }
+  .sec-sessions { border-right: 1px solid var(--edge); }
+  .sec-explorer { grid-column: 1 / -1; border-bottom: none; }
+  .sec, .sec.open { flex: initial; }
 }
 @container (max-width: 480px) {
   .row { min-height: 40px; }
@@ -276,7 +290,4 @@ body.narrow #topbar .title { flex: 1 1 auto; color: var(--fg); }
   .seg button { padding: 6px 9px; }
   .crumbs .tools button { padding: 5px 7px; }
 }
-@container (max-height: 420px) {
-  .home { grid-template-rows: auto minmax(0, 1fr); }
-  .home .launch { max-height: 45%; }
-}
+

@@ -162,6 +162,29 @@ test('V79/V81: file API — list, stat with previewUrl, text read/write with 409
   } finally { await fx.close(); }
 });
 
+test('V90: titles API round-trips and the sessions list prefers hub title → transcript title', async () => {
+  const fx = await startFixture({ seed });
+  try {
+    const uuid = '11111111-1111-1111-1111-111111111111'; // the seeded legacy tab's uuid
+    let r = await json(fx.url + '/api/v2/sessions');
+    let legacy = r.body.sessions.find((s) => s.id === 'proj__s1');
+    assert.equal(legacy.title, null, 'no transcript, no hub title → null');
+    assert.equal((await json(fx.url + '/api/v2/titles/' + uuid)).status, 404);
+    const set = await post(fx.url + '/api/v2/titles', { uuid, title: '"Refactor The Tab Strip."', source: 'auto' });
+    assert.equal(set.status, 200, JSON.stringify(set.body));
+    assert.equal(set.body.title, 'Refactor The Tab Strip');
+    assert.equal((await json(fx.url + '/api/v2/titles/' + uuid)).body.title, 'Refactor The Tab Strip');
+    r = await json(fx.url + '/api/v2/sessions');
+    legacy = r.body.sessions.find((s) => s.id === 'proj__s1');
+    assert.equal(legacy.title, 'Refactor The Tab Strip');
+    assert.equal((await post(fx.url + '/api/v2/titles', { uuid: 'nope', title: 'x' })).status, 400);
+    assert.equal((await post(fx.url + '/api/v2/titles', { uuid, title: '' })).status, 400);
+    assert.equal((await json(fx.url + '/api/v2/titles/' + uuid, { method: 'DELETE' })).status, 200);
+    assert.equal((await json(fx.url + '/api/v2/titles/' + uuid)).status, 404);
+    assert.ok(fs.existsSync(path.join(fx.hubStateDir, 'titles.json')));
+  } finally { await fx.close(); }
+});
+
 test('V85: services API lists {services, tailnet}; actions on unknown units are 404 before any sudo', async () => {
   const fx = await startFixture({ seed });
   try {

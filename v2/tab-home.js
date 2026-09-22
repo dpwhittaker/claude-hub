@@ -21,6 +21,13 @@
       byCwd.get(k).push(s);
     }
     Hub.sessions = { list: sessions, byCwd, at: Date.now() };
+    // Open terminal tabs follow the session's current title (V90).
+    const byKey = new Map(sessions.map((s) => [s.termKey, s]));
+    for (const [id, t] of Object.entries(Hub.state.tabs)) {
+      if (t.kind !== 'term') continue;
+      const s = byKey.get(t.termKey);
+      if (s && (s.title || null) !== (t.title || null)) Hub.updateTab(id, { title: s.title || null }, { silent: true });
+    }
     return Hub.sessions;
   };
   Hub.openSessionTab = function openSessionTab(s) {
@@ -95,15 +102,11 @@
         const cls = ['entry', e.kind, e.dim ? 'dim' : '', e.git ? 'git-' + e.git : '', e.repo ? 'repo' : '', live ? 'live' : ''].join(' ');
         const li = el('li', { class: cls, title: e.path + (live ? ' — a terminal is open here' : '') });
         if (e.kind === 'dir') {
-          Hub.append(li, el('span', { class: 'ico' }, Hub.icon(e.repo ? 'fork' : 'folder')), el('span', { class: 'nm' }, e.name),
-            el('span', { class: 'acts' },
-              el('button', { title: 'Terminal here', onclick: (ev) => { ev.stopPropagation(); Hub.newSessionDialog({ cwd: e.path }); } }, Hub.iconPlus('terminal'))));
+          Hub.append(li, el('span', { class: 'ico' }, Hub.icon(e.repo ? 'fork' : 'folder')), el('span', { class: 'nm' }, e.name));
           li.onclick = () => load(e.path);
         } else {
           Hub.append(li, el('span', { class: 'ico' }, Hub.icon('file')), el('span', { class: 'nm' }, e.name),
-            el('span', { class: 'meta' }, Hub.fmtSize(e.size)),
-            el('span', { class: 'acts' },
-              ...e.modes.filter((m) => m !== e.defaultMode).map((m) => el('button', { title: m, onclick: (ev) => { ev.stopPropagation(); open(e, m); } }, m))));
+            el('span', { class: 'meta' }, Hub.fmtSize(e.size)));
           li.onclick = () => open(e, e.defaultMode);
         }
         list.append(li);
@@ -294,18 +297,45 @@
         path: tab.path || '',
         onPathChange: (p) => ctx.update({ path: p }, { silent: true }),
       });
+      // Three sections with always-visible headers; click a header to fold
+      // it. Wide containers lay them out as a grid (sessions | services over
+      // explorer), narrow ones stack them as an accordion (V91). Fold state
+      // is a per-device preference, not part of the shared profile.
+      const PREF = 'hub.home.sections';
+      let folds;
+      try { folds = JSON.parse(localStorage.getItem(PREF) || 'null'); } catch { folds = null; }
+      const chevron = () => el('span', { class: 'chev' }, '▾');
+      const secs = {};
+      function section(key, title, extra, ...bodyKids) {
+        const body = el('div', { class: 'sec-body' }, ...bodyKids);
+        const head = el('h3', { class: 'sec-h', onclick: () => toggle(key) }, chevron(), title, el('span', { class: 'spacer' }), ...(extra || []));
+        const sec = el('section', { class: 'sec sec-' + key, dataset: { sec: key } }, head, body);
+        secs[key] = sec;
+        return sec;
+      }
+      function applyFolds() {
+        for (const [k, sec] of Object.entries(secs)) sec.classList.toggle('open', folds[k] !== false);
+        home.classList.toggle('no-explorer', folds.explorer === false);
+        home.classList.toggle('no-launch', folds.sessions === false && folds.services === false);
+      }
+      function toggle(key) {
+        folds[key] = folds[key] === false;
+        try { localStorage.setItem(PREF, JSON.stringify(folds)); } catch {}
+        applyFolds();
+      }
+      const stop = (fn) => (ev) => { ev.stopPropagation(); fn(); };
       const home = el('div', { class: 'home' },
-        el('div', { class: 'launch' },
-          el('div', { class: 'col' },
-            el('h3', null, 'Sessions', el('span', { class: 'spacer' }), el('button', { class: 'btn', onclick: () => Hub.newSessionDialog({ cwd: browser.path }) }, Hub.iconPlus('terminal'), ' New')),
-            sessionsUl),
-          el('div', { class: 'col' },
-            el('h3', null, 'Services', el('span', { class: 'spacer' }), el('button', { class: 'btn muted', onclick: () => refresh() }, Hub.icon('refresh'))),
-            servicesUl,
-            el('h3', { style: { marginTop: '14px' } }, 'Tailnet'),
-            tailnetUl)),
-        el('div', { class: 'files' }, browser.el));
+        section('sessions', 'Sessions', [el('button', { class: 'btn', onclick: stop(() => Hub.newSessionDialog({ cwd: browser.path })) }, Hub.iconPlus('terminal'), ' New')], sessionsUl),
+        section('services', 'Services', [el('button', { class: 'btn muted', title: 'Refresh', onclick: stop(() => refresh()) }, Hub.icon('refresh'))], servicesUl, el('h4', null, 'Tailnet'), tailnetUl),
+        section('explorer', 'Explorer', [], browser.el));
       root.append(home);
+      // First run: everything open, except Services in a narrow container
+      // where three open sections would leave each one a sliver.
+      if (!folds || typeof folds !== 'object') {
+        folds = {};
+        requestAnimationFrame(() => { if (home.clientWidth && home.clientWidth < 640) folds.services = false; applyFolds(); });
+      }
+      applyFolds();
 
       function sessionRow(s) {
         const title = s.title || (s.cwd ? Hub.basename(s.cwd) : '~/projects');
@@ -315,7 +345,6 @@
           el('span', { class: 'badge ' + s.agent }, s.agent),
           el('span', { class: 'main' }, el('span', { class: 't' }, title), el('span', { class: 's' }, sub + (s.kind === 'legacy' ? ' · v1 tab' : ''))),
           el('span', { class: 'acts' },
-            el('button', { title: 'Rename', onclick: async (ev) => { ev.stopPropagation(); if (s.kind !== 'hub') { toast('v1 tabs are named by Claude', true); return; } const t = await Hub.ask({ title: 'Session title', value: s.title || '' }); if (t === null) return; try { await api('/api/v2/sessions/' + s.id, { method: 'PATCH', body: { title: t || null } }); refresh(); } catch (e) { toast(e.message, true); } } }, Hub.icon('pencil')),
             el('button', { title: s.kind === 'hub' ? 'End this session (kills the tmux session)' : 'v1 tabs are closed from the old Develop pane', onclick: async (ev) => { ev.stopPropagation(); if (s.kind !== 'hub') return; if (!(await Hub.confirm('End session?', 'The tmux session and its agent are killed. A Claude conversation can be resumed later by its id.', 'End', true))) return; try { await api('/api/v2/sessions/' + s.id, { method: 'DELETE' }); Hub.closeTabsWhere((t) => t.kind === 'term' && t.termKey === s.termKey); Hub.sessions.at = 0; refresh(); } catch (e) { toast(e.message, true); } } }, Hub.icon('x'))));
         row.onclick = () => Hub.openSessionTab(s);
         return row;

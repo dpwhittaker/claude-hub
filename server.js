@@ -2488,10 +2488,10 @@ function listLegacySessions() {
     const map = termSessionsLib.readSessionsMap(dir);
     for (const [id, entry] of Object.entries(map.sessions)) {
       const key = termSessionsLib.joinTermKey(e.name, id);
+      // Titles are resolved by the v2 router (hub store → transcript), not here.
       out.push({
         id: key, kind: 'legacy', cwd: e.name, agent: entry.agent, uuid: entry.uuid, profile: null,
-        title: entry.agent === 'claude' ? termSessionsLib.readSessionTitle(dir, entry.uuid) : null,
-        createdAt: null, termKey: key, termUrl: `/term/${key}/`,
+        title: null, createdAt: null, termKey: key, termUrl: `/term/${key}/`,
       });
     }
   }

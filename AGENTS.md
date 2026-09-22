@@ -303,6 +303,21 @@ sudo install -m 644 services/ttyd-hub.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now ttyd-hub.service
 ```
 
+**Session titles.** Tabs show Claude's own name for a conversation, and keep
+up as it drifts: `services/session-title-hook.mjs` runs on `Stop`, forks a
+detached worker (the hook itself exits in milliseconds) that asks Haiku for a
+3–7 word title — told to keep the current one unless the work has clearly
+moved on — and POSTs it to `/api/v2/titles`, keyed by the conversation uuid.
+`/rename` still works: the transcript's `custom-title` is read when no hub
+title exists. Install once with `node services/install-title-hook.mjs`
+(`--remove` undoes it); `SESSION_TITLES=0` disables it for a shell. The
+worker's own `claude -p` runs with `HUB_TITLE_WORKER=1`, which is what stops
+it titling itself.
+
+`?profile=<id>` on `/v2/` loads that profile for the page without changing the
+device's remembered pick — use `ai-testing` when driving the UI from a test
+browser so the owner's layout is never touched.
+
 Still to come: the glasses (Omni) client on top of the same JSON API, and
 the `/v2/` → `/` swap.
 

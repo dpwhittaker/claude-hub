@@ -48,14 +48,21 @@
     state.narrow = isNarrow();
     document.body.classList.toggle('narrow', state.narrow);
     installVvh();
+    // ?profile=<id> or #profile=<id> wins for this page load and is NOT
+    // remembered, so a shared link or a test browser never switches the
+    // device's own pick.
+    const forced = new URLSearchParams(location.search).get('profile') || new URLSearchParams(location.hash.replace(/^#/, '')).get('profile');
     const saved = localStorage.getItem('hub.profile');
     let profiles = [];
     try { profiles = (await api('/api/v2/profiles')).profiles; } catch (e) { toast(e.message, true); }
-    if (saved && profiles.some((p) => p.id === saved)) await loadProfile(saved);
+    if (forced && profiles.some((p) => p.id === forced)) await loadProfile(forced, { persist: false });
+    else if (forced) { toast('no profile "' + forced + '"', true); showPicker(profiles); }
+    else if (saved && profiles.some((p) => p.id === saved)) await loadProfile(saved);
     else showPicker(profiles);
+    setInterval(() => { if (!document.hidden && state.profile && Hub.loadSessions) Hub.loadSessions().catch(() => {}); }, 20000);
   }
 
-  async function loadProfile(id) {
+  async function loadProfile(id, { persist = true } = {}) {
     const p = await api('/api/v2/profiles/' + encodeURIComponent(id));
     for (const m of mounted.values()) { try { m.handle?.destroy?.(); } catch {} m.el.remove(); }
     mounted.clear();
@@ -65,7 +72,7 @@
     state.narrowPanel = state.focusedPanel;
     document.documentElement.style.setProperty('--profile', p.color);
     document.title = p.name + ' · claude-hub';
-    localStorage.setItem('hub.profile', p.id);
+    if (persist) localStorage.setItem('hub.profile', p.id);
     document.getElementById('picker').hidden = true;
     ensureNotEmpty();
     renderAll();
