@@ -7,3 +7,4 @@ dist/
 .env
 .env.*
 .develop-sessions.json
+.develop-sessions.json.v1
