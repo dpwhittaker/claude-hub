@@ -11,7 +11,7 @@ committing. Restart the project's systemd unit when the running app needs the
 change to take effect. Skip only when the turn produced no working-tree changes.
 
 **Commit explicit paths, never `-A`.** Several Claude sessions can share this
-checkout (one per Develop tab), so `git add -A` sweeps up whatever a peer
+checkout (one per terminal tab), so `git add -A` sweeps up whatever a peer
 session has half-written. Name what you wrote:
 `git commit -m "…" -- src/foo.ts src/foo.test.ts`.
 
@@ -21,15 +21,14 @@ Parallel work goes in a worktree, not in this checkout — two agents editing
 one tree is the "peer swept my files" problem above, at feature scale. Claude
 Code's `isolation: "worktree"` drops a checkout at `~/projects/<NAME>_<task>/`;
 give it a `.project-meta.json` naming `worktreeOf: "<NAME>"` and its `branch`
-and it becomes its own claude-hub card with its own port, terminal and Browse
-pane, so it runs its own dev server instead of competing for this one's.
+and the hub treats it as its own folder, with its own terminal sessions and
+its own dev server, so it never competes for this one's.
 
 **Never `rm -rf` a worktree** — this repo's `.git/worktrees/` keeps the
-registry entry and then refuses to reuse the path. Delete it from its card
-(which routes through `git worktree remove`), or
-`git -C ~/projects/<NAME> worktree remove --force <dir>`. A worktree also
-checks out this project's `README.md` byte-for-byte, so its card title and
-description have to come from its sentinel, not the README.
+registry entry and then refuses to reuse the path. Remove it with
+`git -C ~/projects/<NAME> worktree remove --force <dir>`. A worktree checks
+out this project's `README.md` byte-for-byte; give its sentinel a `title` and
+`description` of its own so the hub can tell the two apart.
 
 ## Workflow rule: the spec is the memory (SDD)
 
@@ -54,8 +53,7 @@ logged in the `§T` row that did the work.
 
 **Full protocol: `~/projects/claude-hub/SDD.md`** — section reference, the
 encoding and its symbol table, backprop, and the maintenance rules for keeping
-the spec true as the project grows. Browse it at
-`/view/claude-hub/SDD.md`.
+the spec true as the project grows.
 
 ## How this app reaches the glasses
 
@@ -146,7 +144,7 @@ are declared (`network`, `g2-microphone`, `phone-microphone`, `location`,
 - **Dev server** runs via `vite@<NAME>.service` (systemd, `Restart=always`). Don't `npm run dev` manually — the unit owns the port.
 - **Reverse-proxied** at `/<NAME>/` by claude-hub. `vite.config.ts` sets `base: '/<NAME>/'` and `server.port: <PORT>` to match `.project-meta.json`.
 - **Entry point** is `src/main.ts`. No framework — plain TS and the SDK.
-- **Card metadata** comes from `README.md`: H1 = title, first paragraph = description, frontmatter `tags: [...]` = badges and the landing page's filter chips. Reuse a tag already on the hub (the chip row above the cards lists them) rather than coining a new one; add a tag only if none fits. Tags are categories, not status — no `WIP`.
+- **Title and description** come from `README.md`: H1 = title, first paragraph = one-sentence description. The hub and the glasses app show both.
 
 ## What to do first
 

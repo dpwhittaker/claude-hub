@@ -1,13 +1,21 @@
 # claude-hub — AGENTS.md
 
-Path-routed reverse proxy + landing page. Turn one local port into multi-project dashboard. Read from disk, no phone home. Read this before changing code, systemd units, or route conventions.
+One page over everything under `~/projects` — sessions, services, files — in
+free-form panels, plus the reverse proxy in front of each project's dev
+server. Read this before changing code, systemd units or route conventions.
 
 ## Workflow rule: commit + push every turn
 
-Every turn that changes code, config, assets, or docs ends with a commit and a push — don't wait to be asked. One commit per logical change; split unrelated WIP into separate commits before mixing. Run tests/lint first; if they fail, fix before committing. Restart the relevant systemd unit when the live site needs the change to take effect. Skip only when the turn produces no working-tree changes.
+Every turn that changes code, config, assets, or docs ends with a commit and a
+push — don't wait to be asked. One commit per logical change; split unrelated
+WIP into separate commits before mixing. Run tests/lint first; if they fail,
+fix before committing (`npm test; echo $?` — never pipe the test run into
+`grep` and read its exit code, B28's commit slipped through that way). Restart
+the relevant systemd unit when the live site needs the change to take effect.
+Skip only when the turn produces no working-tree changes.
 
 **Commit explicit paths, never `-A`.** Several Claude sessions share this
-worktree (one per Develop tab), so `git add -A` sweeps up whatever a peer
+worktree (one per terminal tab), so `git add -A` sweeps up whatever a peer
 session has half-written. Name what you wrote:
 `git commit -m "…" -- lib/foo.js test/foo.test.js`.
 
@@ -17,16 +25,12 @@ Parallel work on a project goes in a worktree, not in the parent checkout —
 two agents editing one tree is the "peer swept my files" problem above, at
 feature scale. Claude Code's `isolation: "worktree"` drops a checkout at
 `~/projects/<parent>_<task>/`; give it a `.project-meta.json` naming
-`worktreeOf` + `branch` and it becomes a first-class card with its own port,
-terminal and Browse pane, so it can run its own dev server instead of
-competing for the parent's.
-
-Two rules that bite: **never `rm -rf` a worktree** (the parent's
-`.git/worktrees/` registry keeps the entry and then refuses to reuse the
-path — use the card's delete, which routes through `git worktree remove`), and
-**a worktree checks out the parent's README byte-for-byte**, so its card title
-and description have to come from the sentinel. Full detail, including the
-sentinel shape and the ordering rules: "Git worktrees" below.
+`worktreeOf` + `branch` and the hub proxies its dev server on its own port
+instead of competing for the parent's. **Never `rm -rf` a worktree** (the
+parent's `.git/worktrees/` registry keeps the entry and then refuses to reuse
+the path — `git -C <parent> worktree remove --force <dir>`), and a worktree
+checks out the parent's README byte-for-byte, so give its sentinel a `title`
+and `description` of its own.
 
 ## Workflow rule: the spec is the memory (SDD)
 
@@ -45,8 +49,8 @@ new requirement invalidated. `§V`/`§I` describe the present and get edited;
 never reused, even after retirement. Before appending an invariant, grep `§V`
 for its subject: a rule that changed gets **revised in place at its existing
 number**, tagged `(revised)` and carrying `⊥ <the old rule>` so nobody walks
-back into it (see `V58`, `V61`) — a rule whose concern is gone gets **deleted**,
-its retirement logged in the `§T` row that did the work.
+back into it — a rule whose concern is gone gets **deleted**, its retirement
+logged in the `§T` row that did the work.
 
 **Full protocol: [`SDD.md`](./SDD.md)** — section reference, the encoding and
 its symbol table, backprop, and the maintenance rules for keeping the spec true
@@ -55,575 +59,207 @@ as the project grows.
 ## What it is
 
 ```
-                 ┌──────────────────────────────────┐
-http://localhost:8002 ──▶│   claude-hub (this dir)       │
-                 │   Node, listens on 127.0.0.1     │
-                 └──┬───────┬───────┬───────┬───────┘
-                    │       │       │       │
-       /  ──────────┘       │       │       │   landing.html (this dir, dynamic cards)
-       /api/*  ─────────────┘       │       │   in-process JSON: projects + view-tree
-       /view/<proj>/* ─────────────┘       │   two-pane file browser per project
-       /term/<proj>/* ─────────────────────┘   ttyd unix sockets at /run/ttyd/<proj>.sock
-       /<proj>/*       (optional per-project openUrl, see below)
+https://<box>.<tailnet>.ts.net/  →  tailscale serve :443  →  127.0.0.1:8002 (claude-hub)
+
+  /                  the workspace: v2/index.html + app.js (profiles, panels, tabs)
+  /v2/*  /api/v2/*   its files and its JSON API            lib/v2-routes.js
+  /term/hub/?arg=ID  a session's terminal (ttyd-hub.service → tmux)
+  /<proj>/*          a project's dev server, if its .project-meta.json has proxyTarget
+  /api/projects POST new repo (template / clone / onboard)  server.js
+  /api/term-*        the glasses relay                       lib/term-relay.js
+  GET /api/projects, /api/term-sessions/<p>, /api/view-tree/<p>, /view/<p>/<f>
+                     read-only shims for the G2 app          lib/g2-compat.js
 ```
 
-Proxy = only Node process. Everything else (project apps, ttyd terminals) separate systemd unit it forwards to.
+`server.js` is the proxy, the request dispatcher, repo creation and the
+relay; everything pure lives in `lib/` and is unit-tested without a server.
+Tests that need one use `test/helpers/fixture.js`, which boots `server.js`
+in-process on a random port against scratch `PROJECTS_ROOT` and
+`HUB_STATE_DIR` dirs.
 
-## Routes
+## The three things on the page
 
-| URL | What it does |
-|---|---|
-| `/` | `landing.html`. Hardcoded cards for **Develop** (fresh claude in `~/projects`) and **Proxy** (this dir). Rest rendered dynamically from `/api/projects`. A **tag bar** above the grid (one chip per distinct badge, case-insensitive, plus All) filters the cards; the active tag is kept in `?tag=` (V72). `serveLanding` splices `lib/tag-filter.js` into the page at `/* @inject lib/tag-filter.js */` — the file's one templating hook. |
-| `/api/projects` | `GET` lists managed projects. `POST` creates new one (mkdir + AGENTS/README + `.project-meta.json` + `sudo systemctl enable --now ttyd@<name>`). |
-| `/api/projects/<name>` | `DELETE` stops `ttyd@<name>` plus any `extraUnits`, kills project's tmux session, removes folder — via `git worktree remove` when the sentinel names a `worktreeOf` parent. Needs `.project-meta.json` as sentinel. |
-| `/api/view-tree/<name>` | `GET` returns project's recursive tree as JSON. With `?path=<sub>` returns one level lazily — file browser uses to expand dim dirs (`node_modules`, gitignored, …) on demand. |
-| `/view/<proj>/` | Two-pane viewer: collapsible tree (left, draggable splitter) + tabbed iframes (right). README.md opens in initial tab. |
-| `/view/<proj>/<file>` | Renders single file (markdown via `marked`, code via highlight.js, raw bytes via mime). `?embed=1` strips page chrome — used by two-pane viewer's iframes. `?raw=1` to download. |
-| `/term/<proj>/` | Forwards to `unix:/run/ttyd/<proj>.sock` if socket exists. Resolved per request — adding project no proxy restart. |
-| `/term/develop/`, `/term/shell/` | Static admin terminals (fresh claude in `~/projects`, raw bash). `/term/wsl/` 301s to `/term/shell/` for old bookmarks. |
-| `/<proj>/*` (optional) | Reverse-proxy to project's backend if `.project-meta.json` declares `proxyTarget`. Card's "Open" button steered via `openUrl` in same file. No proxy restart — claude-hub rebuilds route table on every project create/delete. |
-| `/api/term-capture/<key>` | `GET` the visible text of a develop tab (`tmux capture-pane` of the `<proj>__sN` session) plus any prompt the glasses relay is holding. Polling it is what marks the tab **watched** (see "Glasses relay" below). |
-| `/api/term-input/<key>`, `/api/term-scroll/<key>` | `POST` text (+Enter) into the tab via `send-keys`; `POST` SGR wheel ticks so Claude Code scrolls its transcript. |
-| `/api/term-pending/<key>` | The relay: the Claude Code hook `POST`s a question / permission request here and is held until the glasses answer at `/answer` — only while the tab is watched. `GET` shows what is pending. |
-| `/api/stt` | `POST` raw 16 kHz PCM → proxied to `stt.service` (faster-whisper) → `{text}`. |
+There is no "project" in the UI (the word survives only in `.project-meta.json`
+and the repo-creation dialog).
+
+- **Sessions** — an agent (claude / codex / a shell) in some folder under
+  `~/projects`, one record at `~/.claude-hub/sessions/<id>.json`, one tmux
+  session named by its `termKey` (`hub-<id>`, or the `<project>__sN` name a
+  session migrated from v1 kept). ONE ttyd unit serves them all:
+  `services/ttyd-hub.service` runs ttyd with `--url-arg`, the tab loads
+  `/term/hub/?arg=<id>`, and `services/ttyd-attach-hub.sh <id>` attaches (or
+  creates) the tmux session. Creating a session is a file write, not a
+  `sudo systemctl enable`. Ending one deletes the record and kills tmux;
+  suspending only kills tmux (a reconnect starts it again; a Claude
+  conversation resumes by uuid). `lib/v2-sessions.js`.
+- **Services** — discovered, not registered (`lib/v2-services.js`): every
+  regular unit file in `/etc/systemd/system` that runs as the hub's user or
+  works under `$HOME`, plus `vite@`/`jekyll@` instances and sentinel
+  `extraUnits`, minus the ttyd family. A unit's URL comes from its sentinel,
+  from `~/.claude-hub/services.json`, or from the `tailscale serve` listener
+  whose mount targets a port the unit listens on (`ss -ltnp` → cgroup). A
+  service tab shows the site / the unit file / a log tail, with start, stop,
+  restart in its bar.
+- **Files** — anywhere under `~/projects`, through one guard:
+  `resolveUnder` in `lib/v2-paths.js` is the whole security story. A file tab
+  has Raw / View / Edit / Diff (`lib/v2-fs.js`, `v2/tab-file.js`); saves carry
+  the mtime they loaded and get a 409 instead of clobbering an agent's write.
+
+**Profiles** (`lib/v2-profiles.js`) hold a person's tabs + layout under
+`~/.claude-hub/profiles/<id>/`, `rev`-checked on save so two devices never
+silently clobber each other, and a `CLAUDE.md` appended to every claude
+session the profile launches. Which profile a browser uses is
+`localStorage['hub.profile']`; `?profile=<id>` on the URL overrides it for
+that page load without persisting — use `ai-testing` when driving the UI
+from a test browser. Term-tab titles are LIVE (derived from the sessions
+list on every page, never written to the profile).
+
+**Layout** (`lib/v2-layout.js`, served to the browser wrapped as
+`window.HubLayout`) is a pure tree of proportional splits and panels. Tab
+contents live in `#stage`, absolutely positioned over their panel body, so an
+iframe never reloads when the layout changes. Width ≤ 75 % of height is
+*narrow*: one tab at a time, panels become groups in the ☰ menu. A new tab
+lands in the panel with the largest area.
+
+## Claude Code's own records are the truth for a live session
+
+`~/.claude/sessions/<pid>.json` (`lib/claude-registry.js`) names the tmux pane
+a running `claude` lives in, the session id it is ACTUALLY on (a `--resume` or
+`/clear` mints a new one; the hub follows it into the record so a reboot
+resumes the right conversation), its name with source (`user` = `/rename`,
+`auto` = Claude's own, `derived` = the `folder-1a` placeholder, never shown)
+and its status (busy / waiting / idle), which is what pulses the dot on Home.
+When several processes claim one pane — a `claude -p` the session spawned
+registers against it too — the earliest-started interactive `cli` entry is the
+tab. Recency is the registry's status change (idle TUI repaints bump tmux
+activity every few minutes, so tmux activity counts only for codex/shell).
+
+**Titles** follow the newest by time of the registry name and the hub's auto
+title, so `/rename` and the titler take turns. `services/session-title-hook.mjs`
+runs on `Stop`, forks a detached worker (the hook exits in ms) that asks Haiku
+for a 3–7 word title — told to answer `KEEP` unless the purpose drifted, with
+no tools and a fenced quoted excerpt so it never acts on the transcript — and
+POSTs it to `/api/v2/titles`. A user-typed name is off limits for four prompts
+after the rename. Install with `node services/install-session-hooks.mjs`;
+`SESSION_TITLES=0` disables; the worker's own `claude -p` runs with
+`HUB_TITLE_WORKER=1`, which is the recursion guard. Hooks are read when a
+session starts, so a session older than the install never runs it — the
+registry needs no hook, which is why it does the live work.
 
 ## Project sentinel: `.project-meta.json`
 
-Folder under `~/projects/` shows on landing page iff contains `.project-meta.json`. Shape:
+A folder under `~/projects/` with this file is a project the PROXY knows:
 
 ```json
-{
-  "name": "<name>",
-  "createdAt": "2026-01-01T00:00:00-05:00",
-  "openUrl": "/<name>/",
-  "proxyTarget": "http://127.0.0.1:5173",
-  "proxyPrefix": "/<name>",
-  "stripPrefix": false,
-  "extraUnits": ["<name>.service"]
-}
+{ "name": "<name>", "createdAt": "…", "proxyTarget": "http://127.0.0.1:5173",
+  "proxyPrefix": "/<name>", "stripPrefix": false, "extraUnits": ["vite@<name>.service"],
+  "openUrl": "/<name>/", "routes": [{ "match": "**/*.md", "to": "/:dir/:name.html" }] }
 ```
 
-| field | purpose |
-|---|---|
-| `name` | Folder name; informational. |
-| `createdAt` | ISO timestamp; cards sort by this. A worktree sorts under its parent's value instead of its own, so it lands beside the project it branched from. |
-| `openUrl` | Optional. Where card's "Open" button goes. Defaults `/view/<name>/README.md`. Set to `/<name>/` (or wherever) when project has live app reachable through proxy. |
-| `proxyTarget` | Optional. If set, claude-hub reverse-proxies project's prefix to this URL. Without it, no live route — only `/view/<name>/` and `/term/<name>/`. |
-| `proxyPrefix` | Optional. URL prefix to match. Defaults `/<name>`. Useful when folder name and public URL diverge. |
-| `stripPrefix` | Optional, default `true`. When `false`, prefix left on request — needed for upstreams that expect it (e.g. Vite with `base: "/<name>/"`). |
-| `extraUnits` | Optional list of systemd units to stop when project deleted via UI (plus `ttyd@<name>.service`). Useful when project runs own backend unit. |
-| `title` | Optional. Overrides the README H1 as the card title. Set on worktrees, which inherit the parent README verbatim. |
-| `description` | Optional. Overrides the README's first paragraph as the card description. Same reason. |
-| `worktreeOf` | Optional. Name of the project this folder is a `git worktree` of. Adds a `worktree` badge, a provenance line on the card, and routes DELETE through git. See "Git worktrees" below. |
-| `branch` | Optional. Branch the worktree has checked out; shown on the card beside the parent link. Informational. |
-| `routes` | Optional ordered `[{match, to}]` rewrite rules mapping a source file → the URL it renders at (relative to the proxy prefix). Browse shows a **preview eye-icon** on any file that matches a rule and renders it via the live backend (`PROXY_PREFIX + route`). Lets `.md` (and anything else) preview through the project's real renderer. See "File→URL routes" below. |
-
-Title, description, tags come from **`README.md`** unless the sentinel overrides them (V55):
-
-- **Title**: first H1.
-- **Description**: first paragraph after H1, inline markdown stripped.
-- **Tags** (badge pills + the landing page's filter chips): `tags: [...]` in YAML frontmatter at top of README.md. Absent → card shows `Project`.
-
-**Tag vocabulary is deliberately small** (V73). Tags are categories, not
-status — as of September 2026 they are `AI`, `Bible`, `Games`, `Glasses`,
-`Theater`, plus the auto-derived `worktree`. There is no enum in code: the hub
-reads the tags in use off the cards and hands them to every new session's
-bootstrap prompt ("the tags already in use on this hub are: …; add a new tag
-only if none fits"), and the same instruction sits in `agentsTemplate()` and
-every `templates/*/AGENTS.md.template`. Reuse before coining; no `WIP`.
-
-`.project-meta.json`'s `title` / `description` win when present — the escape hatch a worktree needs, since it checks out its parent's README byte-for-byte. Tags come from the README, except that a `worktreeOf` card wears its *parent's* tags behind the `worktree` badge — its own README is whatever the branch carries, and a retag on main has to reach every worktree at once. Parsing lives in `lib/readme-meta.js`, card assembly + ordering in `lib/project-cards.js`.
+`proxyTarget` + `proxyPrefix` (default `/<name>`) + `stripPrefix` (default
+true; `false` for Vite with `base: "/<name>/"`) drive `/<name>/*`. `extraUnits`
+and `openUrl` give the unit its site on Home. `routes` (`lib/file-routes.js`,
+V54) maps a source file to the URL it renders at, so View on an `.md` behind a
+Jekyll or SPA dev server shows the live page. `title` / `description` override
+the README for a worktree. The route table is rebuilt on startup and after a
+create — no restart.
 
 ## systemd units
 
 Source unit files live in `services/`. Install with `sudo install -m 644
 services/<file> /etc/systemd/system/`, then `sudo systemctl daemon-reload &&
-sudo systemctl enable --now <unit>`. `services/ttyd-attach.sh` installs to
-`/usr/local/bin/ttyd-attach.sh` (referenced by `ttyd@.service` ExecStart).
+sudo systemctl enable --now <unit>`.
 
 | Unit | What it runs |
 |---|---|
-| `services/claude-hub.service` | `node server.js` (this proxy). Adjust `ExecStart` to your node binary path. |
-| `services/ttyd@.service` | Templated. `systemctl enable --now ttyd@<proj>__<sN>` brings up `unix:/run/ttyd/<proj>__<sN>.sock` running `ttyd-attach.sh <proj>__<sN>` — joins or creates the tmux session of that name, running the tab's agent: `claude --session-id/--resume <uuid>` or plain `codex`, per `{uuid, agent}` in `<proj>/.develop-sessions.json`. A bare `ttyd@<name>` (no `__`) is the legacy/admin form and runs `claude --continue`, omitted on first launch when no prior session exists to avoid an exit-loop. |
-| `services/ttyd-develop.service` | Admin: fresh `claude` in `~/projects` per browser connection. No tmux. |
-| `services/ttyd-shell.service` | Admin: raw `bash -l`. No claude, no tmux. |
-| `services/vite@.service` | Templated. `systemctl enable --now vite@<name>` runs `npm run dev` in `~/projects/<name>` under `Restart=always`. Enabled during any vite-family template scaffold (`vite` / `game-2d` / `game-3d` / `game-3d-complex` / `evenhub` all share this one unit). |
-| `services/jekyll@.service` | Templated. `systemctl enable --now jekyll@<name>` runs `~/projects/<name>/serve-local.sh` (`bundle exec jekyll serve`) under `Restart=always`, system PATH (Ruby/bundler, no nvm). Enabled only for the `jekyll` template — the one non-vite family. |
-| `services/stt.service` | `services/stt/server.py` under `~/stt-env`: faster-whisper `turbo` on `127.0.0.1:8012`, GPU only under a gpu-gate lease, unloaded after 90 s idle, CPU fallback (V78). |
+| `services/claude-hub.service` | `node server.js`. `KillMode=process` so a restart never kills the ttyd/tmux children. |
+| `services/ttyd-hub.service` | ttyd on `/run/ttyd/hub.sock` with `--url-arg`; `ttyd-attach-hub.sh` (installed to `/usr/local/bin`) attaches the id's tmux session. `KillMode=process`: the first attach after a boot starts the user's tmux server INSIDE this cgroup, and a unit restart must not take every session with it. `RuntimeDirectoryPreserve=yes`. |
+| `services/vite@.service` / `services/jekyll@.service` | Templated dev servers, `Restart=always`; enabled by the scaffolds. |
+| `services/stt.service` | faster-whisper on `127.0.0.1:8012` for the glasses (`/api/stt`). |
 
-`/run/ttyd/` shared across every ttyd instance. All three units carry `RuntimeDirectoryPreserve=yes` for that reason — without it, one instance stop = systemd wipes whole dir, orphans every other socket. Don't remove that line.
+## Retiring v1 (done 2026-09-23)
 
-## File-tree dimming
-
-Two-pane viewer's left tree marks "noisy" entries dim (lower opacity, muted name color):
-
-- Default: anything `git ls-files --others --ignored --exclude-standard
-  --directory` reports. Project's `.gitignore` = source of truth.
-- Fallback (no git or empty ignore output): hardcoded list — `node_modules`, `.git`, `.serve`, `dist`, `build`, `.next`, `.cache`.
-- `.git` always dim, regardless.
-
-Dim dirs not recursed eagerly — lazy-load on first expand via `/api/view-tree/<proj>?path=<sub>`. Anything inside dim dir inherits dim. Keeps `node_modules` from blowing 5000-node tree cap.
-
-## File→URL routes (preview eye-icon)
-
-The Browse tree shows a **preview eye-icon** on:
-
-1. `.html` / `.svg` — rendered in an iframe (html via proxy when available, else `?raw=1`; svg always `?raw=1` as `image/svg+xml`). V16.
-2. Any file matching a `routes` rule in `.project-meta.json` — rendered via the live backend at `PROXY_PREFIX + route` (needs a `proxyTarget`). V54.
-
-`routes` is an **ordered list of rewrite rules**, first match wins:
-
-```json
-"routes": [
-  { "match": "README.md",    "to": "/" },
-  { "match": "**/index.md",  "to": "/:dir/" },
-  { "match": "**/*.md",      "to": "/:dir/:name.html" }
-]
-```
-
-- **glob** (`match`): `*` = exactly one path segment, `**` = zero or more segments (captured as `:splat`), everything else literal.
-- **template** (`to`): a root-relative URL (may include a `#fragment`). Vars: `:dir` (dirname, `''` at root), `:name` (basename minus final ext), `:ext`, `:path` (full rel path), `:pathnoext`, `:splat`. Output is slash-normalized (`//`→`/`, `#/`→`#`).
-- Files with any path segment starting `_` or `.` are never routed (Jekyll/most static hosts don't serve them).
-- The resolver is `lib/file-routes.js` (`matchGlob` + `routeForPath`), inlined into the Browse client via `.toString()` (so it must stay self-contained — no closures), and validated server-side by `readProjectRoutes` (`to` must be `^/[^\s"'<>\\]*$`).
-
-The two live examples, discovered to differ fundamentally:
-
-- **genesis** — a real Jekyll site (default page permalinks): the rules above map `sessions/x/index.md → /sessions/x/` and `texts/a.md → /texts/a.html`. The eye-icon opens the Jekyll-rendered HTML through `genesis-preview.service`.
-- **systematic-theology** — a `.nojekyll` SPA (`index.html` + `js/app.js` hash router, Markdown fetched client-side). Its `.md` files don't map to server HTML — they map to `#fragment` routes:
-  ```json
-  "routes": [
-    { "match": "handouts/**/*.md",    "to": "/#:path" },
-    { "match": "storyboards/**/*.md", "to": "/#:path" },
-    { "match": "data/**/*.md",        "to": "/#:splat/:name" }
-  ]
-  ```
-  so `data/god/trinity.md → /theology/#god/trinity`, `data/TOC.md → /theology/#TOC`, `handouts/x.md → /theology/#handouts/x.md`. The eye-icon loads the SPA, whose router renders the Markdown.
-
-New jekyll-template projects are stamped with the genesis-style default rules automatically (`bootstrapJekyll`).
-
-## Git worktrees
-
-Claude Code's `isolation: "worktree"` drops a `git worktree add` checkout next
-to its parent — `~/projects/<parent>_<task>/`. Give it a `.project-meta.json`
-and it becomes a first-class card with its own Vite port, terminal and Browse
-pane, so an agent can render and test its own branch instead of competing for
-the parent's dev server. The three live ones look like:
-
-```json
-{
-  "name": "world-builder-opus-5_avatar-lighting",
-  "worktreeOf": "world-builder-opus-5",
-  "branch": "avatar-lighting",
-  "title": "World Forge — avatar-lighting",
-  "description": "Worktree of world-builder-opus-5 on branch 'avatar-lighting'.",
-  "proxyTarget": "http://127.0.0.1:5179",
-  "extraUnits": ["vite@world-builder-opus-5_avatar-lighting.service"]
-}
-```
-
-Three things follow from `worktreeOf`, all of them because a worktree is *not*
-an independent project:
-
-- **The card can't trust the README.** The checkout carries the parent's
-  README verbatim, so title + description come from the sentinel (V55). Tags
-  go the other way: the card takes the *parent card's* tags, so retagging the
-  parent on main reaches every worktree without a commit on each branch.
-- **It sorts with its parent, not by age.** A worktree created months after
-  its parent still renders directly beneath it, ahead of newer projects. The
-  `<parent>_<task>` naming alone can't do this — a plain `createdAt` sort
-  scatters them (V55).
-- **DELETE goes through git.** The checkout is registered in the *parent's*
-  `.git/worktrees/`, so DELETE runs `git -C <parentDir> worktree remove
-  --force <dir>` and only falls back to `rm` + `git worktree prune` if that
-  fails. A bare `rm -rf` leaves the parent listing a checkout that is gone
-  and refusing to reuse the path (V56, B16).
-
-`worktreeOf` is read from on-disk JSON and turned into a path, so it gets the
-same `PROJECT_ID_RE` validation as a project name. An invalid one degrades to
-"plain project" rather than reaching outside `PROJECTS_ROOT`.
-
-To check the parent's registry by hand:
-
-```bash
-git -C ~/projects/<parent> worktree list
-git -C ~/projects/<parent> worktree prune   # drop stale entries
-```
-
-## Hub v2 (`/v2/`)
-
-The next UI, served beside everything above (nothing in v1 changed; the
-landing page links to it as **Hub v2**, and it will replace `/` once it has
-everything). It drops the *project* as the unit of organisation:
-
-- **Profiles** — `~/.claude-hub/profiles/<id>/profile.json` holds one
-  person's open tabs + layout (`rev`-checked on every save, so two devices
-  never silently clobber each other) and `CLAUDE.md` beside it is appended
-  to every Claude session that profile launches. Which profile a browser
-  uses is `localStorage['hub.profile']`; the server never picks. Made for
-  "her science teaching vs. my Bible study vs. my games".
-- **Sessions** — claude / codex / a plain shell in *any* folder under
-  `~/projects`. One record per session at `~/.claude-hub/sessions/<id>.json`,
-  one tmux session `hub-<id>`, and ONE ttyd unit for all of them:
-  `services/ttyd-hub.service` runs ttyd with `--url-arg`, so the tab loads
-  `/term/hub/?arg=<id>` and `services/ttyd-attach-hub.sh <id>` attaches.
-  Creating a session is a file write, not a `sudo systemctl enable`. The v1
-  `<project>__sN` tabs are listed beside them so nothing running is lost.
-- **Services** — discovered, not registered: every regular unit file in
-  `/etc/systemd/system` that runs as `david` or works under `$HOME`, plus
-  `vite@`/`jekyll@` instances and sentinel `extraUnits`, minus the ttyd
-  family. Start / stop / restart / logs, and `tailscale serve status` shown
-  as tailnet entries. `~/.claude-hub/services.json` adds a URL or title to a
-  unit, or opts a unit in by name.
-- **Files** — anywhere under `~/projects` (`lib/v2-paths.js` `resolveUnder`
-  is the whole security story). A file tab has Raw / View / Edit / Diff:
-  highlighted source, the rendered thing (markdown, image, pdf, the live
-  page for html behind a dev server or a `routes` rule), CodeMirror 6 from
-  esm.sh with `Ctrl+Space` completion through `claude -p` (Tab keeps, Esc
-  drops; textarea fallback if the CDN is unreachable), and a unified diff
-  against HEAD or any commit that touched the file. Saves carry the mtime
-  they loaded and get a 409 instead of clobbering an agent's write.
-- **Layout** — `lib/v2-layout.js` is a pure tree of proportional splits
-  and panels shared with the browser (`window.HubLayout`). Drag a tab to a
-  panel edge to split, to its centre to move, onto a strip to reorder, to
-  the workspace edge for a full-length panel; gutters resize. Contents live
-  in `#stage`, absolutely positioned over their panel body, so an iframe
-  never reloads when the layout changes. Width ≤ 75 % of height is *narrow*:
-  one tab at a time, panels become groups in the ☰ menu.
-
-Code: `lib/v2-routes.js` (router, one early hook in `server.js`),
-`lib/v2-{paths,fs,profiles,sessions,services,layout}.js`, client in `v2/`
-(classic scripts sharing `window.Hub`; `tabs.js` registers tab kinds,
-`tab-home.js` the launcher + file browser, `tab-file.js` the file modes,
-`app.js` the workspace). `HUB_STATE_DIR` overrides `~/.claude-hub`; the test
-fixture always points it at a scratch dir. Install the unit once:
-
-```bash
-sudo install -m 755 services/ttyd-attach-hub.sh /usr/local/bin/ttyd-attach-hub.sh
-sudo install -m 644 services/ttyd-hub.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now ttyd-hub.service
-```
-
-**Session titles.** Tabs show Claude's own name for a conversation, and keep
-up as it drifts: `services/session-title-hook.mjs` runs on `Stop`, forks a
-detached worker (the hook itself exits in milliseconds) that asks Haiku for a
-3–7 word title — told to keep the current one unless the work has clearly
-moved on — and POSTs it to `/api/v2/titles`, keyed by the conversation uuid.
-For a LIVE session the hub reads Claude Code's own registry,
-`~/.claude/sessions/<pid>.json` (`lib/claude-registry.js`): the session id it
-is actually on (a `--resume` or `/clear` mints a new one, and the hub follows
-it into the tab's record so a reboot resumes the right conversation), its
-name with its source (`/rename` = `user`, Claude's own = `auto`, the
-`folder-1a` placeholder = `derived`, which is never shown), and its status,
-which is what makes the dot on Home pulse (busy) or turn amber (waiting on
-you). The newest name by time wins between a `/rename` and the auto-titler,
-so each can override the other. A stopped session falls back to the
-transcript on disk (`custom-title.json`, then the records). Install the hook
-once with `node services/install-session-hooks.mjs` (`--remove` undoes it);
-`SESSION_TITLES=0` disables it for a shell. The worker's own `claude -p` runs
-with `HUB_TITLE_WORKER=1`, which is what stops it titling itself. Hooks are
-read when a session starts, so a session older than the install never runs
-it — the registry needs no hook, which is why it does the live work.
-
-**Where things open.** A new tab lands in the panel with the largest area,
-not the one last clicked. Home rows carry no buttons: a session row opens
-its terminal (end it from the tab's context menu), a service row opens a
-service tab — the served site when there is one, else the unit file — whose
-bar has Site / Unit / Logs and Start · Stop · Restart.
-
-`?profile=<id>` on `/v2/` loads that profile for the page without changing the
-device's remembered pick — use `ai-testing` when driving the UI from a test
-browser so the owner's layout is never touched.
-
-Still to come: the glasses (Omni) client on top of the same JSON API, and
-the `/v2/` → `/` swap.
-
-## Where the code lives
-
-`server.js` is routing, request handling and disk access — everything that
-touches `http`, `fs` or `sudo`. Anything pure gets extracted to `lib/` so it
-can be unit-tested without booting a server; tests that DO need a server use
-`test/helpers/fixture.js`, which boots `server.js` in-process on a random port
-against a scratch `PROJECTS_ROOT`.
-
-| module | what |
-|---|---|
-| `lib/view-shell.js` | The Browse two-pane document (`/view/<proj>/`) — tree, tabs, develop pane, client script. |
-| `lib/pwa-shell.js` | The per-project PWA shell (`/p/<proj>/`) — installable, home link in the term tabstrip, FAB cycling TERM→OPEN→VIEW (swaps the right half while split), long-press menu (refresh + sticky split preference, the only way in/out of split). |
-| `lib/split-layout.js` | The PWA shell's split-layout verdict, keyboard-immune (V58, B22): 900px+ wide and wider than the tallest height that width has had. |
-| `lib/project-cards.js` | Landing-card assembly: sentinel-over-README precedence + worktree ordering (V55). |
-| `lib/tag-filter.js` | Landing tag bar: `collectTags` (chips, case-insensitive, counted) + `hasTag` (card match); injected into `landing.html` (V72). |
-| `lib/readme-meta.js` | README text → `{title, description, tags}`. |
-| `lib/worktree.js` | Git-worktree teardown plan (V56). |
-| `lib/file-routes.js` | `routes` glob → URL rewriting (V54). |
-| `lib/scaffold-install.js` | Command line + env for a scaffold's `npm install` — both guards against the inherited `NODE_ENV=production` (V65, B20). |
-| `lib/term-sessions.js` | Develop-pane tab map io + the agent validator (V47, V68). |
-| `lib/term-agents.js` | The develop `+` menu: which agent a new tab runs (V68). |
-| `lib/term-relay.js` | Watched-terminal registry, held-prompt store and per-tab state behind `/api/term-*`, plus the SGR wheel-tick builder (V74–V77). Pure. |
-| `lib/android-input.js` | Android soft-keyboard input shim for ttyd pages (V61, B17, B23). |
-| `lib/keyboard-fit.js` | Mobile viewport fit for ttyd pages; `patchViewportMeta` + `installKeyboardFit` (V62). |
-| `lib/term-reconnect.js` | Automatic reconnect + post-reopen refit for ttyd pages (V63, V64, B19). |
-| `lib/escape-html.js` | The one server-side HTML escaper. |
-
-Fourteen helpers are shared between server and browser by injecting their
-source with `.toString()` (`tabKey`, `installTouchWheel`, `isEmbedder`,
-`tabsToReload`, `matchGlob`, `routeForPath`, `installOsc52Bridge`,
-`installKeyboardFit`, `installAndroidInput`, `installTermReconnect`,
-`makeSplitLayout`, `openAgentMenu`, `collectTags`, `hasTag`). **Those must
-stay self-contained** — no closures over module scope, no `require` inside
-them — because the browser only receives the function body. The last two go
-into `landing.html` rather than a template literal: `serveLanding` replaces
-the `/* @inject lib/tag-filter.js */` marker on every request, so the page
-stays editable on disk without a restart while the helpers come from `lib/`.
+v1 kept one `ttyd@<project>__sN.service` per tab and a
+`.develop-sessions.json` per project. `services/migrate-v1-sessions.mjs`
+turned every tab whose tmux session was alive into a hub session that KEPT
+its tmux name, let the dead ones expire, retargeted profile tabs and renamed
+each map to `.v1`. The v1 units were `disable`d but NOT stopped: the user's
+tmux server lives in one of their cgroups (stopping that unit would kill every
+session), so they run until the next reboot and never come back. The unit
+files and `ttyd-attach.sh` are gone from `/etc` and the repo.
 
 ## Glasses relay (claude-hub-g2)
 
-The G2 glasses app (`~/projects/claude-hub-g2`) reads a develop tab through
-tmux rather than ttyd — `/api/term-capture` for the text, `/api/term-input`
-for typed/spoken prompts, `/api/term-scroll` for wheel ticks — and answers
-Claude's interactive prompts through a hook:
+The G2 app reads a terminal through tmux — `/api/term-capture` for the text,
+`/api/term-input` for typed/spoken prompts, `/api/term-scroll` for wheel
+ticks — and answers Claude's interactive prompts through
+`services/glasses-relay-hook.mjs` (`node services/install-glasses-hooks.mjs`
+wires it). The hook is inert unless a glasses client polled
+`/api/term-capture/<key>` within the last 5 s; a held prompt goes back to the
+TUI when the glasses stop polling or after 540 s. The glasses compose a key as
+`<project>__<id>`; `canonicalTermKey` in `server.js` strips that prefix off a
+`hub-…` name. Until claude-hub-g2 is ported to `/api/v2/*`, `lib/g2-compat.js`
+answers its four v1 reads from v2 data.
 
-```bash
-node services/install-glasses-hooks.mjs            # wires the hook into ~/.claude/settings.json (idempotent)
-node services/install-glasses-hooks.mjs --remove   # takes exactly those entries out
-```
+## Mobile terminal input
 
-`services/glasses-relay-hook.mjs` runs on `PreToolUse` (matcher
-`AskUserQuestion`), `PermissionRequest`, `Stop` and `Notification`. **It is
-inert unless a glasses client is watching that terminal right now** — i.e.
-polled `/api/term-capture/<key>` within the last 5 s. Everywhere else it exits
-0 with no output, which Claude Code reads as "no decision", and the ordinary
-TUI dialog appears: no tmux, hub down, unwatched tab, timeout, network error,
-`GLASSES_RELAY=0`. A held prompt is released back to the TUI the moment the
-glasses stop polling, when the user double-taps it away, or after 540 s. The
-verified mechanism (V75, claude-hub-g2 SPEC §R.15): returning
-`updatedInput.answers` from the PreToolUse hook makes the TUI skip its dialog
-and Claude proceeds with the answer.
+Every `/term/<key>/` HTML response gets the shims spliced into `<head>` on the
+way through the proxy: `installOsc52Bridge` (tmux `set-clipboard` → host
+clipboard), `installTermReconnect` (V63/V64: ttyd parks on "Press ⏎ to
+Reconnect" after a network drop; the shim retries and refits), the
+scrollbar-hide style, `installTouchWheel`, `installKeyboardFit` (V62) and
+`installAndroidInput` (V61, B17/B18/B23 — Gboard drops keystrokes through
+xterm's `CompositionHelper`; the shim diffs the textarea synchronously). All
+five are `.toString()`-inlined, so they must stay self-contained. **Upgrading
+ttyd/xterm invalidates their premises** — re-check the bundle before shipping
+an upgrade; `grep -o '.\{160\}<symbol>.\{240\}'` over `/term/hub/` recovers
+any minified handler.
 
-## Mobile terminal input (Android)
+## Repo creation
 
-Every `/term/<key>/` HTML response gets four scripts spliced into `<head>` on
-the way through the proxy (`proxyRes`, `server.js`): `installOsc52Bridge`,
-the scrollbar-hide style, `installTouchWheel` (V40) and — added for B17 —
-`installKeyboardFit` (V62) plus `installAndroidInput` (V61).
-
-**Why the Android one exists.** ttyd 1.7.7 bundles xterm.js 5.x, and Gboard
-reports every character as a `keydown` with keyCode 229. xterm routes that
-into `CompositionHelper._handleAnyTextareaChanges`, which snapshots
-`textarea.value` and diffs it inside a `setTimeout(0)` guarded by
-`!_isComposing`. That loses keystrokes two ways, both worse the faster you
-type: the macrotask competes with the renderer (tmux repainting a
-full-screen TUI per echoed byte starves it), and a composition opening
-between the keydown and the timer discards the diff outright. There is no
-local echo, so a dropped character never appears — it reads as the terminal
-lagging the server.
-
-`lib/android-input.js` takes the path over. It works because of an
-**event-phase asymmetry**: xterm binds `compositionstart|update|end` on the
-textarea in the *bubble* phase, and `keydown|keypress|input` in the capture
-phase *on the textarea itself* — so a capture listener on `document` runs
-before all of them and `stopImmediatePropagation` suppresses xterm's handling
-without touching a private field. It then diffs the textarea against a mirror
-**synchronously, in the handler that observed the change**.
-
-Things that look like details but are load-bearing:
-
-- **Gated on `/Android/i`.** Desktop and iOS keep xterm's stock path; the
-  shim returns before binding anything.
-- **Exactly one sender per key**, decided at keydown by `xtermOwns`. Text
-  keys are the shim's — the IME sentinel *and* every printable key, space
-  included — and are suppressed at **both** `keydown` and `keypress`.
-  `stopImmediatePropagation` stops propagation but **not the browser's
-  default action**, so Chrome still fires `keypress` and `input`, and xterm's
-  own listeners are live on the textarea: suppressing only `keydown` lets
-  xterm send the character on top of the diff (B18). Control keys — Enter,
-  Tab, arrows, Escape, Backspace, Home/End, function keys, anything with a
-  modifier — stay xterm's, and the textarea change they cause is *adopted*
-  into the mirror rather than re-sent.
-- **DEL per codepoint, not per UTF-16 unit** — a line editor erases an emoji
-  with one backspace, and the prefix scan refuses to land between surrogates.
-- **The textarea is never emptied.** Gboard only emits
-  `deleteContentBackward` when there is something to delete, so an empty box
-  silently eats backspaces. It is trimmed to a 64-char tail past 512 instead —
-  and only at a whitespace boundary, because rewriting the box mid-word moves
-  text under Gboard's composing region (tracked by offset) and desyncs the
-  keyboard from the DOM (B18). A 2048 hard cap is the escape hatch.
-- **`focusin` re-seeds the mirror — every time, not just on first sight of
-  the element.** Two jobs in one listener. It means an `input` with no
-  preceding keydown (voice, suggestion-strip tap) is diffed rather than
-  swallowed; and it resyncs after **xterm empties the box on blur**
-  (`_handleTextAreaBlur` does `this.textarea.value = ''`). Without the
-  re-seed the mirror kept the pre-blur text, so the first character typed on
-  return diffed against it and sent one DEL per stale char — deleting a line
-  or two of whatever was already at the prompt (B23). The pairing is exact:
-  xterm clears on the element's `blur`, the shim re-seeds on its `focusin`,
-  and nothing can type into an unfocused textarea, so whatever the box holds
-  when focus lands is neither the shim's to send nor its to delete. The same
-  listener clears `composing` and `adoptNextInput`, neither of which can
-  survive a focus change.
-- Only public xterm API is used: `term.textarea`, `term.input(data, true)`,
-  `term.scrollToBottom()`.
-
-> **Verifying a change here: hook `term.onData`, not `term.input`.** xterm's
-> own path calls `coreService.triggerDataEvent()` directly and never goes
-> through the public `term.input()`, so wrapping `input` shows you only the
-> shim's output and will happily report "no duplicates" while xterm is
-> double-sending beside you. `onData` is the only hook that sees both. That
-> mistake is what let B18 ship.
-
-`installKeyboardFit` is the other half. It used to forward *every*
-visualViewport `resize` as a synthetic `window` `resize`; ttyd binds that
-straight to `fitAddon.fit()` with **no debounce**, and a fit that lands on new
-rows/cols sends `RESIZE_TERMINAL` → SIGWINCH → full TUI repaint. Gboard fires
-vv `resize` for no-op suggestion-strip toggles as you type, so that was a
-whole redraw per keystroke competing with input. It now drops resizes that
-changed neither dimension and coalesces the dispatch to one per animation
-frame (V62).
-
-## Terminal reconnect (V63, V64, B19)
-
-`installTermReconnect` is the fifth injected shim, and the second that wraps
-`window.WebSocket` — it goes in AFTER `installOsc52Bridge` so the nesting is
-`ReconnectWrapped(Osc52Wrapped(native))` and every socket still flows through
-osc52's message scanner. Head-parse timing, no DOMContentLoaded gate, for the
-same reason osc52 has none: ttyd constructs its socket from
-`componentDidMount`, and a gated wrapper would arrive too late.
-
-**What it undoes.** ttyd 1.7.7's `connect()` registers
-`addEventListener(socket, 'error', () => this.doReconnect = false)`, and
-`onSocketClose` reads `doReconnect` to choose between reconnecting and parking
-on `Press ⏎ to Reconnect`. Every real network loss — a phone sleeping, a
-wifi↔cellular handoff — fires `error` before `close`, so the automatic branch
-was effectively dead code. The shim simply never registers that listener.
-
-**Where the backoff comes from.** ttyd reconnects the instant its close
-handler runs, so the shim holds that handler and calls it later; the delay
-before delivery IS the retry delay. Nothing of ttyd's is patched, and holding
-the close defers `dispose()` too, which keeps the refit binding alive for the
-whole wait.
-
-**Why the refit is separate.** `dispose()` drops `initListeners()`'s
-`window 'resize' → fitAddon.fit()` binding, so xterm keeps its pre-drop
-cols/rows while the socket is down and `onSocketOpen` re-handshakes with them.
-The shim calls `window.term.fit` — set in ttyd's `open()` and never torn down —
-rather than dispatching a synthetic resize, because V62's dedupe drops a
-forwarded resize when neither viewport dimension changed, which is exactly the
-case that still needs a refit.
-
-> Reading the bundle beats guessing: it is one ~735KB inlined file at
-> `/term/<key>/`, and `grep -o '.\{160\}<symbol>.\{240\}'` over it recovers
-> the minified source of any handler you need. That is how the `error` listener
-> and the `window.term.fit` hook above were both confirmed rather than assumed.
+`POST /api/projects` body `{name, template, github: {mode: skip|clone|create|onboard,
+source?, visibility?}, firebase?, profile?}`. Templates: `vite` (default),
+`game-2d`, `game-3d`, `game-3d-complex`, `jekyll`, `evenhub`, `none`.
+Vite-family scaffolds copy `templates/<id>/` with `<NAME>`/`<PORT>`/`<NAMESLUG>`
+replaced, allocate a port ≥ 5173, `npm install` with `NODE_ENV=development`
+(B20 — the hub's own `NODE_ENV=production` would skip devDependencies) and
+enable `vite@<name>.service`; `jekyll` bundles into `vendor/bundle` and enables
+`jekyll@<name>.service` on a 4000s port. Every path ends by creating a hub
+session in the folder, seeded with the bootstrap prompt
+(`lib/bootstrap-prompt.js`), and returns `{name, sessionId, termKey, termUrl}`.
+Template trees are UTF-8 text only (V71); every vite template sets
+`server.allowedHosts: ['.ts.net', 'localhost']` (V66, B21).
 
 ## Common ops
 
 ```bash
-# status / logs
-systemctl is-active claude-hub.service
+systemctl is-active claude-hub.service ttyd-hub.service
 journalctl -u claude-hub.service -f
-
-# restart after editing server.js (node holds it in memory).
-# landing.html is read from disk per request — no restart needed.
-sudo systemctl restart claude-hub.service
-
-# probe routes locally
-curl -sI http://127.0.0.1:8002/
-curl -s   http://127.0.0.1:8002/api/projects | jq .
-curl -s   http://127.0.0.1:8002/api/view-tree/<project> | jq .
+sudo systemctl restart claude-hub.service      # server.js / lib/ are held in memory
+                                               # v2/* is read per request — no restart
+curl -s http://127.0.0.1:8002/api/v2/sessions | jq .
+curl -s http://127.0.0.1:8002/api/v2/services | jq .
 ```
 
-## Project creation
+## Where the code lives
 
-Default template = **Vite (React + TypeScript)**. `POST /api/projects` body
-field `template: 'none' | 'vite' | 'game-2d' | 'game-3d' | 'game-3d-complex' | 'jekyll' | 'evenhub'`
-(default `'vite'`; unknown coerced to `'vite'`; forced to `'none'` when
-`github.mode ∈ {clone, onboard}`). Optional `firebase: bool` opt-in (forced
-false on `none`/clone/onboard/`jekyll`). Clone source on the dialog comes from
-`GET /api/gh/repos` (cached 10 min) — only the user's own repos are listed.
-Cloning someone else's repo = fork on github.com first; the fork appears in
-the dropdown. `POST /api/projects` still accepts an arbitrary `source` slug
-or URL for power-user direct calls.
+| module | what |
+|---|---|
+| `lib/v2-routes.js` | the `/v2/` files, `/api/v2/*`, markdown render, `claude -p` completion |
+| `lib/v2-layout.js` | split/panel tree, pure, shared with the browser |
+| `lib/v2-paths.js`, `lib/v2-fs.js` | the path guard; list/read/write/diff/log |
+| `lib/v2-profiles.js`, `lib/v2-sessions.js`, `lib/v2-services.js`, `lib/v2-titles.js` | the stores and discovery |
+| `lib/claude-registry.js`, `lib/claude-transcript.js`, `lib/session-title.js` | Claude Code's live registry, its transcripts, the titler's digest + prompt |
+| `lib/v1-migrate.js`, `lib/g2-compat.js` | the v1 migration; the glasses shim (delete when g2 is ported) |
+| `lib/term-relay.js` | watched-terminal registry + held prompts behind `/api/term-*` |
+| `lib/template.js`, `lib/template-policy.js`, `lib/port-alloc.js`, `lib/scaffold-install.js`, `lib/onboard.js`, `lib/gh-repos.js`, `lib/bootstrap-prompt.js`, `lib/file-routes.js`, `lib/readme-meta.js` | repo creation and the sentinel readers |
+| `lib/android-input.js`, `lib/keyboard-fit.js`, `lib/term-reconnect.js`, `lib/osc52.js`, `lib/touch-wheel.js` | the injected terminal shims |
+| `v2/app.js`, `v2/tabs.js`, `v2/tab-home.js`, `v2/tab-file.js`, `v2/app.css`, `v2/index.html` | the workspace, tab kinds, Home + Explorer, the file tab |
 
-**Template catalog** — every vite-family template shares one
-`vite@<name>.service` (no per-template unit). `jekyll` is the one exception: a
-Ruby/Bundler project with its own `jekyll@<name>.service`.
+See `SPEC.md` §V for the invariants and §B for every bug that got out.
 
-| `template` | Stack | Entry | Unit |
-|---|---|---|---|
-| `vite` | React + TypeScript | `src/main.tsx` | `vite@` |
-| `game-2d` | Phaser 3 (2D engine) | `src/main.ts` | `vite@` |
-| `game-3d` | react-three-fiber + Three + rapier + zustand ("Simple 3D") | `src/App.tsx` | `vite@` |
-| `game-3d-complex` | Babylon.js + Havok + inspector ("Complex 3D") | `src/main.ts` | `vite@` |
-| `jekyll` | Jekyll + minima (Ruby, Markdown site) | `README.md` (`permalink: /`) | `jekyll@` |
-| `evenhub` | Even Realities G2 glasses app (Vite + TS + `@evenrealities/even_hub_sdk`), companion page installable as a PWA | `src/main.ts` (phone) + `src/glasses.ts` (G2) | `vite@` |
-
-`scaffoldProject(dir, name, template, {firebase})` dispatches: `jekyll` →
-`bootstrapJekyll`, everything else → `bootstrapTemplate`.
-
-Vite-family scaffold (`bootstrapTemplate`):
-
-1. `templates/<template>/` copied with `<NAME>`, `<PORT>` and `<NAMESLUG>` placeholders replaced (`template` id == dir name, 1:1).
-   `<NAMESLUG>` is the name reduced to lowercase alphanumerics with a letter forced in front (`lib/template.js`'s
-   `nameSlug`) — only `evenhub` uses it, for the reverse-domain `package_id` in `app.json`.
-2. Free port ≥ 5173 allocated by scanning sibling projects' `.project-meta.json` `proxyTarget`.
-3. If `firebase` → `templates/_firebase/` overlaid (adds `src/firebase.ts`, `.env.example`, `firebase.json`, `.firebaserc`).
-4. `.project-meta.json` stamped: `template: '<template>'`, `proxyTarget`, `proxyPrefix: /<name>`, `stripPrefix: false`, `openUrl: /<name>/`, `extraUnits: ['vite@<name>.service']`.
-5. `npm install --include=dev` (+ `npm install firebase --include=dev` when overlaid) with `NODE_ENV=development`, 5 min timeout, in scaffolded dir. Both come from `lib/scaffold-install.js` — see V65/B20 for why the flag and the env are BOTH required.
-6. `sudo systemctl enable --now vite@<name>.service`.
-
-Jekyll scaffold (`bootstrapJekyll`, V52):
-
-1. `templates/jekyll/` copied with `<NAME>`/`<PORT>` replaced; `serve-local.sh` `chmod +x` (copyTemplate writes 0644).
-2. Free port allocated from the **4000s** (`allocatePort(root, 4000)`) so jekyll ports never collide with the vite 5173+ range.
-3. `.project-meta.json` stamped like above but `extraUnits: ['jekyll@<name>.service']`.
-4. `BUNDLE_GEMFILE=Gemfile.local bundle install` into a project-local `vendor/bundle` (`.bundle/config`), 5 min timeout. No firebase (not an npm project).
-5. `sudo systemctl enable --now jekyll@<name>.service`.
-
-`template: 'none'` skips all of this — bare `AGENTS.md` + `README.md` + `SPEC.md` + sentinel only (V67: every project gets a spec, bare included).
-
-**Static deploy** — games are meant to ship to static hosting, not run from
-the hub long-term. Each template ships `build:pages` (`vite build
---base=/<NAME>/`, GitHub Pages — base = repo name) and `build:firebase`
-(`--base=/`, Firebase Hosting), plus `.github/workflows/pages.yml`. The dev
-base stays `/<NAME>/` for the proxy (V20). The `firebase` overlay adds
-`firebase.json` (Hosting → `dist`) for `firebase deploy`.
-
-### Manual (without the + card)
-
-1. `mkdir ~/projects/<name>` and add `AGENTS.md` + `README.md` + `SPEC.md` (start from any `templates/*/SPEC.md.template`; protocol in [`SDD.md`](./SDD.md)).
-2. Drop `.project-meta.json` (schema above).
-3. `sudo systemctl enable --now ttyd@<name>.service` — only systemd touch needed for terminal access. `/term/<name>/` route resolves dynamically as soon as `/run/ttyd/<name>.sock` appears.
-4. (Optional) If project has live web app, set `proxyTarget` (and `stripPrefix` / `proxyPrefix` as needed) in `.project-meta.json`, point `openUrl` at prefix. claude-hub picks up on next request — no restart.
-
-## Gotchas
-
-- **Stale node process** — `server.js` lives in V8 memory; edits don't apply until `systemctl restart claude-hub.service`. `landing.html` is read per request, no restart needed. Same for anything under `lib/` — it's `require`d into the same process.
-- **Game template = vite project** — `game-2d`/`game-3d`/`game-3d-complex` ride the one `vite@<name>.service`, not a per-template unit. New template? Make it a vite project (reuse `vite@`) — or, like `jekyll`, give it its own scaffolder + `<kind>@<name>.service` and dispatch it in `scaffoldProject`.
-- **`evenhub` is served, never packed** — the G2 loads the app from the live proxy URL (`evenhub qr --url https://<gpu-host>/<name>/`), and the same page installs on the phone as a PWA. No `.ehpk` in the dev loop; if you ever pack for the store, build with a **relative** base (`vite build --base=./`), because a packed app is not served from `/<name>/`. Two rules keep both halves alive: nothing may top-level-`await waitForEvenAppBridge()` (it never settles outside the Even App WebView, so the installed PWA would hang blank — `src/glasses.ts`'s `connectBridge()` races it against a timeout), and `public/sw.js` caches nothing (it exists for installability; a cache would serve the glasses a stale bundle). `vite.config.ts` `base` == manifest `start_url`/`scope` == sentinel `proxyPrefix`, all one string.
-- **Template trees are UTF-8 only** — `copyTemplate` reads and writes every file as text, so a PNG committed under `templates/` arrives corrupted. That is why `templates/evenhub/public/icon.svg` is an SVG. Scaffolded projects have no such limit.
-- **Jekyll template is the non-vite exception** — `jekyll` is Ruby/Bundler, scaffolded by `bootstrapJekyll` (not `bootstrapTemplate`), runs under `jekyll@<name>.service`, ports allocated from the 4000s (not 5173+), no firebase. `serve-local.sh` carries the baked `--baseurl /<name>` + port; the unit just execs it. README.md (`permalink: /`) is the site index.
-- **Greenfield bootstrap prompt is stack-aware** — `writeBootstrapPrompt(dir, name, 'greenfield', {templateId, firebase})` injects a `STACK[templateId]` blurb so a fresh session greets oriented. New template → add a `STACK` entry in `lib/bootstrap-prompt.js`.
-- **Vite base path splits** — dev base = `/<NAME>/` (proxy needs it, V20). Static deploy: `build:pages` bakes `/<NAME>/`, `build:firebase` bakes `/`. Don't unify.
-- **Firebase keys are public** — `VITE_FIREBASE_*` ship in the bundle by design. Gate access with Firestore/Storage security rules, not key secrecy.
-- **Never `rm -rf` a worktree project** — the parent repo holds its registry entry. Use the UI's delete (which runs `git worktree remove`) or `git -C ~/projects/<parent> worktree remove --force <dir>`. If one got removed the hard way, `git -C ~/projects/<parent> worktree prune` cleans up (B16).
-- **Upgrading ttyd/xterm invalidates the Android input shim's premise** — `lib/android-input.js` (V61) relies on xterm binding `compositionstart|update|end` in the *bubble* phase and on the public `term.textarea` / `term.input()` / `term.scrollToBottom()` surface. It is also paired with `_handleTextAreaBlur` emptying the textarea (B23). Re-check all three against the new bundle before shipping an upgrade; if upstream ever fixes `_handleAnyTextareaChanges` (the `setTimeout(0)` + `!_isComposing` drop, B17), delete the shim rather than stacking it on a fixed path.
-- **Vite `allowedHosts` must cover the tailnet host** — Vite 403s (`Blocked request. This host … is not allowed`) any `Host` it doesn't recognise, and the proxy forwards the original header (`changeOrigin: false`). Loopback tests pass while the tailnet URL fails, so **test through the real URL, not just `127.0.0.1:8002`**. Use the suffix wildcard `allowedHosts: ['.ts.net', 'localhost']` — it matches any MagicDNS name without committing a hostname. All four vite-family templates now ship this (V66); it was missing from every one of them until B21, so only *hand-built* projects had it and every scaffolded project 403'd on the tailnet URL.
-- **Nothing the hub spawns should inherit its `NODE_ENV`** — `claude-hub.service` runs with `Environment=NODE_ENV=production`, and a child inherits it. npm reads `NODE_ENV=production` as `--omit=dev`, which is what silently gutted every scaffold (B20): devDependencies skipped, **exit code still 0**, so the failure cleanup never fired and the project only died later in `vite@<name>.service`. The install's command line and env both come from `lib/scaffold-install.js` now — if you add another npm/node shell-out, route it through there rather than calling `npm install` bare. The `bundle install` for Jekyll is unaffected (bundler keys off `BUNDLE_WITHOUT`/`RACK_ENV`, not `NODE_ENV`), and the systemd units are too — a unit gets its environment from systemd, not from the hub, which is why `vite@.service`'s own `NODE_ENV=development` was never in question.
-
-See `SPEC.md` §B (bugs) + §V (invariants) for full history. Backprop new bugs into it — trace the cause, decide whether a `§V` would catch the class, write the failing test first: [`SDD.md`](./SDD.md) → "Backprop".
-
-## Sharing across devices
-
-Proxy binds `127.0.0.1` only — by design not reachable from LAN. Tailscale is the tested path for phone/laptop access. See the `tailscale` skill (in `.claude/skills/tailscale/`) for setup and Funnel notes.
 ## Hindsight memory (optional)
 
-Per-repo long-term memory for Claude sessions on this box. It is *harness-level* —
-it lives in `~/.hindsight/` and `~/.claude/`, not in this repo — and claude-hub
-neither requires nor references it: no route, unit or project sentinel touches it,
-and uninstalling it changes nothing here.
-
-Install, version table, the reasoning behind each config value, verification and
-gotchas: **[`HINDSIGHT.md`](HINDSIGHT.md)**.
-
-Keep that file's version table current whenever any part of the stack is upgraded.
-Every failure mode in it degrades silently by design — a memory-less session looks
-exactly like a healthy one — so the table is the only baseline a drift check has.
+Per-repo long-term memory for Claude sessions on this box — harness-level, in
+`~/.hindsight/` and `~/.claude/`, nothing here depends on it. Install, version
+table and gotchas: [`HINDSIGHT.md`](HINDSIGHT.md).

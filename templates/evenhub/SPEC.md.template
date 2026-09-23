@@ -2,7 +2,7 @@
 
 Durable memory for this project — reload it at the start of every session.
 Format, encoding & the maintenance protocol (how a new requirement retires an
-old one): `~/projects/claude-hub/SDD.md`, browsable at `/view/claude-hub/SDD.md`.
+old one): `~/projects/claude-hub/SDD.md`.
 
 ## §G GOAL
 
@@ -25,7 +25,7 @@ rewrite before the first feature (§T.1). ⊥ leave this placeholder standing.
 - `src/glasses.ts`: `connectBridge(timeoutMs?) → EvenAppBridge | null`, `startGlassesPage(bridge, content) → GlassesSession {render, onTap, close}`
 - `public/manifest.webmanifest` — `start_url`/`scope` `/<NAME>/`; `public/sw.js` — pass-through, scope `/<NAME>/`
 - `app.json` — Even Hub manifest: `package_id` (lowercase alnum segments, ⊥ hyphens), `name` (≤20 chars), `permissions[]`
-- card: `README.md` H1 → title, ¶1 → description, frontmatter `tags: [...]` → badges
+- `README.md` H1 → the project's title, ¶1 → its one-sentence description
 
 ## §V INVARIANTS
 
@@ -37,7 +37,7 @@ rewrite before the first feature (§T.1). ⊥ leave this placeholder standing.
 - V6: double-tap → `shutDownPageContainer` checked at the ROOT of the event handler, before the tap branch, whichever envelope carried it. it is the user's only exit.
 - V7: tap/double-tap/lifecycle ← `event.sysEvent`; scroll ← `event.textEvent`. ⊥ mix. `CLICK_EVENT` is 0 & protobuf omits zero-valued fields ∴ the `?? CLICK_EVENT` default resolves INSIDE the envelope check — outside it, every scroll/exit/audio frame fires the tap handler.
 - V8: `app.json` `package_id` = lowercase letters+digits per dot-segment, each starting w/ a letter; `name` ≤ 20 chars; `edition` = `202601`. `evenhub pack` rejects otherwise.
-- V9: `README.md` H1/¶1/`tags` = the landing card's title/description/badges. ⊥ let them drift from §G.
+- V9: `README.md` H1/¶1 = the project's title/description. ⊥ let them drift from §G.
 - V10: still ⊥ top-level `await waitForEvenAppBridge()` — it can also never settle (no bridge object at all), which hangs the installed PWA blank. all bridge access goes through `connectBridge()`'s timeout race → `null`.
 - V11: a host-less bridge is the NORMAL standalone case: `startGlassesPage` → `null`, page says "No glasses". ⊥ throw / render an error — that is what every plain-browser visit would show.
 

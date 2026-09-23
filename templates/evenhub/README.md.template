@@ -1,12 +1,8 @@
----
-tags: [Glasses]
----
-
 # <NAME>
 
 An Even Realities G2 smart-glasses app. Vite + TypeScript + `@evenrealities/even_hub_sdk`, served live at `/<NAME>/` and installable on the phone as a PWA.
 
-Replace this paragraph with a one-sentence card description after you know what you're building.
+Replace this paragraph with a one-sentence description after you know what you're building.
 
 ## Put it on the glasses
 

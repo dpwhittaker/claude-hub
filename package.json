@@ -1,7 +1,7 @@
 {
   "name": "claude-hub",
   "version": "1.0.0",
-  "description": "Local landing page + path-routed reverse proxy for projects you spin up at home. Each project shows up as a card with Open / Develop (browser terminal running Claude Code in tmux) / Browse (two-pane file viewer). Optional Tailscale serve on top to share with your other devices.",
+  "description": "One page over every session, service and file under ~/projects: profiles, free-form panels, terminals in tmux that survive reconnects, a rootless file browser with raw/view/edit/diff, and a path-routed reverse proxy in front of each project's dev server. Tailnet-private via Tailscale.",
   "private": true,
   "type": "commonjs",
   "main": "server.js",
@@ -15,8 +15,7 @@
   },
   "dependencies": {
     "http-proxy": "^1.18.1",
-    "marked": "^18.0.3",
-    "ws": "^8.20.0"
+    "marked": "^18.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

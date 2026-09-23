@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { makeTitleStore, cleanTitle } = require('../lib/v2-titles');
 const { digestTranscript, buildPrompt, parseReply, validTitle, USER_NAME_FLOOR } = require('../lib/session-title');
-const { readSessionTitle, readTranscriptTitle, readTranscriptLastAt } = require('../lib/term-sessions');
+const { readSessionTitle, readTranscriptTitle, readTranscriptLastAt } = require('../lib/claude-transcript');
 const { readLiveSessions, parseEntry } = require('../lib/claude-registry');
 
 const U1 = '11111111-2222-3333-4444-555555555555';

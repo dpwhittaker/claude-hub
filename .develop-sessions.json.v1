@@ -1,0 +1,13 @@
+{
+  "sessions": {
+    "s1": {
+      "uuid": "1a07ea7d-b7ff-4bf6-aea4-c746845bf1b6",
+      "agent": "claude"
+    },
+    "s2": {
+      "uuid": "ddfb63b6-18e5-4d29-882d-a5638326d157",
+      "agent": "claude"
+    }
+  },
+  "lastActive": "s1"
+}

@@ -58,3 +58,15 @@ test('V83: get / update / remove', () => {
   assert.equal(termKey('abc'), 'hub-abc');
   assert.equal(termUrl('abc'), '/term/hub/?arg=abc');
 });
+
+test('V96: an explicit termKey (a migrated v1 tab) is kept and served; a bad one is refused', () => {
+  const { s } = store();
+  const m = s.create({ cwd: 'proj', agent: 'codex', termKey: 'proj__s3', uuid: '11111111-2222-3333-4444-555555555555' });
+  assert.equal(m.termKey, 'proj__s3');
+  assert.equal(m.uuid, '11111111-2222-3333-4444-555555555555');
+  assert.equal(s.get(m.id).termKey, 'proj__s3');
+  assert.equal(s.update(m.id, { title: 't' }).termKey, 'proj__s3', 'update keeps it');
+  assert.equal(s.create({ cwd: 'proj' }).termKey.slice(0, 4), 'hub-', 'default is hub-<id>');
+  assert.throws(() => s.create({ cwd: 'proj', termKey: '../x' }), (e) => e.statusCode === 400);
+  assert.throws(() => s.create({ cwd: 'proj', uuid: 'nope' }), (e) => e.statusCode === 400);
+});

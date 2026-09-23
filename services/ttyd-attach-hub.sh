@@ -36,9 +36,9 @@ if [[ ! -f "$FILE" ]]; then
 fi
 
 # One field per line, in a fixed order, so bash needs no JSON parser.
-{ read -r CWD; read -r AGENT; read -r UUID; read -r PROFILE; } < <(node -e '
+{ read -r CWD; read -r AGENT; read -r UUID; read -r PROFILE; read -r TERMKEY; } < <(node -e '
   const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  for (const k of ["cwd", "agent", "uuid", "profile"]) console.log(String(s[k] == null ? "" : s[k]).replace(/\n/g, " "));
+  for (const k of ["cwd", "agent", "uuid", "profile", "termKey"]) console.log(String(s[k] == null ? "" : s[k]).replace(/\n/g, " "));
 ' "$FILE")
 
 DIR="$PROJECTS_ROOT${CWD:+/$CWD}"
@@ -47,7 +47,13 @@ if [[ ! -d "$DIR" ]]; then
     exit 1
 fi
 
-KEY="hub-$ID"
+# The tmux session name: hub-<id>, or the name a session migrated from v1
+# already had (its tmux session was never renamed).
+KEY="${TERMKEY:-hub-$ID}"
+if [[ ! "$KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+    echo "bad termKey in $FILE" >&2
+    exit 1
+fi
 INSTRUCTIONS="$HUB_DIR/profiles/$PROFILE/CLAUDE.md"
 
 case "$AGENT" in

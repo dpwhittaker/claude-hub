@@ -15,12 +15,19 @@ async function json(url, init) {
 }
 const post = (url, body, method = 'POST') => json(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
+const U1 = '11111111-1111-1111-1111-111111111111';
+// A session the v1 migration would have produced: keeps the tmux name proj__s1.
+async function migratedSession(url) {
+  const r = await post(url + '/api/v2/sessions', { cwd: 'proj', agent: 'claude', termKey: 'proj__s1', uuid: U1 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return r.body;
+}
+
 function seed(root) {
   fs.mkdirSync(path.join(root, 'proj/src'), { recursive: true });
   fs.writeFileSync(path.join(root, 'proj/.project-meta.json'), JSON.stringify({ name: 'proj', proxyTarget: 'http://127.0.0.1:59999', routes: [{ match: '**/*.md', to: '/:dir/:name.html' }] }));
   fs.writeFileSync(path.join(root, 'proj/README.md'), '---\ntags: [AI]\n---\n# Proj\n\nHello *world*.\n');
   fs.writeFileSync(path.join(root, 'proj/src/a.js'), 'const a = 1;\n');
-  fs.writeFileSync(path.join(root, 'proj/.develop-sessions.json'), JSON.stringify({ sessions: { s1: { uuid: '11111111-1111-1111-1111-111111111111', agent: 'claude' } }, lastActive: 's1' }));
   fs.writeFileSync(path.join(root, 'AGENTS.md'), 'root notes\n');
   const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
   execFileSync('git', ['-C', path.join(root, 'proj'), 'init', '-q'], { env });
@@ -28,10 +35,10 @@ function seed(root) {
   execFileSync('git', ['-C', path.join(root, 'proj'), 'commit', '-q', '-m', 'init'], { env });
 }
 
-test('v2 shell + layout lib are served; /v2 redirects to /v2/', async () => {
+test('V96: the workspace is served at /, /v2/ comes home, and its files stay under /v2/', async () => {
   const fx = await startFixture({ seed });
   try {
-    const r = await fetch(fx.url + '/v2/');
+    const r = await fetch(fx.url + '/');
     assert.equal(r.status, 200);
     assert.match(r.headers.get('content-type'), /text\/html/);
     const html = await r.text();
@@ -45,9 +52,13 @@ test('v2 shell + layout lib are served; /v2 redirects to /v2/', async () => {
     const lib = await (await fetch(fx.url + '/v2/lib/v2-layout.js')).text();
     assert.match(lib, /window\.HubLayout=module\.exports/);
     assert.match(lib, /function splitPanel/);
-    const redir = await fetch(fx.url + '/v2', { redirect: 'manual' });
-    assert.equal(redir.status, 301);
-    assert.equal(redir.headers.get('location'), '/v2/');
+    for (const old of ['/v2', '/v2/', '/landing.html']) {
+      const redir = await fetch(fx.url + old + '?profile=x', { redirect: 'manual' });
+      assert.equal(redir.status, 301, old);
+      assert.equal(redir.headers.get('location'), '/?profile=x', old);
+    }
+    assert.equal((await fetch(fx.url + '/p/proj/')).status, 404, 'the PWA shell is gone');
+    assert.equal((await fetch(fx.url + '/api/view-tree/proj')).status, 200, 'but the glasses shim answers');
     assert.equal((await fetch(fx.url + '/v2/../server.js')).status, 404);
     assert.equal((await fetch(fx.url + '/v2/nope.txt')).status, 404);
   } finally { await fx.close(); }
@@ -99,16 +110,17 @@ test('V82: profiles round-trip through the API with rev conflicts', async () => 
   } finally { await fx.close(); }
 });
 
-test('V83: sessions API creates records anywhere under the root and lists legacy tabs beside them', async () => {
+test('V83/V96: sessions API creates records anywhere under the root; a migrated session keeps its tmux name', async () => {
   const fx = await startFixture({ seed });
   try {
     const before = await json(fx.url + '/api/v2/sessions');
     assert.equal(before.status, 200);
-    const legacy = before.body.sessions.find((s) => s.kind === 'legacy');
-    assert.ok(legacy, 'legacy tab listed');
-    assert.equal(legacy.id, 'proj__s1');
-    assert.equal(legacy.termUrl, '/term/proj__s1/');
-    assert.equal(typeof legacy.running, 'boolean');
+    assert.deepEqual(before.body.sessions, []);
+    const mig = await migratedSession(fx.url);
+    assert.equal(mig.termKey, 'proj__s1');
+    assert.equal(mig.termUrl, '/term/hub/?arg=' + mig.id);
+    assert.equal(mig.uuid, U1);
+    assert.equal((await post(fx.url + '/api/v2/sessions', { cwd: 'proj', termKey: '../x' })).status, 400);
     const c = await post(fx.url + '/api/v2/sessions', { cwd: 'proj/src', agent: 'shell', profile: 'david' });
     assert.equal(c.status, 200, JSON.stringify(c.body));
     assert.equal(c.body.kind, 'hub');
@@ -183,9 +195,10 @@ test('V79/V81: file API — list, stat with previewUrl, text read/write with 409
 test('V90: titles API round-trips and the sessions list prefers hub title → transcript title', async () => {
   const fx = await startFixture({ seed });
   try {
-    const uuid = '11111111-1111-1111-1111-111111111111'; // the seeded legacy tab's uuid
+    const uuid = U1;
+    const mig = await migratedSession(fx.url);
     let r = await json(fx.url + '/api/v2/sessions');
-    let legacy = r.body.sessions.find((s) => s.id === 'proj__s1');
+    let legacy = r.body.sessions.find((s) => s.id === mig.id);
     assert.equal(legacy.title, null, 'no transcript, no hub title → null');
     assert.equal((await json(fx.url + '/api/v2/titles/' + uuid)).status, 404);
     const set = await post(fx.url + '/api/v2/titles', { uuid, title: '"Refactor The Tab Strip."', source: 'auto' });
@@ -193,7 +206,7 @@ test('V90: titles API round-trips and the sessions list prefers hub title → tr
     assert.equal(set.body.title, 'Refactor The Tab Strip');
     assert.equal((await json(fx.url + '/api/v2/titles/' + uuid)).body.title, 'Refactor The Tab Strip');
     r = await json(fx.url + '/api/v2/sessions');
-    legacy = r.body.sessions.find((s) => s.id === 'proj__s1');
+    legacy = r.body.sessions.find((s) => s.id === mig.id);
     assert.equal(legacy.title, 'Refactor The Tab Strip');
     assert.equal((await post(fx.url + '/api/v2/titles', { uuid: 'nope', title: 'x' })).status, 400);
     assert.equal((await post(fx.url + '/api/v2/titles', { uuid, title: '' })).status, 400);
@@ -209,6 +222,7 @@ test('V92/V90: a live claude session (Claude registry) supplies status, its curr
   const fx = await startFixture({ seed });
   try {
     const LIVE = '33333333-3333-3333-3333-333333333333';
+    const mig = await migratedSession(fx.url);
     // Pretend the seeded v1 tab's tmux session runs THIS process (alive pid) and moved to a new id after a /clear.
     const statusAt = Date.now() - 3600000; // an hour ago: tmux will be "active" right now, and must not win
     fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'renamed-by-user', nameSource: 'user', nameSince: Date.now(), status: 'waiting', statusUpdatedAt: statusAt, updatedAt: statusAt }));
@@ -216,25 +230,26 @@ test('V92/V90: a live claude session (Claude registry) supplies status, its curr
     let tmuxOk = true;
     try { execFileSync('tmux', ['new-session', '-d', '-s', 'proj__s1', 'sleep 30']); } catch { tmuxOk = false; }
     if (!tmuxOk) return; // no tmux on this box — nothing to assert
-    let s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    let s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === mig.id);
     assert.equal(s.running, true);
     assert.equal(s.activity, 'waiting');
     assert.equal(s.uuid, LIVE, 'the live id replaces the launch id');
     assert.equal(s.title, 'renamed-by-user');
     assert.equal(s.lastActive, statusAt, 'a live claude session\'s recency is the registry\'s status change (B32), not tmux activity');
-    const map = JSON.parse(fs.readFileSync(path.join(fx.projectsRoot, 'proj', '.develop-sessions.json'), 'utf8'));
-    assert.equal(map.sessions.s1.uuid, LIVE, 'the v1 map follows so a reboot resumes the right conversation');
+    const rec = JSON.parse(fs.readFileSync(path.join(fx.hubStateDir, 'sessions', mig.id + '.json'), 'utf8'));
+    assert.equal(rec.uuid, LIVE, 'the record follows so a reboot resumes the right conversation');
+    assert.equal(rec.termKey, 'proj__s1', 'and keeps its tmux name');
     // A newer hub auto-title beats the user's older name; an older one does not.
     await post(fx.url + '/api/v2/titles', { uuid: LIVE, title: 'Auto Title Later' });
-    s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === mig.id);
     assert.equal(s.title, 'Auto Title Later');
     fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'renamed-again', nameSource: 'user', nameSince: Date.now() + 60000, status: 'idle', updatedAt: Date.now() }));
-    s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === mig.id);
     assert.equal(s.title, 'renamed-again', 'a /rename after the auto title wins');
     assert.equal(s.activity, 'idle');
     // A derived placeholder name never shows.
     fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'proj-1a', nameSource: 'derived', nameSince: Date.now() + 120000, status: 'busy', updatedAt: Date.now() }));
-    s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === mig.id);
     assert.equal(s.title, 'Auto Title Later');
     assert.equal(s.activity, 'busy');
   } finally {
@@ -250,6 +265,7 @@ test('V95: POST /api/v2/term/<key>/suspend kills a known tmux session and refuse
     let tmuxOk = true;
     try { execFileSync('tmux', ['new-session', '-d', '-s', 'proj__s1', 'sleep 30']); } catch { tmuxOk = false; }
     if (!tmuxOk) return;
+    const mig = await migratedSession(fx.url);
     assert.equal((await post(fx.url + '/api/v2/term/nope__s9/suspend', {})).status, 404, 'not a session the hub knows');
     assert.equal((await post(fx.url + '/api/v2/term/..%2Fx/suspend', {})).status, 400);
     const r = await post(fx.url + '/api/v2/term/proj__s1/suspend', {});
@@ -257,13 +273,46 @@ test('V95: POST /api/v2/term/<key>/suspend kills a known tmux session and refuse
     assert.deepEqual(r.body, { key: 'proj__s1', suspended: true });
     assert.throws(() => execFileSync('tmux', ['has-session', '-t', '=proj__s1'], { stdio: 'ignore' }), 'the tmux session is gone');
     assert.equal((await post(fx.url + '/api/v2/term/proj__s1/suspend', {})).status, 404, 'already stopped');
-    const s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    const s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === mig.id);
     assert.ok(s, 'the record survives a suspend');
     assert.equal(s.running, false);
   } finally {
     try { execFileSync('tmux', ['kill-session', '-t', '=proj__s1']); } catch {}
     await fx.close();
   }
+});
+
+test('V97: the glasses shim serves the four v1 reads from v2 data', async () => {
+  const fx = await startFixture({ seed });
+  try {
+    const mig = await migratedSession(fx.url);
+    const hub = (await post(fx.url + '/api/v2/sessions', { cwd: 'proj', agent: 'claude' })).body;
+    const pr = await json(fx.url + '/api/projects');
+    assert.equal(pr.status, 200);
+    const proj = pr.body.projects.find((p) => p.name === 'proj');
+    assert.equal(proj.title, 'Proj');
+    assert.equal(proj.description, 'Hello world.');
+    assert.deepEqual(proj.tags, ['AI']);
+    assert.equal((await post(fx.url + '/api/projects', {})).status, 400, 'POST is still the create route');
+    const ts = await json(fx.url + '/api/term-sessions/proj');
+    assert.equal(ts.status, 200);
+    const ids = ts.body.sessions.map((x) => x.id).sort();
+    assert.deepEqual(ids, ['s1', hub.termKey].sort(), 'a migrated session answers to its old sN, a hub one to its tmux name');
+    assert.equal(ts.body.sessions.find((x) => x.id === 's1').uuid, mig.uuid);
+    assert.equal((await json(fx.url + '/api/term-sessions/nope')).status, 404);
+    const tree = await json(fx.url + '/api/view-tree/proj?path=');
+    assert.deepEqual(tree.body.entries.filter((e) => !e.dim).map((e) => [e.name, e.type, e.path]), [['src', 'dir', 'src'], ['README.md', 'file', 'README.md']]);
+    assert.ok(tree.body.entries.some((e) => e.name === '.git' && e.dim), 'hidden entries come through dim, as v1 did');
+    const sub = await json(fx.url + '/api/view-tree/proj?path=src');
+    assert.deepEqual(sub.body.entries.map((e) => e.path), ['src/a.js']);
+    const raw = await fetch(fx.url + '/view/proj/src/a.js?raw=1', { redirect: 'manual' });
+    assert.equal(raw.status, 302);
+    assert.equal(raw.headers.get('location'), '/api/v2/fs/raw?path=' + encodeURIComponent('proj/src/a.js'));
+    assert.equal(await (await fetch(fx.url + '/view/proj/src/a.js?raw=1')).text(), 'const a = 1;\n');
+    // The relay strips a `<proj>__` prefix off a hub-… key the glasses composed.
+    assert.equal((await json(fx.url + '/api/term-capture/' + encodeURIComponent('proj__' + hub.termKey))).status, 404, 'canonicalised, then no such tmux session');
+    assert.equal((await json(fx.url + '/api/term-capture/' + encodeURIComponent('bad key'))).status, 400);
+  } finally { await fx.close(); }
 });
 
 test('V85: services API lists {services, tailnet}; actions on unknown units are 404 before any sudo', async () => {

@@ -1,12 +1,8 @@
----
-tags: []
----
-
 # <NAME>
 
 A new project. Vite + React + TypeScript. Dev server at `/<NAME>/`.
 
-Replace this paragraph with a one-sentence card description after you know what you're building.
+Replace this paragraph with a one-sentence description after you know what you're building.
 
 ## Run
 

@@ -1,237 +1,38 @@
----
-tags: [Hub, Tool, Stable]
----
-
 # claude-hub
 
-**Persistent [Claude Code](https://claude.ai/claude-code) sessions in your browser, on every device you own. Start a project on your laptop, pick up the same conversation from your phone on the bus, ship it from a tablet on the couch.** One URL, one tmux per project, every Claude session waiting exactly where you left it.
+One page over everything under `~/projects`: the Claude Code (or Codex, or plain shell) sessions running in tmux, the dev servers and daemons systemd keeps up, and every file, all as tabs you arrange in free-form panels. Reachable from a laptop, a phone or the G2 glasses over Tailscale, with the same workspace waiting on each.
 
-A new idea hits at 2am? Tap `+`. claude-hub mints a fresh project — folder, README, AGENTS.md, optional GitHub repo, Vite scaffold, dev server — and drops you straight into a Claude session that asks "what should we build here?" Build your next project anytime, anywhere.
+There is no "project" in the UI. A **session** is an agent running in some folder; a **service** is a systemd unit, with its site when it serves one; a **file** opens raw, rendered, in an editor or as a diff. A **profile** holds your open tabs and layout, plus the instructions appended to every Claude session you start, so two people (or one person's separate lives) share the box without sharing a workspace.
 
-Each project gets a card with three actions:
+## What you get
 
-- **Open** — the live web app, if the project has one (otherwise the rendered README).
-- **Develop** — a browser terminal attached to a long-lived `tmux` session running Claude Code, so you can pick up where you left off from any device. Opens the project's [PWA shell](#on-your-phone-the-pwa) in terminal view, so the FAB is one tap away.
-- **Browse** — a two-pane file viewer (collapsible tree on the left, tabbed file panes on the right, gitignored entries dimmed, live updates pushed over WebSocket so edits Claude makes show up without a refresh).
+- **Terminals that survive everything.** Each session is a tmux session served by one ttyd unit. Close the laptop, open the phone: same scrollback, same conversation. Suspend it from the tab's bar; reconnect starts it again and Claude resumes where it was. Titles follow Claude's own naming, `/rename`, and an auto-titler that renames the tab as the work drifts.
+- **Panels, not windows.** Drag a tab to a panel edge to split, to its centre to move, onto a strip to reorder. Sizes are proportions, so the same layout renders on a 4K monitor and a quarter-width side panel. Narrow screens collapse panels into tab groups in a menu.
+- **Files anywhere.** A browser rooted at `~/projects`, folders coloured by whether a terminal is open there. Raw shows highlighted source, View renders markdown, images, PDFs and the live page for html behind a dev server, Edit is CodeMirror with Ctrl+Space completion from the local `claude` CLI, Diff compares against HEAD or any commit that touched the file. Saves refuse to clobber a file an agent changed meanwhile.
+- **Services with their sites.** Units you maintain are discovered, not registered, and matched to their `tailscale serve` listeners. A service tab shows the site, the unit file or a live log tail, with start, stop and restart in its bar.
+- **New repos.** From a template (Vite + React, Phaser, react-three-fiber, Babylon, Jekyll, an Even Realities G2 app), a clone of one of your GitHub repos, or an existing folder. The scaffold gets a dev-server unit behind the proxy and a Claude session seeded with an orientation prompt.
+- **Glasses.** The G2 app reads a terminal through tmux, speaks prompts into it, and answers Claude's questions and permission prompts through a hook that is inert unless the glasses are watching.
 
-Plus a `+` card that creates a brand-new project end-to-end: makes the
-folder, drops in a starter `README.md` and `AGENTS.md`, optionally clones an
-existing GitHub repo or `gh repo create`s a fresh one, scaffolds a
-Vite + React + TypeScript app (with `npm install` and an autostarted dev
-server already wired through the proxy), brings up a `ttyd` terminal for
-it, and bootstraps the first Claude session with a prompt asking "what
-should we build here?" The card shows up on the landing page ready to
-click into.
-
-The proxy itself binds `127.0.0.1:8002` — nothing is exposed to your LAN
-unless you opt in (see "Sharing across devices" below).
-
-## Screenshots
-
-**Landing page** — every project gets a card with badges, description, and three actions. A `git worktree` checkout of another project (`Pathfinder — fog-of-war` here) gets an amber **worktree** badge and a line naming the parent and branch, and sorts directly beneath the project it branched from rather than drifting to the end of the list by age. The `+` tile opens a dialog that bootstraps a brand-new project end-to-end (folder, README, AGENTS.md, optional `gh repo create` / clone, ttyd terminal, fresh Claude Code session asking "what should we build here?"). Claude is the engine behind every card, every Develop button, every scaffolded project:
-
-![Landing page](docs/img/landing.png)
-
-**Browse** (`/view/<project>/`) — collapsible tree on the left (gitignored entries dimmed and lazy-loaded, names tinted by git status), tabbed iframes on the right. README opens in the initial tab; markdown renders with YAML frontmatter highlighted, and an eye icon renders a file in place — `*.html` and `*.svg` directly, plus any file a project maps to a URL via `routes` in its `.project-meta.json`, which is how a Markdown source previews through the site's real renderer. The file watcher pushes live updates, so edits Claude makes in your terminal show up here without a manual refresh:
-
-![Browse — file viewer](docs/img/browse-default.png)
-
-**Browse + Develop together** — the terminal icon in the header (or `?dev=1` on the URL) opens the `Develop` pane below the tree and tabs, spanning the full width, with a draggable splitter between them. The same long-lived tmux Claude session you'd reach via the `Develop` button is now in the same window as the file viewer, so you can read, ask, and edit without switching. Each project can hold several agent sessions at once — the tab strip along the top of the pane switches between them, and each one keeps its own scrollback. The `+` at the end of the strip asks which agent the new tab should run, **Claude** or **Codex**; each gets its own tmux session, and a Codex tab is marked with a small badge since it has no AI-generated title to show. One difference worth knowing: a Claude tab resumes its conversation by id after a reboot, while Codex has no flag to pin a session id to a tab, so a Codex tab's conversation lives as long as its tmux session — run `codex resume` in the pane to pick an older thread back up. This is the core workflow: Claude writes, the tree refreshes, your tab reloads, you keep reading:
-
-![Browse + Develop pane](docs/img/browse-with-develop.png)
-
-**Develop** (`/term/<project>/`) — the same browser terminal full-screen. ttyd attaches to a long-lived tmux session per conversation, and each one resumes its own Claude session by id — so you pick up exactly where you left off, from any device, on whichever conversation you were in. Claude is doing the work; the hub is the interface:
-
-![Develop terminal](docs/img/develop.png)
-
-**New project dialog** — the `+` card opens this. Pick a name, pick a GitHub mode (skip, clone existing, or `gh repo create`), pick a template, and optionally tick **Firebase backend** (Auth + Firestore + Hosting). Templates: **Vite** (React + TS, default), **2D Game** (Phaser), **Simple 3D** (react-three-fiber + Three), **Complex 3D** (Babylon.js + Havok), and **Jekyll** (a Ruby/minima Markdown site) — all auto-disabled when cloning since the repo brings its own structure. The Vite/game templates share one `vite@` unit and ship `build:pages` / `build:firebase` scripts for static deploy to GitHub Pages or Firebase Hosting; **Jekyll** is the one non-Vite template — Ruby/Bundler with its own `jekyll@` unit and a local preview that mirrors GitHub Pages, with **Firebase auto-disabled** (no `package.json` to wire it into). claude-hub does the rest: scaffold, `npm install`, autostart the dev server through the proxy, spin up a ttyd terminal, drop you into a fresh Claude session ready to plan:
-
-![New project dialog](docs/img/new-project.png)
-
-> **Cloning someone else's repo?** Fork it on GitHub first; the dropdown only lists repos your `gh auth` account owns. The fork appears in the list and you clone from there. (Power-user escape hatch: `POST /api/projects` with `github: { mode: 'clone', source: 'owner/repo' }` accepts arbitrary slugs/URLs directly.)
-
-> Refresh these screenshots after a UI change with the `screenshots` skill (in `.claude/skills/screenshots/`).
-
-## On your phone (the PWA)
-
-Every project also has an installable shell at **`/p/<project>/`** — the URL the
-landing card's **Develop** button actually opens. Same three surfaces as the
-desktop layout (terminal, the live app, the file browser), rebuilt for a phone:
-no browser chrome, no tab bar, one thumb. Add it to your home screen and it
-launches standalone, straight into that project.
-
-**One control: the FAB.** A draggable floating button (flick it to whichever
-corner suits your grip; the position sticks) cycles the panes in a fixed order —
-**TERM → OPEN → VIEW** — and its label always names where the *next* tap goes,
-not where you are. All three panes stay mounted, each holding one fixed source
-for the life of the page, so switching is instant and nothing re-navigates: the
-terminal keeps its scrollback and its ttyd attachment while you go read a file
-and come back.
-
-**Long-press it** (550ms) for a menu instead of a switch:
-
-- **Refresh** — reloads only the pane you're actually looking at, and says which
-  one that is. A stray press can't drop the terminal's connection.
-- **Split view** — a checkbox, and the *only* way in or out of split. Split pins
-  the terminal to the left half and puts the app or the file browser on the
-  right; a FAB tap then swaps just the right half and stays split. The
-  preference is sticky per device *and* per project, and it overrides the
-  landscape-tablet default in both directions — force a phone into split, or
-  force a wide screen out of it.
-
-**Getting back.** An installed PWA has no browser back button, so the terminal's
-tab strip carries a home link as its first item, pinned to the left so the
-strip's own sideways scrolling can't hide it.
-
-`?view=term|open|view|split` picks the starting pane — that's how the landing
-card deep-links you into the terminal.
-
-> Two shims are what make the terminal genuinely usable on a phone rather than
-> merely present: Android's soft keyboard drops keystrokes through xterm.js's IME
-> path, and ttyd never reconnects itself after a real network drop (a phone
-> sleeping, a wifi↔cellular handoff). Both are fixed by scripts injected into
-> every terminal page — see `AGENTS.md` → "Mobile terminal input (Android)" and
-> "Terminal reconnect".
-
-## Quickstart
+## Run it
 
 ```bash
-git clone https://github.com/<you>/claude-hub.git ~/projects/claude-hub
-cd ~/projects/claude-hub
-npm install
-
-# 1. Run it directly to confirm it boots.
-node server.js
-# → claude-hub listening on http://127.0.0.1:8002
-# Visit http://127.0.0.1:8002 in a browser.
-
-# 2. Or install the systemd units so it survives reboots.
-# All units in services/ ship with `/home/USER` placeholders — substitute
-# your account's home dir at install time. systemd does not expand `%h` in
-# system-mode units even with `User=`, so an explicit path is required.
-sudo bash -c 'sed "s|/home/USER|$HOME|g; s|^User=david|User='"$USER"'|" services/claude-hub.service > /etc/systemd/system/claude-hub.service'
-sudo systemctl daemon-reload
-sudo systemctl enable --now claude-hub.service
+git clone https://github.com/dpwhittaker/claude-hub.git ~/projects/claude-hub
+cd ~/projects/claude-hub && npm install
+sudo install -m 644 services/claude-hub.service /etc/systemd/system/    # edit User= and paths first
+sudo install -m 644 services/ttyd-hub.service /etc/systemd/system/
+sudo install -m 755 services/ttyd-attach-hub.sh /usr/local/bin/
+sudo install -m 644 services/vite@.service services/jekyll@.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now claude-hub.service ttyd-hub.service
+node services/install-session-hooks.mjs      # tab titles follow the work (Claude Code Stop hook)
+node services/install-glasses-hooks.mjs      # only if you have the glasses app
 ```
 
-For terminal cards (`/term/<project>/`) you also need `ttyd` installed
-(`apt install ttyd` on Debian/Ubuntu) and the templated unit:
+The hub binds `127.0.0.1:8002`. `tailscale serve --bg --https=443 http://localhost:8002` puts it on your tailnet with a real certificate and nothing on the public internet. Open `https://<your-box>.<tailnet>.ts.net/`, pick or create a profile, and start a terminal from any folder in the Explorer.
 
-```bash
-# Substitute /home/USER + User=david placeholders at install time.
-for u in ttyd@.service ttyd-develop.service ttyd-shell.service; do
-  sudo bash -c "sed 's|/home/USER|\$HOME|g; s|^User=david|User=\$USER|' services/\$u > /etc/systemd/system/\$u"
-done
-sudo install -m 755 services/ttyd-attach.sh /usr/local/bin/ttyd-attach.sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now ttyd-develop.service ttyd-shell.service
-```
+Requirements: Node 22+, tmux, ttyd 1.7+, a `claude` login (the completion and the auto-titler use it), and passwordless `sudo systemctl` for the hub's user so it can start and stop units.
 
-When you create a project via the `+` card, `ttyd@<name>.service` is
-enabled for it automatically.
+## Where things live
 
-For Vite-template projects (the default in the create dialog) you also need
-the per-project Vite dev-server unit:
-
-```bash
-sudo bash -c 'sed "s|/home/USER|$HOME|g; s|^User=david|User='"$USER"'|" services/vite@.service > /etc/systemd/system/vite@.service'
-sudo systemctl daemon-reload
-```
-
-`vite@<name>.service` is enabled + started by claude-hub during scaffold.
-The unit runs `npm run dev` in the project directory under `Restart=always`,
-so the dev server survives crashes and host reboots. claude-hub allocates a
-free port ≥ 5173 per project and writes it into `vite.config.ts` and the
-project's `.project-meta.json` (`proxyTarget`, `proxyPrefix`,
-`stripPrefix: false`, `openUrl: /<name>/`) so the proxy serves the app at
-`/<name>/` with no further config.
-
-`sudo` for `systemctl enable --now vite@<name>.service` and the matching
-`disable --now` on project delete relies on the same passwordless sudo grant
-already used by `ttyd@` — see [Passwordless sudo](#passwordless-sudo) below.
-
-For **Jekyll**-template projects you need Ruby + Bundler
-(`apt install ruby-full` on Debian/Ubuntu, then `gem install bundler`) and the
-per-project Jekyll preview unit:
-
-```bash
-sudo bash -c 'sed "s|/home/USER|$HOME|g; s|^User=david|User='"$USER"'|" services/jekyll@.service > /etc/systemd/system/jekyll@.service'
-sudo systemctl daemon-reload
-```
-
-`jekyll@<name>.service` is enabled + started by claude-hub during scaffold. It
-runs the project's `serve-local.sh` (`bundle exec jekyll serve`) under
-`Restart=always`. Unlike Vite projects, ports are allocated from the **4000s**
-(so they never collide with the Vite 5173+ range), and the port + `/<name>`
-baseurl are baked into `serve-local.sh` at scaffold time. It needs the same
-sudo grant as the other units — see below.
-
-## Passwordless sudo
-
-Project create/delete shells out to `sudo -n systemctl enable|disable --now
-<unit>` for `ttyd@`, `vite@`, and `jekyll@` instances. Grant it in
-`/etc/sudoers.d/claude-hub` (mode `0440`, root-owned):
-
-```
-<user> ALL=(root) NOPASSWD: /usr/bin/systemctl, /bin/systemctl
-```
-
-> **Do not try to scope this per-unit with wildcards.** `sudo` 1.9.17 and newer
-> reject wildcards in command *arguments*, so the tempting form
-> `NOPASSWD: /usr/bin/systemctl enable --now vite@*.service` is a hard syntax
-> error — and one bad line invalidates the entire sudoers file, not just that
-> entry. Grant the binary instead; `server.js` already validates every unit name
-> against a strict regex before it reaches `sudo`.
-
-Always verify after editing:
-
-```bash
-sudo visudo -c
-```
-
-## Sharing across devices (Tailscale)
-
-claude-hub doesn't try to be a publicly reachable server — by default it
-listens on loopback only. The simplest tested way to get at it from your
-phone or laptop is via [Tailscale](https://tailscale.com):
-
-1. Install Tailscale on the host running claude-hub and on each device you
-   want to reach it from.
-2. On the host: `tailscale serve --bg --https=443 http://localhost:8002`
-3. Open `https://<your-host>.<your-tailnet>.ts.net/` from any tailnet peer.
-
-Tailscale handles HTTPS (with an auto-renewing Let's Encrypt cert) and the
-peer-to-peer routing. Nothing is exposed to the public internet. To stop
-sharing: `tailscale serve --https=443 off`.
-
-If you ever want it publicly reachable, `tailscale funnel --bg --https=443
-http://localhost:8002` is the equivalent — but be deliberate about it,
-since the Develop terminals run live Claude Code sessions with full
-filesystem access to `~/projects`.
-
-## Project layout
-
-| File | Role |
-|---|---|
-| `server.js` | The proxy itself: routing, request handling, projects API, file viewer. No framework. |
-| `lib/` | Everything pure, so it's unit-testable without a server — the two page shells (`view-shell.js`, `pwa-shell.js`), card assembly, template scaffolding, route rewriting. |
-| `test/` | `node --test`. `test/helpers/fixture.js` boots `server.js` in-process for the integration cases. |
-| `landing.html` | Landing page. Hardcoded cards for Develop + Proxy; fetches the rest from `/api/projects`. A row of tag chips above the grid filters the cards (click again, or All, to clear). |
-| `services/claude-hub.service` | systemd unit for the proxy itself. |
-| `services/ttyd@.service` | Templated systemd unit. `systemctl enable --now ttyd@<project>` brings up a per-project terminal. |
-| `services/ttyd-develop.service`, `services/ttyd-shell.service` | Static admin terminal units (fresh claude in `~/projects`, raw bash). |
-| `services/ttyd-attach.sh` | Helper that ttyd execs per browser connection — joins or creates the per-tab tmux session and starts its agent (Claude or Codex). |
-| `AGENTS.md` | Architecture + ops + gotchas. Read it before changing the routing or the systemd units. |
-| `SPEC.md` | The durable spec — goals, constraints, interfaces, numbered invariants, tasks, and every bug with the invariant that now catches it. |
-| `SDD.md` | The spec-driven-development protocol `SPEC.md` follows: sections, compressed encoding, backprop, and the rules for retiring what a new requirement invalidated. Every scaffolded project ships a starter `SPEC.md` pointing here. |
-| `HINDSIGHT.md` | The optional Hindsight memory layer: what it adds, how to rebuild it, how to remove it. claude-hub runs fine with none of it installed. |
-
-## See also
-
-- `AGENTS.md` for the full architecture, route table, and the list of
-  things that have bitten past sessions.
-- `SDD.md` for the spec-driven-development protocol — how `SPEC.md` is
-  structured, how bugs backpropagate into invariants, and how the spec is
-  kept honest as the project grows.
-- `HINDSIGHT.md` for the optional per-repo memory layer — install, the
-  reasoning behind each config value, and how to verify a rebuild.
+- `~/.claude-hub/` holds the state: `profiles/<id>/profile.json` and `CLAUDE.md`, `sessions/<id>.json`, `titles.json`, and an optional `services.json` that names units to show or gives one a URL.
+- `~/projects/<name>/.project-meta.json` is a project's proxy config: `proxyTarget`, `proxyPrefix`, `stripPrefix`, `extraUnits`, and optional `routes` mapping source files to the URLs they render at.
+- `SPEC.md` is the durable spec (goals, interfaces, invariants, tasks, bugs); `AGENTS.md` is the brief for an agent working on the hub itself; `SDD.md` is the protocol both follow.

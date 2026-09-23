@@ -20,6 +20,10 @@ Environment=HUB_STATE_DIR=/home/david/.claude-hub
 #   -a                     --url-arg: ?arg=<id> in the page URL becomes $1 of the command
 #   -b /term/hub           base path so xterm assets load through the proxy
 ExecStart=/usr/bin/ttyd -i /run/ttyd/hub.sock -W -a -b /term/hub -t titleFixed=hub -t disableLeaveAlert=true /usr/local/bin/ttyd-attach-hub.sh
+# The FIRST attach after a boot starts the user's tmux server from inside
+# this unit's cgroup. KillMode=process stops only ttyd itself on a restart,
+# so every live session survives it (V96).
+KillMode=process
 Restart=always
 RestartSec=2
 LimitNOFILE=512

@@ -1,5 +1,4 @@
 ---
-tags: []
 layout: default
 permalink: /
 ---
@@ -8,7 +7,7 @@ permalink: /
 
 A new Jekyll + Markdown site, served at `/<NAME>/`.
 
-Replace this paragraph with a one-sentence card description after you know what you're building.
+Replace this paragraph with a one-sentence description after you know what you're building.
 
 ## Add content
 

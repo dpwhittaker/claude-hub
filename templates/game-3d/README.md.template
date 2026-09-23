@@ -1,12 +1,8 @@
----
-tags: [Games]
----
-
 # <NAME>
 
 A 3D game. react-three-fiber + Three.js + Vite + TypeScript. Dev server at `/<NAME>/`.
 
-Replace this paragraph with a one-sentence card description after you know what you're building.
+Replace this paragraph with a one-sentence description after you know what you're building.
 
 ## Run
 

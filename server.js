@@ -1,24 +1,20 @@
 /**
- * claude-hub — path-routed reverse proxy that fronts your local projects.
+ * claude-hub — one page over everything under ~/projects, plus the reverse
+ * proxy in front of each project's dev server.
  *
- *   /                    → static landing page (this directory's landing.html)
- *   /api/projects        → list/create/delete managed projects
- *   /api/view-tree/<p>   → recursive file tree (JSON) for the file browser
- *   /view/<p>/<file>     → read-only markdown + code viewer
+ *   /                    → the workspace (v2/: profiles, panels, tabs)
+ *   /v2/*, /api/v2/*     → its files and its JSON API (lib/v2-routes.js)
+ *   /term/hub/?arg=<id>  → ttyd terminal for a hub session, attached to a
+ *                          long-lived tmux session (ttyd-hub.service; one
+ *                          unit serves every session, the id picks the tmux)
  *   /<p>(/|$)            → reverse-proxy to a project's backend if its
  *                          .project-meta.json declares `proxyTarget`. Prefix
  *                          and stripPrefix come from the same file (defaults:
  *                          prefix = "/<name>", stripPrefix = true).
- *   /term/<p>(/|$)       → ttyd terminal for the project, attached to a
- *                          long-lived tmux session running Claude Code. Talks
- *                          over a Unix socket so we don't burn a TCP port.
- *                          Multi-attach: every browser sees the same tmux.
- *   /term/develop(/|$)   → admin terminal: fresh `claude` in ~/projects each
- *                          connection (no tmux, no --continue). For
- *                          cross-project chores. Backed by ttyd-develop.service.
- *   /term/shell(/|$)     → raw bash login shell, no claude, no tmux. For
- *                          system poking that doesn't need an LLM in the loop.
- *                          Backed by ttyd-shell.service.
+ *   /api/projects (POST) → new repo: template scaffold / clone / onboard
+ *   /api/term-*          → the glasses relay (tmux capture / input / prompts)
+ *   /api/projects (GET), /api/term-sessions, /api/view-tree, /view/*
+ *                        → read-only shims for the glasses app (lib/g2-compat.js)
  *
  * WebSocket upgrades are forwarded so Vite HMR (and ttyd) keep working.
  *
@@ -29,10 +25,8 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile, execFileSync } = require('child_process');
+const { execFile } = require('child_process');
 const httpProxy = require('http-proxy');
-const { marked } = require('marked');
-const { WebSocketServer } = require('ws');
 const { allocatePort } = require('./lib/port-alloc');
 const { copyTemplate, nameSlug } = require('./lib/template');
 const { makeGhRepos, filterReposByFolders } = require('./lib/gh-repos');
@@ -40,22 +34,12 @@ const { PROJECT_ID_RE, RESERVED_PROJECT_NAMES } = require('./lib/project-name');
 const { writeBootstrapPrompt } = require('./lib/bootstrap-prompt');
 const { effectiveTemplate, firebaseEnabled } = require('./lib/template-policy');
 const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
-const { parseFrontmatter, readmeMetaFromContent } = require('./lib/readme-meta');
-const { buildProjectCards, WORKTREE_TAG } = require('./lib/project-cards');
-const { collectTags, hasTag } = require('./lib/tag-filter');
-const { worktreeRemovalPlan } = require('./lib/worktree');
-const { escapeHtml } = require('./lib/escape-html');
-const { renderViewShell } = require('./lib/view-shell');
-const { renderShellHtml } = require('./lib/pwa-shell');
-const termSessionsLib = require('./lib/term-sessions');
 const termRelayLib = require('./lib/term-relay');
 const scaffoldInstall = require('./lib/scaffold-install');
 const { makeV2Router } = require('./lib/v2-routes');
-const { HLJS_LANG } = require('./lib/lang-map');
-const crypto = require('node:crypto');
+const { makeG2Compat } = require('./lib/g2-compat');
 
 const PORT = Number(process.env.PROXY_PORT) || 8002;
-const LANDING_PATH = path.join(__dirname, 'landing.html');
 
 // Static routes are derived from each managed project's .project-meta.json.
 // A project that declares `proxyTarget` (e.g. "http://127.0.0.1:5173") gets
@@ -311,24 +295,21 @@ function sendJson(res, status, body) {
 }
 
 
-// ---------- Managed projects (the "+" card on the landing page) ----------
-// A managed project is any directory under ~/projects/ that contains a
-// .project-meta.json sentinel. The create flow:
-//   1. POST /api/projects { name } — mkdir, write AGENTS.md + sentinel
-//   2. sudo systemctl enable --now ttyd@<name>.service
-//   3. wait for /run/ttyd/<name>.sock to appear (then /term/<name>/ resolves)
-//   4. card shows up on the landing page; "Open" goes to /term/<name>/
-
-// AGENTS.md is the agent-facing brief; humans get README.md. The landing
-// page derives the card title (H1), description (first paragraph) and tags
-// (frontmatter) from README.md, so the prompt below points claude there for
-// anything user-visible.
+// ---------- New repos (the Explorer's "+ repo" dialog) ----------
+// A folder under ~/projects with a .project-meta.json is a project the proxy
+// knows about (dev-server port, prefix, units). The create flow:
+//   1. POST /api/projects { name, template, github } — mkdir, scaffold, sentinel
+//   2. a hub session in the folder, seeded with the bootstrap prompt
+//
+// AGENTS.md is the agent-facing brief; humans get README.md (its H1 and first
+// paragraph are what the hub and the glasses app show as the folder's title
+// and description).
 function agentsTemplate(name) {
   return `# ${name} — AGENTS.md
 
 This is the orientation doc for any agent (you) working in this project.
-Human-facing details — project title, one-sentence summary, and tags — live
-in \`README.md\`, which is what the landing page reads. Keep README current.
+Human-facing details — the project's title and one-sentence summary — live in
+\`README.md\` (its H1 and first paragraph). Keep README current.
 
 ## Workflow rule: commit + push every turn
 
@@ -338,7 +319,7 @@ per logical change; run whatever tests exist first and fix what fails before
 committing. Skip only when the turn produced no working-tree changes.
 
 **Commit explicit paths, never \`-A\`.** Several Claude sessions can share this
-checkout (one per Develop tab), so \`git add -A\` sweeps up whatever a peer
+checkout (one per terminal tab), so \`git add -A\` sweeps up whatever a peer
 session has half-written. Name what you wrote:
 \`git commit -m "…" -- path/one path/two\`.
 
@@ -348,15 +329,14 @@ Parallel work goes in a worktree, not in this checkout — two agents editing
 one tree is the "peer swept my files" problem above, at feature scale. Claude
 Code's \`isolation: "worktree"\` drops a checkout at
 \`~/projects/${name}_<task>/\`; give it a \`.project-meta.json\` naming
-\`worktreeOf: "${name}"\` and its \`branch\` and it becomes its own claude-hub
-card with its own terminal and Browse pane.
+\`worktreeOf: "${name}"\` and its \`branch\` and the hub treats it as its own
+folder, with its own terminal sessions and, if it has one, its own dev server.
 
 **Never \`rm -rf\` a worktree** — this repo's \`.git/worktrees/\` keeps the
-registry entry and then refuses to reuse the path. Delete it from its card
-(which routes through \`git worktree remove\`), or
-\`git -C ~/projects/${name} worktree remove --force <dir>\`. A worktree also
-checks out this project's \`README.md\` byte-for-byte, so its card title and
-description have to come from its sentinel, not the README.
+registry entry and then refuses to reuse the path. Remove it with
+\`git -C ~/projects/${name} worktree remove --force <dir>\`. A worktree checks
+out this project's \`README.md\` byte-for-byte; give its sentinel a \`title\`
+and \`description\` of its own so the hub can tell the two apart.
 
 ## Workflow rule: the spec is the memory (SDD)
 
@@ -382,23 +362,20 @@ logged in the \`§T\` row that did the work.
 
 **Full protocol: \`~/projects/claude-hub/SDD.md\`** — section reference, the
 encoding and its symbol table, backprop, and the maintenance rules for keeping
-the spec true as the project grows. Browse it at \`/view/claude-hub/SDD.md\`.
+the spec true as the project grows.
 
 ## Bootstrap
 
-This folder was just created via the landing page's "+" card. A
-\`ttyd@${name}.service\` systemd unit serves a browser terminal at
-\`/term/${name}/\` (long-lived tmux session, \`claude --continue\`). Browse
-files at \`/view/${name}/\`.
+This folder was just created from the hub's "+ repo" dialog. Your terminal is
+a hub session in this folder (a long-lived tmux session; the conversation
+resumes across reconnects and reboots). The hub's file browser, editor and
+diff views sit beside it on the same page.
 
 ## What to do first
 
 1. Ask the user what they want to build here.
-2. Update \`README.md\`: rewrite the H1 (card title), rewrite the first
-   paragraph (card description), and set \`tags: [...]\` in the YAML
-   frontmatter (card badges + the landing page's filter chips). Reuse a tag
-   already on the hub — the chip row above the cards lists them — and add a
-   new one only if none fits. Tags are categories, not status: no \`WIP\`.
+2. Update \`README.md\`: rewrite the H1 (the project's title) and the first
+   paragraph (a one-sentence description) — the hub shows both.
 3. Fill in \`SPEC.md\`: rewrite \`§G\` to the goal you just agreed, add the
    \`§C\` constraints the stack imposes, and flip \`§T.1\` to \`x\`.
 4. Start scaffolding.
@@ -414,8 +391,7 @@ function specTemplate(name) {
 
 Durable memory for ${name} — reload it at the start of every session.
 Format, encoding & the maintenance protocol (how a new requirement retires an
-old one): \`~/projects/claude-hub/SDD.md\`, browsable at
-\`/view/claude-hub/SDD.md\`.
+old one): \`~/projects/claude-hub/SDD.md\`.
 
 ## §G GOAL
 
@@ -425,21 +401,21 @@ the first feature (§T.1). ⊥ leave this placeholder standing.
 ## §C CONSTRAINTS
 
 - ? stack, runtime floor, locked deps — fill in once §G is agreed.
-- terminal + Browse served by claude-hub: \`/term/${name}/\`, \`/view/${name}/\`.
+- terminals, files and (when it has one) the dev server are served by claude-hub at \`/\`.
 
 ## §I INTERFACES
 
-- card: \`README.md\` H1 → title, ¶1 → description, frontmatter \`tags: [...]\` → badges
+- \`README.md\` H1 → the project's title, ¶1 → its one-sentence description (the hub and the glasses app show both)
 
 ## §V INVARIANTS
 
-- V1: \`README.md\` H1/¶1/\`tags\` = the landing card's title/description/badges. ⊥ let them drift from §G.
+- V1: \`README.md\` H1/¶1 = the project's title/description. ⊥ let them drift from §G.
 
 ## §T TASKS
 
 id|status|task|cites
 ---|---|---|---
-T1|.|agree §G w/ user; rewrite §G + \`README.md\` H1/¶1/\`tags\` to match|V1
+T1|.|agree §G w/ user; rewrite §G + \`README.md\` H1/¶1 to match|V1
 T2|.|pick the stack → §C. add §I rows for surface it exposes|-
 
 ## §B BUGS
@@ -450,227 +426,14 @@ id|date|cause|fix
 }
 
 function readmeTemplate(name) {
-  return `---
-tags: []
----
-
-# ${name}
+  return `# ${name}
 
 Replace this paragraph with a one-sentence description of what this project is. \
-The landing page reads it as the card description.
+The hub shows it beside the folder's name.
 `;
 }
 
-// README.md is the canonical human-facing doc for a project — the landing
-// page card's title (first H1), description (first paragraph) and badge pills
-// (`tags:` frontmatter) all come from it. Parsing lives in lib/readme-meta.js;
-// this wrapper is just the disk read.
-function parseReadmeMeta(projectDir) {
-  let content;
-  for (const candidate of ['README.md', 'Readme.md', 'readme.md']) {
-    try {
-      content = fs.readFileSync(path.join(projectDir, candidate), 'utf8');
-      break;
-    } catch {}
-  }
-  return readmeMetaFromContent(content == null ? null : content);
-}
-
-// Walk ~/projects/, keep every folder carrying a .project-meta.json sentinel,
-// and hand the rows to lib/project-cards.js for precedence + ordering (V55).
-// termUrl is stitched on afterwards because it needs another disk read.
-function listManagedProjects() {
-  let entries;
-  try {
-    entries = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const rows = [];
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
-    const name = e.name;
-    if (!PROJECT_ID_RE.test(name) || name.startsWith('.')) continue;
-    const dir = path.join(PROJECTS_ROOT, name);
-    const metaPath = path.join(dir, '.project-meta.json');
-    if (!fs.existsSync(metaPath)) continue;
-    let meta = {};
-    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch {}
-    rows.push({ name, meta, readme: parseReadmeMeta(dir) });
-  }
-  return buildProjectCards(rows).map((card) => ({
-    ...card,
-    termUrl: `/term/${lookupActiveTermKey(card.name)}/`,
-  }));
-}
-
-// The tags in use across the hub right now, handed to the bootstrap prompt so
-// a new session picks from them instead of coining its own (V73). The
-// auto-derived `worktree` badge is not vocabulary.
-function currentHubTags() {
-  return collectTags(listManagedProjects())
-    .filter((t) => t.key !== WORKTREE_TAG)
-    .map((t) => t.label);
-}
-
-// Resolve the term key for a project (e.g. for the PWA shell / card link).
-// Reads .develop-sessions.json — lastActive if set, else the smallest id;
-// falls back to the bare project name when no map exists (lets unmigrated
-// projects keep working until migrateLegacyTermUnits runs).
-function lookupActiveTermKey(name) {
-  const dir = path.join(PROJECTS_ROOT, name);
-  const map = termSessionsLib.readSessionsMap(dir);
-  const ids = Object.keys(map.sessions).sort(
-    (a, b) => Number(a.slice(1)) - Number(b.slice(1)),
-  );
-  if (ids.length === 0) return name;
-  const id = (map.lastActive && map.sessions[map.lastActive]) ? map.lastActive : ids[0];
-  return termSessionsLib.joinTermKey(name, id);
-}
-
-function waitForSocket(sockPath, timeoutMs) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const tick = () => {
-      try {
-        if (fs.statSync(sockPath).isSocket()) return resolve(true);
-      } catch {}
-      if (Date.now() - start >= timeoutMs) return resolve(false);
-      setTimeout(tick, 100);
-    };
-    tick();
-  });
-}
-
-function handleListProjects(_req, res) {
-  sendJson(res, 200, { projects: listManagedProjects() });
-}
-
-function handleDeleteProject(req, res, name) {
-  if (!PROJECT_ID_RE.test(name) || name.startsWith('.')) {
-    return sendJson(res, 400, { error: 'invalid name' });
-  }
-  if (RESERVED_PROJECT_NAMES.has(name)) {
-    return sendJson(res, 403, { error: 'reserved name' });
-  }
-  const dir = path.join(PROJECTS_ROOT, name);
-  // Resolve real path and double-check it stays inside PROJECTS_ROOT, so a
-  // weird symlink can't trick rm -rf into nuking something outside.
-  let real;
-  try {
-    real = fs.realpathSync(dir);
-  } catch {
-    return sendJson(res, 404, { error: 'project not found' });
-  }
-  if (real !== path.join(PROJECTS_ROOT, name)) {
-    return sendJson(res, 400, { error: 'project path is a symlink — refusing to delete' });
-  }
-  // Only delete things that look managed (have the sentinel file).
-  const metaPath = path.join(real, '.project-meta.json');
-  if (!fs.existsSync(metaPath)) {
-    return sendJson(res, 400, { error: 'not a managed project (no .project-meta.json)' });
-  }
-  let meta = {};
-  try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch {}
-
-  // The project's ttyd is a child of claude-hub — kill it directly, no sudo
-  // needed. extraUnits is for project-side systemd units that the project
-  // installed itself (e.g. its own backend service); those still go through
-  // sudo systemctl. Each unit name is sanity-checked against a strict regex
-  // so we don't hand systemctl arbitrary strings from on-disk JSON.
-  const UNIT_NAME_RE = /^[A-Za-z0-9@_.:-]+\.(service|socket|timer)$/;
-  const extraUnits = [];
-  if (Array.isArray(meta.extraUnits)) {
-    for (const u of meta.extraUnits) {
-      if (typeof u === 'string' && UNIT_NAME_RE.test(u)) extraUnits.push(u);
-    }
-  }
-
-  (async () => {
-    // Every develop tab is its own ttyd@<name>__sN.service + tmux session.
-    // Enumerate the live set before deleting so leftover tabs don't outlive
-    // the project. The bare ttyd@<name>.service is the legacy single-session
-    // unit (pre-migration); tear it down too if still present.
-    const childUnits = await listProjectTabUnits(name);
-    const allUnits = [`ttyd@${name}.service`, ...childUnits];
-    try {
-      await execFileP('sudo', ['-n', 'systemctl', 'disable', '--now', ...allUnits], { timeout: 30000 });
-    } catch (e) {
-      return sendJson(res, 500, { error: 'systemctl disable failed for ttyd@: ' + e.message });
-    }
-    if (extraUnits.length > 0) {
-      try {
-        await execFileP('sudo', ['-n', 'systemctl', 'disable', '--now', ...extraUnits], { timeout: 30000 });
-      } catch (e) {
-        return sendJson(res, 500, { error: 'systemctl disable failed for extraUnits: ' + e.message });
-      }
-    }
-    // Best-effort: kill any lingering tmux session(s) for this project.
-    // Bare `<name>` + every `<name>__sN`; ignore "no such session" errors.
-    const tmuxNames = [name, ...childUnits.map((u) => u.replace(/^ttyd@/, '').replace(/\.service$/, ''))];
-    for (const t of tmuxNames) {
-      try { await execFileP('tmux', ['kill-session', '-t', t], { timeout: 5000 }); } catch {}
-    }
-    // A worktree lives in the PARENT repo's registry as well as on disk, so
-    // let git detach it — `worktree remove` deletes the folder too. A plain
-    // rm -rf would leave the parent listing a checkout that is gone, and
-    // refusing to reuse the path until someone prunes by hand. SPEC §V56 / §B16.
-    const plan = worktreeRemovalPlan({ dir: real, meta, projectsRoot: PROJECTS_ROOT });
-    let removedByGit = false;
-    if (plan) {
-      try {
-        await execFileP('git', plan.removeArgs, { timeout: 30000 });
-        removedByGit = true;
-      } catch {
-        // Parent repo moved, registry already broken, git missing — fall
-        // through to rm and prune the stale entry afterwards, so the parent
-        // ends up consistent either way.
-      }
-    }
-    fs.rm(real, { recursive: true, force: true }, async (rmErr) => {
-      if (rmErr) return sendJson(res, 500, { error: 'rm failed: ' + rmErr.message });
-      if (plan && !removedByGit) {
-        try { await execFileP('git', plan.pruneArgs, { timeout: 30000 }); } catch {}
-      }
-      refreshStaticRoutes();
-      sendJson(res, 200, { name, deleted: true, worktreeOf: plan ? plan.parent : null });
-    });
-  })();
-}
-
-// ---------- per-project develop-pane tab sessions ----------
-// Each tab in the develop pane is a `ttyd@<project>__sN.service` instance
-// fronting a tmux session of the same name. The map from tab id → claude
-// conversation uuid lives in `<project>/.develop-sessions.json`; ttyd-attach.sh
-// reads it to launch `claude --resume <uuid>` (or `--session-id <uuid>` on
-// first start). lastActive is read by new browser connections to choose which
-// tab to focus on load; never broadcast (other live devices stay put).
-
-const TAB_ID_RE = termSessionsLib.TAB_ID_RE;
-
-async function listProjectTabUnits(project) {
-  // `systemctl list-units --all` so we catch units that exist on disk but
-  // aren't currently active (failed, inactive). Returns just the names.
-  let out;
-  try {
-    out = (await execFileP('systemctl', ['list-units', `ttyd@${project}__*.service`, '--all', '--no-legend', '--plain'], { timeout: 10000 })).stdout || '';
-  } catch {
-    return [];
-  }
-  const units = [];
-  for (const line of out.split('\n')) {
-    const m = /^(ttyd@[^\s]+\.service)\s/.exec(line);
-    if (m) units.push(m[1]);
-  }
-  return units;
-}
-
-// ---------- Glasses relay: /api/term-capture, /api/term-input, /api/term-scroll, /api/term-pending, /api/stt ----------
-// The G2 client (~/projects/claude-hub-g2) reads a develop tab through tmux
-// rather than through ttyd's websocket: capture-pane for the text, send-keys
-// for input and for SGR wheel ticks (scroll), and a small relay that lets a
-// WATCHING glasses client answer Claude's questions / permission prompts via
-// services/glasses-relay-hook.mjs. SPEC §V74–§V77.
+// ---------- Glasses relay + speech-to-text ----------
 const termRelay = termRelayLib.makeRelay({
   watchTtlMs: Number(process.env.TERM_WATCH_TTL_MS) || undefined,
 });
@@ -710,6 +473,13 @@ function readRawBody(req, res, maxBytes) {
       resolve(null);
     });
   });
+}
+
+// The glasses compose a key as `<project>__<id>`; for a hub session whose
+// tmux name is `hub-<id>` that prefix is noise — strip it (V97).
+function canonicalTermKey(key) {
+  const m = /^[A-Za-z0-9][A-Za-z0-9._-]*__(hub-[a-z0-9]{8})$/.exec(String(key || ''));
+  return m ? m[1] : key;
 }
 
 function relayKeyOr400(res, key) {
@@ -842,106 +612,6 @@ async function handleStt(req, res) {
   res.end(text);
 }
 
-function handleListTermSessions(_req, res, project) {
-  if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
-  const dir = path.join(PROJECTS_ROOT, project);
-  const map = termSessionsLib.readSessionsMap(dir);
-  const sessions = Object.entries(map.sessions)
-    .map(([id, entry]) => ({
-      id,
-      uuid: entry.uuid,
-      agent: entry.agent,
-      // Titles come out of claude's own transcript on disk; a codex tab has
-      // no equivalent to read, so it labels by id + its agent badge.
-      title: entry.agent === 'claude'
-        ? termSessionsLib.readSessionTitle(dir, entry.uuid)
-        : null,
-    }))
-    .sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)));
-  sendJson(res, 200, { sessions, lastActive: map.lastActive });
-}
-
-// POST body is optional: `{agent}` picks which CLI the tab runs, defaulting
-// to claude. An agent we don't know is a 400, never a silent fallback — a
-// typo that quietly hands you the wrong agent is worse than an error.
-function handleCreateTermSession(req, res, project) {
-  if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
-  readJsonBody(req, res, 4096, (body, err) => {
-    if (err) return;
-    if (body && body.agent !== undefined && !termSessionsLib.isAgent(body.agent)) {
-      return sendJson(res, 400, { error: 'unknown agent' });
-    }
-    const agent = termSessionsLib.normalizeAgent(body && body.agent);
-    createTermSession(res, project, agent).catch((e) => {
-      if (!res.headersSent) sendJson(res, 500, { error: 'create failed: ' + e.message });
-    });
-  });
-}
-
-async function createTermSession(res, project, agent) {
-  const dir = path.join(PROJECTS_ROOT, project);
-  const map = termSessionsLib.readSessionsMap(dir);
-  const id = termSessionsLib.allocateTabId(map.sessions);
-  const uuid = crypto.randomUUID();
-  map.sessions[id] = { uuid, agent };
-  map.lastActive = id;
-  try {
-    termSessionsLib.writeSessionsMap(dir, map);
-  } catch (e) {
-    return sendJson(res, 500, { error: 'write sessions map failed: ' + e.message });
-  }
-  const unit = `ttyd@${termSessionsLib.joinTermKey(project, id)}.service`;
-  try {
-    await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', unit], { timeout: 30000 });
-  } catch (e) {
-    delete map.sessions[id];
-    map.lastActive = null;
-    try { termSessionsLib.writeSessionsMap(dir, map); } catch {}
-    return sendJson(res, 500, { error: 'systemctl enable failed: ' + e.message });
-  }
-  const sockPath = ttydSocketPath(termSessionsLib.joinTermKey(project, id));
-  await waitForSocket(sockPath, 5000);
-  sendJson(res, 200, { id, uuid, agent });
-}
-
-async function handleDeleteTermSession(_req, res, project, id) {
-  if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
-  if (!TAB_ID_RE.test(id)) return sendJson(res, 400, { error: 'invalid tab id' });
-  const dir = path.join(PROJECTS_ROOT, project);
-  const unit = `ttyd@${termSessionsLib.joinTermKey(project, id)}.service`;
-  try {
-    await execFileP('sudo', ['-n', 'systemctl', 'disable', '--now', unit], { timeout: 30000 });
-  } catch (e) {
-    // Disable-on-already-disabled is fine; only fail loudly on hard errors.
-    if (!/not loaded|does not exist|No such/i.test(e.message)) {
-      return sendJson(res, 500, { error: 'systemctl disable failed: ' + e.message });
-    }
-  }
-  try { await execFileP('tmux', ['kill-session', '-t', termSessionsLib.joinTermKey(project, id)], { timeout: 5000 }); } catch {}
-  const map = termSessionsLib.readSessionsMap(dir);
-  delete map.sessions[id];
-  if (map.lastActive === id) map.lastActive = null;
-  try { termSessionsLib.writeSessionsMap(dir, map); } catch {}
-  sendJson(res, 200, { id, deleted: true });
-}
-
-function handleSetActiveTermSession(req, res, project) {
-  if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
-  readJsonBody(req, res, 4096, (body, err) => {
-    if (err) return;
-    if (!body || typeof body.id !== 'string' || !TAB_ID_RE.test(body.id)) {
-      return sendJson(res, 400, { error: 'invalid id' });
-    }
-    const dir = path.join(PROJECTS_ROOT, project);
-    const map = termSessionsLib.readSessionsMap(dir);
-    if (!map.sessions[body.id]) return sendJson(res, 404, { error: 'unknown tab id' });
-    map.lastActive = body.id;
-    try { termSessionsLib.writeSessionsMap(dir, map); }
-    catch (e) { return sendJson(res, 500, { error: 'write failed: ' + e.message }); }
-    sendJson(res, 200, { lastActive: body.id });
-  });
-}
-
 // Optional git identity overrides for the "create new GitHub repo" flow.
 // Empty by default — let `git` fall back to whatever the user has in their
 // global gitconfig (or `gh auth`-derived identity) so we never bake a
@@ -998,7 +668,7 @@ async function bootstrapNoGithub(dir, name) {
     path.join(dir, '.project-meta.json'),
     JSON.stringify({ name, createdAt: new Date().toISOString() }, null, 2) + '\n',
   );
-  writeBootstrapPrompt(dir, name, 'greenfield', { hubTags: currentHubTags() });
+  writeBootstrapPrompt(dir, name, 'greenfield');
 }
 
 async function bootstrapClone(dir, name, source) {
@@ -1025,7 +695,7 @@ async function bootstrapClone(dir, name, source) {
       github: { mode: 'clone', source },
     }, null, 2) + '\n',
   );
-  writeBootstrapPrompt(dir, name, 'scan-existing', { hubTags: currentHubTags() });
+  writeBootstrapPrompt(dir, name, 'scan-existing');
 }
 
 async function ghInitPush(dir, name, visibility) {
@@ -1114,7 +784,7 @@ async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {
     fs.rmSync(dir, { recursive: true, force: true });
     throw new Error(templateId + ' scaffold failed: ' + e.message, { cause: e });
   }
-  writeBootstrapPrompt(dir, name, 'greenfield', { templateId, firebase, hubTags: currentHubTags() });
+  writeBootstrapPrompt(dir, name, 'greenfield', { templateId, firebase });
   return port;
 }
 
@@ -1168,7 +838,7 @@ async function bootstrapJekyll(dir, name) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw new Error('jekyll scaffold failed: ' + e.message, { cause: e });
   }
-  writeBootstrapPrompt(dir, name, 'greenfield', { templateId: 'jekyll', hubTags: currentHubTags() });
+  writeBootstrapPrompt(dir, name, 'greenfield', { templateId: 'jekyll' });
   return port;
 }
 
@@ -1211,7 +881,7 @@ function handleCreateProject(req, res) {
     const firebase = firebaseEnabled(body, template);
     try {
       if (gh.mode === 'onboard') {
-        await bootstrapOnboard(dir, name, { hubTags: currentHubTags() });
+        await bootstrapOnboard(dir, name);
       } else if (gh.mode === 'clone') {
         // Cloned repos bring their own structure; ignore the template field.
         const source = String(gh.source || '').trim();
@@ -1243,62 +913,25 @@ function handleCreateProject(req, res) {
       return sendJson(res, status, { error: e.message });
     }
 
-    // V13/V47: every new project gets its first develop tab — s1 — wired up
-    // immediately. Stamp the sessions map with a fresh uuid so ttyd-attach.sh
-    // can launch `claude --session-id <uuid>` on first attach, then enable
-    // the unit + wait for the socket so the first /term/<name>__s1/ hit
-    // doesn't race binding.
-    const firstUuid = crypto.randomUUID();
+    // The project's first terminal is a hub session in its folder, seeded
+    // with the bootstrap prompt the scaffold wrote (V96). No unit, no sudo.
+    let session;
     try {
-      termSessionsLib.writeSessionsMap(dir, {
-        sessions: { s1: { uuid: firstUuid, agent: termSessionsLib.DEFAULT_AGENT } },
-        lastActive: 's1',
-      });
+      let prompt;
+      const bootstrapFile = path.join(dir, '.claude-bootstrap.txt');
+      try { prompt = fs.readFileSync(bootstrapFile, 'utf8'); fs.unlinkSync(bootstrapFile); } catch {}
+      session = v2Router.sessions.create({ cwd: name, agent: 'claude', profile: body.profile || null, prompt });
     } catch (e) {
-      return sendJson(res, 500, { error: 'write sessions map failed: ' + e.message });
-    }
-    const firstKey = termSessionsLib.joinTermKey(name, 's1');
-    try {
-      await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', `ttyd@${firstKey}.service`], { timeout: 30000 });
-    } catch (e) {
-      return sendJson(res, 500, { error: 'systemctl enable ttyd@ failed: ' + e.message });
-    }
-    const sockPath = ttydSocketPath(firstKey);
-    const sockBound = await waitForSocket(sockPath, 5000);
-    if (!sockBound) {
-      return sendJson(res, 500, {
-        error: `ttyd@${firstKey}.service started but /run/ttyd/${firstKey}.sock did not appear within 5s`,
-      });
+      return sendJson(res, 500, { error: 'session create failed: ' + e.message });
     }
     refreshStaticRoutes();
     sendJson(res, 200, {
       name,
-      termUrl: `/term/${firstKey}/`,
-      browseUrl: `/view/${name}/`,
+      sessionId: session.id,
+      termKey: session.termKey,
+      termUrl: session.termUrl,
+      browseUrl: '/',
     });
-  });
-}
-
-// landing.html is read from disk per request (no restart to see an edit), but
-// it is not quite static: the tag-filter helpers are injected at this marker
-// so the browser runs the same `collectTags`/`hasTag` the tests do (V72), the
-// way the Browse shell inlines its helpers. Function replacer, not a string —
-// a `$` in the source would otherwise be read as a replacement pattern.
-const LANDING_INJECT_MARK = '/* @inject lib/tag-filter.js */';
-const LANDING_INJECT_SRC = `${collectTags.toString()}\n${hasTag.toString()}`;
-function serveLanding(res) {
-  fs.readFile(LANDING_PATH, 'utf8', (err, text) => {
-    if (err) {
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('Failed to read landing.html: ' + err.message);
-      return;
-    }
-    const body = text.replace(LANDING_INJECT_MARK, () => LANDING_INJECT_SRC);
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-cache',
-    });
-    res.end(body);
   });
 }
 
@@ -1314,36 +947,6 @@ const ASSET_MIME = {
   '.js': 'application/javascript; charset=utf-8',
 };
 const ASSET_FILE_RE = /^[A-Za-z0-9._-]+$/;
-
-// /p/<name>/ — three-pane shell. Mounts the project's Open view, its Browse
-// view and its Develop terminal as siblings (one visible, the rest hidden) so
-// a FAB tap swaps without rerendering any of them. ttyd stays connected (no
-// xterm redraw, scrollback intact), Vite/HMR socket stays alive. The idle
-// panes mount on a stagger after first paint to keep cold start cheap.
-function readProjectOpenUrl(name) {
-  const metaPath = path.join(PROJECTS_ROOT, name, '.project-meta.json');
-  let meta = {};
-  try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch {}
-  return meta.openUrl || `/view/${name}/README.md`;
-}
-
-function handleShellRequest(res, name, initialView) {
-  if (!isViewableProject(name)) {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('unknown project');
-    return;
-  }
-  const openUrl = readProjectOpenUrl(name);
-  const termUrl = `/term/${lookupActiveTermKey(name)}/`;
-  const start = initialView === 'term' || initialView === 'view' ? initialView : 'open';
-  const html = renderShellHtml(name, openUrl, termUrl, start);
-  res.writeHead(200, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Cache-Control': 'no-cache',
-  });
-  res.end(html);
-}
-
 
 function serveAsset(res, filename, cacheControl) {
   if (!ASSET_FILE_RE.test(filename) || filename.startsWith('.')) {
@@ -1374,23 +977,6 @@ function serveAsset(res, filename, cacheControl) {
 //   file     — the file bytes (required).
 // Query: ?overwrite=1 — replace existing file. Default refuses with 409.
 const UPLOAD_MAX_BYTES = 500 * 1024 * 1024; // 500 MB
-
-const UPLOAD_DIALOG_PATH = path.join(__dirname, 'upload-dialog.js');
-
-function serveUploadDialogAsset(res) {
-  fs.readFile(UPLOAD_DIALOG_PATH, (err, body) => {
-    if (err) {
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('asset error: ' + err.message);
-      return;
-    }
-    res.writeHead(200, {
-      'Content-Type': 'application/javascript; charset=utf-8',
-      'Cache-Control': 'no-cache',
-    });
-    res.end(body);
-  });
-}
 
 // Parse a multipart/form-data body. Hand-rolled because the only dep we'd
 // otherwise need (busboy) is overkill for one-file uploads.
@@ -1533,34 +1119,6 @@ function writeUploadToDir(res, rootDir, scope, relPath, filename, fileBuf, overw
   return { finalRel };
 }
 
-async function handleUpload(req, res, projectRaw, query) {
-  let project;
-  try { project = decodeURIComponent(projectRaw); } catch {
-    return sendJson(res, 400, { error: 'bad project name' });
-  }
-  if (!isViewableProject(project)) {
-    return sendJson(res, 404, { error: 'unknown project' });
-  }
-  const parts = await readMultipartParts(req, res);
-  if (!parts) return;
-  const { relPath, filename: rawFilename, fileBuf } = extractUploadFields(parts);
-  if (!fileBuf) return sendJson(res, 400, { error: 'missing "file" part' });
-  const filename = sanitizeFilename(rawFilename || 'upload.bin');
-  if (!filename) return sendJson(res, 400, { error: 'bad filename' });
-
-  const projectRoot = path.join(PROJECTS_ROOT, project);
-  const result = writeUploadToDir(
-    res, projectRoot, 'project root', relPath, filename, fileBuf,
-    query.get('overwrite') === '1',
-  );
-  if (!result) return;
-  const finalRel = result.finalRel;
-  const viewUrl = `/view/${encodeURIComponent(project)}/${finalRel.split('/').map(encodeURIComponent).join('/')}`;
-  sendJson(res, 200, { ok: true, project, path: finalRel, size: fileBuf.length, viewUrl });
-}
-
-// Upload anywhere under PROJECTS_ROOT. Top-level treeview picker uses this so
-// users can drop a file into any folder, not just a single project's root.
 async function handleUploadAnywhere(req, res, query) {
   const parts = await readMultipartParts(req, res);
   if (!parts) return;
@@ -1582,583 +1140,16 @@ async function handleUploadAnywhere(req, res, query) {
   );
   if (!result) return;
   const finalRel = result.finalRel; // e.g. "claude-hub/uploads/file.txt"
-  const firstSeg = finalRel.split('/')[0];
-  const viewUrl = isViewableProject(firstSeg)
-    ? `/view/${finalRel.split('/').map(encodeURIComponent).join('/')}`
-    : null;
-  sendJson(res, 200, { ok: true, path: finalRel, size: fileBuf.length, viewUrl });
+  sendJson(res, 200, { ok: true, path: finalRel, size: fileBuf.length });
 }
 
-// Lazy directory listing rooted at PROJECTS_ROOT. Used by the top-level
-// upload treeview to expand one level at a time without walking the whole
-// tree up-front (which would be punishing inside node_modules etc.).
-const BROWSE_HIDDEN_DIRS = new Set(['node_modules', '.git', '.serve', 'dist', 'build', '.next', '.cache']);
-
-function handleBrowseDirs(req, res, query) {
-  const raw = (query.get('path') || '').trim();
-  const cleaned = raw.split('/').filter((s) => s && s !== '.').join('/');
-  if (cleaned.split('/').some((seg) => seg === '..')) {
-    return sendJson(res, 403, { error: 'path escapes projects root' });
-  }
-  const abs = cleaned ? path.resolve(PROJECTS_ROOT, cleaned) : PROJECTS_ROOT;
-  if (abs !== PROJECTS_ROOT && !abs.startsWith(PROJECTS_ROOT + path.sep)) {
-    return sendJson(res, 403, { error: 'path escapes projects root' });
-  }
-  let entries;
-  try {
-    entries = fs.readdirSync(abs, { withFileTypes: true });
-  } catch (e) {
-    return sendJson(res, 404, { error: 'not found: ' + e.message });
-  }
-  const dirs = [];
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
-    if (e.name.startsWith('.')) continue;
-    if (BROWSE_HIDDEN_DIRS.has(e.name)) continue;
-    dirs.push({ name: e.name });
-  }
-  dirs.sort((a, b) => a.name.localeCompare(b.name));
-  sendJson(res, 200, { path: cleaned, dirs });
-}
-
-// ---------- /view/<project>/<path> read-only file browser ----------
+// ---------- Roots ----------
 const PROJECTS_ROOT = process.env.PROJECTS_ROOT || path.join(process.env.HOME || '/', 'projects');
 // Publish PROJECTS_ROOT + CLAUDE_BIN so ttyd-attach.sh and any other child
 // scripts inherit the same values (no per-spawn env wiring needed).
 process.env.PROJECTS_ROOT = PROJECTS_ROOT;
 process.env.CLAUDE_BIN = CLAUDE_BIN;
 
-function isViewableProject(name) {
-  if (!PROJECT_ID_RE.test(name)) return false;
-  if (name === '.' || name === '..' || name.startsWith('.')) return false;
-  try {
-    return fs.statSync(path.join(PROJECTS_ROOT, name)).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-// Languages keyed off file extension — shared with the v2 file API (lib/lang-map.js).
-
-const RENDER_AS_TEXT_MAX_BYTES = 2 * 1024 * 1024; // 2 MB cap for code/text view
-const BINARY_EXTS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.bmp',
-  '.mp3', '.wav', '.ogg', '.flac', '.m4a',
-  '.mp4', '.webm', '.mov', '.mkv',
-  '.pdf', '.zip', '.tar', '.gz', '.bz2', '.xz', '.7z',
-  '.so', '.dylib', '.dll', '.exe', '.bin', '.dat',
-  '.woff', '.woff2', '.ttf', '.otf', '.eot',
-]);
-
-// Serve raw bytes (no rendering) for these — image/audio/video etc. — so the
-// viewer page can <img>/<audio>/<video> them by adding `?raw=1`.
-const RAW_MIME = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif', '.webp': 'image/webp', '.ico': 'image/x-icon',
-  '.svg': 'image/svg+xml', '.bmp': 'image/bmp',
-  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
-  '.flac': 'audio/flac', '.m4a': 'audio/mp4',
-  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
-  '.pdf': 'application/pdf',
-  '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
-};
-
-function viewerShell(title, breadcrumb, body, extraHead, opts = {}) {
-  // embed=true is used when this view is rendered inside an iframe by the
-  // two-pane shell — the shell already has its own breadcrumb + chrome, so
-  // we strip the header and tighten padding.
-  const embed = !!opts.embed;
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>${escapeHtml(title)}</title>
-<style>
-  :root { color-scheme: dark; --bg-0:#050810; --bg-1:#0d1320; --bg-2:#131b2c;
-    --fg:#e2e8f0; --muted:#94a3b8; --accent:#7dd3fc; --edge:#1f2937; }
-  * { box-sizing: border-box; }
-  html, body { margin:0; background:var(--bg-0); color:var(--fg);
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  body { padding: 16px 20px 40px; max-width: 1100px; margin: 0 auto; }
-  header { display:flex; align-items:center; gap:8px; flex-wrap:wrap;
-    padding: 10px 0 14px; border-bottom: 1px solid var(--edge); margin-bottom: 18px; }
-  header a { color: var(--accent); text-decoration: none; font-size: 0.92rem; }
-  header a:hover { text-decoration: underline; }
-  header .sep { color: var(--muted); }
-  header .home { color: var(--muted); padding-right: 6px; border-right: 1px solid var(--edge); margin-right: 4px; }
-  ul.dir { list-style: none; margin: 0; padding: 0; }
-  ul.dir li { padding: 4px 0; }
-  ul.dir a { color: var(--fg); text-decoration: none; }
-  ul.dir a:hover { color: var(--accent); }
-  ul.dir .meta { color: var(--muted); font-size: 0.8rem; margin-left: 8px; }
-  ul.dir .dir-icon { color: var(--accent); margin-right: 6px; }
-  ul.dir .file-icon { color: var(--muted); margin-right: 6px; }
-  pre { background: var(--bg-1); border: 1px solid var(--edge); border-radius: 8px;
-    padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.5;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  /* markdown body */
-  .md h1, .md h2, .md h3 { letter-spacing: -0.01em; }
-  .md h1 { border-bottom: 1px solid var(--edge); padding-bottom: 8px; }
-  .md a { color: var(--accent); }
-  .md code { background: var(--bg-1); padding: 1px 6px; border-radius: 4px; font-size: 0.9em; }
-  .md pre code { background: none; padding: 0; }
-  .md blockquote { border-left: 3px solid var(--edge); margin: 0; padding: 4px 14px; color: var(--muted); }
-  .md table { border-collapse: collapse; }
-  .md th, .md td { border: 1px solid var(--edge); padding: 6px 10px; }
-  .md img { max-width: 100%; border-radius: 6px; }
-  .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
-  .raw-link { color: var(--muted); font-size: 0.82rem; }
-  .raw-link:hover { color: var(--accent); }
-  /* YAML frontmatter shown above markdown body */
-  pre.frontmatter {
-    background: var(--bg-2);
-    border: 1px solid var(--edge);
-    border-left: 3px solid var(--accent);
-    border-radius: 6px;
-    padding: 10px 14px;
-    margin: 0 0 18px;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--muted);
-    overflow-x: auto;
-  }
-  pre.frontmatter .fm-key { color: var(--accent); }
-  pre.frontmatter .fm-punct { color: var(--muted); opacity: 0.7; }
-  pre.frontmatter .fm-str { color: var(--fg); }
-  ${embed ? `body { padding: 12px 16px 24px; max-width: none; }` : ''}
-</style>
-${extraHead || ''}
-</head>
-<body>
-${embed ? '' : `<header>
-<a class="home" href="/">claude-hub</a>
-${breadcrumb}
-</header>`}
-${body}
-</body>
-</html>`;
-}
-
-function renderBreadcrumb(project, relPath) {
-  const parts = relPath.split('/').filter(Boolean);
-  const out = [`<a href="/view/${encodeURIComponent(project)}/">${escapeHtml(project)}</a>`];
-  let cur = '';
-  for (let i = 0; i < parts.length; i++) {
-    cur += '/' + parts[i];
-    const isLast = i === parts.length - 1;
-    out.push('<span class="sep">/</span>');
-    if (isLast) {
-      out.push(`<span>${escapeHtml(parts[i])}</span>`);
-    } else {
-      out.push(
-        `<a href="/view/${encodeURIComponent(project)}${cur.split('/').map(encodeURIComponent).join('/')}/">${escapeHtml(parts[i])}</a>`,
-      );
-    }
-  }
-  return out.join(' ');
-}
-
-// Recursively scan a project root and return a hierarchical tree for the
-// two-pane viewer's left rail. Skips noisy directories (node_modules etc.)
-// and caps total node count so a runaway tree can't blow up the response.
-const VIEW_TREE_HIDDEN_DIRS = new Set(['node_modules', '.git', '.serve', 'dist', 'build', '.next', '.cache']);
-const VIEW_TREE_MAX_NODES = 5000;
-
-// Returns Set of project-relative paths that git considers ignored
-// (untracked + matched by .gitignore / global excludes / .git/info/exclude).
-// `--directory` collapses ignored dirs to their dirname so we don't pay for
-// listing the contents (especially relevant for node_modules). Returns an
-// empty Set if the project isn't a git repo or the call fails.
-function computeGitIgnored(projectRoot) {
-  if (!fs.existsSync(path.join(projectRoot, '.git'))) return new Set();
-  try {
-    const out = execFileSync(
-      'git',
-      ['-C', projectRoot, 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory'],
-      { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
-    );
-    const set = new Set();
-    for (const line of out.split('\n')) {
-      const p = line.replace(/\/$/, '').trim();
-      if (p) set.add(p);
-    }
-    return set;
-  } catch {
-    return new Set();
-  }
-}
-
-// Build the rules deciding which entries should be rendered dim. If the
-// project has gitignore output, that's the source of truth; otherwise we
-// fall back to the hardcoded VIEW_TREE_HIDDEN_DIRS list (covers non-git
-// projects and bare repos without a .gitignore). The .git directory itself
-// is always dim — it's never in .gitignore but obviously noise to browse.
-function makeDimRules(projectRoot) {
-  const gitIgnored = computeGitIgnored(projectRoot);
-  const useHardcoded = gitIgnored.size === 0;
-  return {
-    isDim(name, relPath, isDir) {
-      if (isDir && name === '.git') return true;
-      if (gitIgnored.has(relPath)) return true;
-      if (useHardcoded && isDir && VIEW_TREE_HIDDEN_DIRS.has(name)) return true;
-      return false;
-    },
-    // For lazy-load context, the parent path is dim if any segment is in the
-    // dim set or the path itself is gitignored.
-    pathIsDim(relPath) {
-      if (gitIgnored.has(relPath)) return true;
-      const segments = relPath.split('/').filter(Boolean);
-      if (segments.includes('.git')) return true;
-      if (useHardcoded && segments.some((s) => VIEW_TREE_HIDDEN_DIRS.has(s))) return true;
-      return false;
-    },
-  };
-}
-
-// Returns a Set of project-relative paths git considers dirty in the working
-// tree — modified, added, deleted, renamed, or untracked-and-not-ignored. Used
-// to colour the file tree yellow. Renames produce a single entry for the new
-// path; we discard the original path since the tree view shows the new file
-// only. Empty Set if git fails or the project isn't a repo.
-function computeGitUncommitted(projectRoot) {
-  if (!fs.existsSync(path.join(projectRoot, '.git'))) return new Set();
-  try {
-    const out = execFileSync(
-      'git', ['-C', projectRoot, 'status', '--porcelain', '-z'],
-      { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
-    );
-    const set = new Set();
-    let i = 0;
-    while (i < out.length) {
-      const end = out.indexOf('\0', i);
-      if (end < 0) break;
-      const entry = out.slice(i, end);
-      i = end + 1;
-      if (entry.length < 3) continue;
-      const xy = entry.slice(0, 2);
-      const p = entry.slice(3);
-      // Renames/copies emit "XY new\0old\0"; skip the old path.
-      if (xy[0] === 'R' || xy[0] === 'C') {
-        const e2 = out.indexOf('\0', i);
-        if (e2 >= 0) i = e2 + 1;
-      }
-      set.add(p);
-    }
-    return set;
-  } catch { return new Set(); }
-}
-
-// Returns paths touched in the most recent N commits, oldest-first. The result
-// arr[0] = HEAD's files, arr[1] = HEAD~1, etc. Spawns N+1 git processes (cheap
-// enough at N=4 and cached by the caller).
-function computeGitRecentCommits(projectRoot, n) {
-  if (!fs.existsSync(path.join(projectRoot, '.git'))) return [];
-  try {
-    const shas = execFileSync(
-      'git', ['-C', projectRoot, 'log', '-' + n, '--pretty=format:%H'],
-      { encoding: 'utf8', timeout: 5000 },
-    ).split('\n').map((s) => s.trim()).filter(Boolean);
-    return shas.map((sha) => {
-      try {
-        const out = execFileSync(
-          'git', ['-C', projectRoot, 'show', '--name-only', '--pretty=format:', sha],
-          { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
-        );
-        return out.split('\n').map((s) => s.trim()).filter(Boolean);
-      } catch { return []; }
-    });
-  } catch { return []; }
-}
-
-// Build path → tag map. uncommitted beats commit-N (a tracked file the user
-// is editing should look yellow, not cyan); commit 0 beats commit 1+ when the
-// same file appears in multiple recent commits.
-function computeGitStatus(projectRoot) {
-  const map = {};
-  for (const p of computeGitUncommitted(projectRoot)) map[p] = 'uncommitted';
-  const recent = computeGitRecentCommits(projectRoot, 4);
-  recent.forEach((paths, idx) => {
-    if (idx > 3) return;
-    const tag = 'c' + idx;
-    for (const p of paths) {
-      if (!(p in map)) map[p] = tag;
-    }
-  });
-  return map;
-}
-
-function buildFileTree(rootAbs, rules, gitStatus) {
-  let count = 0;
-  function walk(dir, relPath) {
-    if (count >= VIEW_TREE_MAX_NODES) return [];
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-    const dirs = [];
-    const files = [];
-    for (const e of entries) {
-      count++;
-      if (count > VIEW_TREE_MAX_NODES) break;
-      const childRel = relPath ? `${relPath}/${e.name}` : e.name;
-      const isDim = rules.isDim(e.name, childRel, e.isDirectory());
-      if (e.isDirectory()) {
-        // Dim dirs aren't recursed eagerly — the client lazy-loads them on
-        // first expand. Stops node_modules etc. from blowing the node cap.
-        dirs.push({
-          name: e.name,
-          type: 'dir',
-          path: childRel,
-          dim: isDim || undefined,
-          children: isDim ? [] : walk(path.join(dir, e.name), childRel),
-        });
-      } else if (e.isFile()) {
-        files.push({
-          name: e.name, type: 'file', path: childRel,
-          dim: isDim || undefined,
-          gitStatus: gitStatus ? gitStatus[childRel] : undefined,
-        });
-      }
-    }
-    dirs.sort((a, b) => a.name.localeCompare(b.name));
-    files.sort((a, b) => a.name.localeCompare(b.name));
-    return [...dirs, ...files];
-  }
-  return walk(rootAbs, '');
-}
-
-function handleViewTree(req, res, project) {
-  if (!isViewableProject(project)) return sendJson(res, 404, { error: 'unknown project' });
-  const projectRoot = path.join(PROJECTS_ROOT, project);
-  const rules = makeDimRules(projectRoot);
-  const gitStatus = computeGitStatus(projectRoot);
-  const qs = req.url.split('?')[1] || '';
-  const params = new URLSearchParams(qs);
-  const subPath = params.get('path');
-
-  if (subPath != null && subPath !== '') {
-    // Lazy-load: one level of children for the requested subdirectory. Used
-    // by the client when a dim dir is expanded — we don't walk it eagerly
-    // because it may contain tens of thousands of files. Anything inside a
-    // dim dir inherits dim.
-    const decoded = subPath.split('/').map((s) => {
-      try { return decodeURIComponent(s); } catch { return s; }
-    }).join('/');
-    const abs = path.resolve(projectRoot, decoded);
-    if (abs !== projectRoot && !abs.startsWith(projectRoot + path.sep)) {
-      return sendJson(res, 400, { error: 'path escapes project root' });
-    }
-    const inDimContext = rules.pathIsDim(decoded);
-    let entries;
-    try {
-      entries = fs.readdirSync(abs, { withFileTypes: true });
-    } catch {
-      return sendJson(res, 404, { error: 'not found' });
-    }
-    const dirs = [];
-    const files = [];
-    for (const e of entries) {
-      const childRel = `${decoded}/${e.name}`;
-      const childDim = inDimContext || rules.isDim(e.name, childRel, e.isDirectory());
-      if (e.isDirectory()) {
-        dirs.push({
-          name: e.name, type: 'dir', path: childRel,
-          dim: childDim || undefined, children: [],
-        });
-      } else if (e.isFile()) {
-        files.push({
-          name: e.name, type: 'file', path: childRel,
-          dim: childDim || undefined,
-          gitStatus: gitStatus[childRel],
-        });
-      }
-    }
-    dirs.sort((a, b) => a.name.localeCompare(b.name));
-    files.sort((a, b) => a.name.localeCompare(b.name));
-    return sendJson(res, 200, { project, path: decoded, entries: [...dirs, ...files], gitStatus });
-  }
-
-  const tree = buildFileTree(projectRoot, rules, gitStatus);
-  sendJson(res, 200, { project, tree, gitStatus });
-}
-
-// ---------- /ws/view-tree/<project> live tree updates ----------
-// One fs.watch per project, shared across all connected clients. Started on
-// the first WS connection, torn down when the last client disconnects. The
-// recursive watch fires for every descendant change; we filter dim paths
-// (gitignored, .git, node_modules) so the wire stays quiet on builds.
-const viewTreeWss = new WebSocketServer({ noServer: true });
-const projectWatchers = new Map(); // project -> { watcher, clients, pending, dimRules }
-
-// Walk projectRoot once to seed the "what we already announced" sets so that
-// subsequent fs.watch events for already-known paths can be classified as
-// 'change' (file content edited, in-place) instead of 'add' (new entry).
-function seedKnownPaths(projectRoot, rules) {
-  const knownFiles = new Set();
-  const knownDirs = new Set();
-  function walk(dir, rel) {
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      const childRel = rel ? rel + '/' + e.name : e.name;
-      if (rules.isDim(e.name, childRel, e.isDirectory())) continue;
-      if (e.isDirectory()) {
-        knownDirs.add(childRel);
-        walk(path.join(dir, e.name), childRel);
-      } else if (e.isFile()) {
-        knownFiles.add(childRel);
-      }
-    }
-  }
-  walk(projectRoot, '');
-  return { knownFiles, knownDirs };
-}
-
-function getOrCreateWatcher(project) {
-  let entry = projectWatchers.get(project);
-  if (entry) return entry;
-  const projectRoot = path.join(PROJECTS_ROOT, project);
-  let watcher;
-  try {
-    watcher = fs.watch(projectRoot, { recursive: true, persistent: true });
-  } catch (e) {
-    console.warn('[view-tree-ws] watch failed for', project, '-', e.message);
-    return null;
-  }
-  const clients = new Set();
-  const pending = new Map();
-  let dimRules = makeDimRules(projectRoot);
-  const { knownFiles, knownDirs } = seedKnownPaths(projectRoot, dimRules);
-  // Refresh dim rules on a slow cadence so newly-gitignored entries stop
-  // pushing events without forcing the client to reconnect.
-  const dimRefresh = setInterval(() => { dimRules = makeDimRules(projectRoot); }, 30_000);
-  if (typeof dimRefresh.unref === 'function') dimRefresh.unref();
-
-  // Git-status broadcasting: any change to .git/HEAD, .git/index, or
-  // .git/refs/** means the commit graph or staging area moved, which can
-  // shift the tree's yellow/cyan classes. Any change to a tracked file can
-  // shift the uncommitted set. Both lanes feed the same debounced push so
-  // a rebase or `git add` only triggers one git invocation, not dozens.
-  let gitStatusTimer = null;
-  function scheduleGitStatusPush() {
-    if (gitStatusTimer) clearTimeout(gitStatusTimer);
-    gitStatusTimer = setTimeout(() => {
-      gitStatusTimer = null;
-      const map = computeGitStatus(projectRoot);
-      const msg = JSON.stringify({ type: 'git-status', gitStatus: map });
-      for (const ws of clients) {
-        if (ws.readyState === ws.OPEN) {
-          try { ws.send(msg); } catch {}
-        }
-      }
-    }, 250);
-  }
-
-  watcher.on('error', (e) => {
-    console.warn('[view-tree-ws] watcher error', project, '-', e.message);
-  });
-  watcher.on('change', (_eventType, filename) => {
-    if (!filename) return;
-    const rel = String(filename).split(path.sep).join('/');
-    if (!rel || rel === '.') return;
-    // .git internals: HEAD / index / refs movement → recompute git status,
-    // but skip the tree-add/change/delete machinery.
-    if (rel === '.git/HEAD' || rel === '.git/index' || rel.startsWith('.git/refs/')) {
-      scheduleGitStatusPush();
-      return;
-    }
-    if (dimRules.pathIsDim(rel)) return;
-    const segs = rel.split('/');
-    if (segs.some((s) => VIEW_TREE_HIDDEN_DIRS.has(s) || s === '.git')) return;
-    // Tracked-file mutation can also shift the uncommitted set.
-    scheduleGitStatusPush();
-    // Coalesce duplicate events: stat after a short delay so add+remove or
-    // multi-fire renames settle to a single message.
-    if (pending.has(rel)) clearTimeout(pending.get(rel));
-    pending.set(rel, setTimeout(() => {
-      pending.delete(rel);
-      const abs = path.join(projectRoot, rel);
-      let kind = null;
-      let exists = false;
-      try {
-        const s = fs.statSync(abs);
-        exists = true;
-        kind = s.isDirectory() ? 'dir' : 'file';
-      } catch {}
-      let msg = null;
-      if (exists && kind === 'file') {
-        if (knownFiles.has(rel)) {
-          msg = JSON.stringify({ type: 'change', path: rel });
-        } else {
-          knownFiles.add(rel);
-          msg = JSON.stringify({ type: 'add', path: rel, kind: 'file' });
-        }
-      } else if (exists && kind === 'dir') {
-        // A 'change' event on an already-known dir = its contents changed;
-        // those mutations fire their own per-child events, so swallow it.
-        if (!knownDirs.has(rel)) {
-          knownDirs.add(rel);
-          msg = JSON.stringify({ type: 'add', path: rel, kind: 'dir' });
-        }
-      } else {
-        // Stat failed → entry deleted.
-        const wasDir = knownDirs.delete(rel);
-        const wasFile = knownFiles.delete(rel);
-        if (wasDir) {
-          // Drop descendants too — Linux recursive watch won't always fire
-          // an event per child when the parent dir is removed wholesale.
-          const pre = rel + '/';
-          for (const k of knownFiles) if (k.startsWith(pre)) knownFiles.delete(k);
-          for (const k of knownDirs) if (k.startsWith(pre)) knownDirs.delete(k);
-        }
-        if (wasDir || wasFile) {
-          msg = JSON.stringify({ type: 'delete', path: rel });
-        }
-      }
-      if (!msg) return;
-      for (const ws of clients) {
-        if (ws.readyState === ws.OPEN) {
-          try { ws.send(msg); } catch {}
-        }
-      }
-    }, 50));
-  });
-
-  entry = { watcher, clients, pending, dimRefresh, cancelGitTimer: () => {
-    if (gitStatusTimer) { clearTimeout(gitStatusTimer); gitStatusTimer = null; }
-  } };
-  projectWatchers.set(project, entry);
-  return entry;
-}
-
-function releaseWatcher(project, ws) {
-  const entry = projectWatchers.get(project);
-  if (!entry) return;
-  entry.clients.delete(ws);
-  if (entry.clients.size === 0) {
-    for (const t of entry.pending.values()) clearTimeout(t);
-    entry.pending.clear();
-    clearInterval(entry.dimRefresh);
-    if (entry.cancelGitTimer) entry.cancelGitTimer();
-    try { entry.watcher.close(); } catch {}
-    projectWatchers.delete(project);
-  }
-}
-
-// The two-pane viewer shell. Left rail: collapsible tree from /api/view-tree.
-// Right pane: tab strip + per-tab iframe pointing at the existing file-view
-// endpoint with ?embed=1 (which suppresses the per-page header). README.md
-// (case-insensitive) opens in the initial tab if present.
-// Lookup the project's reverse-proxy prefix from its `.project-meta.json`,
-// matching the resolution rule in `buildStaticRoutes`. Returns null when the
-// project has no `proxyTarget` declared. The view shell injects this so the
-// HTML eye-icon (render mode) can target the live proxy URL for build-tool
-// projects whose on-disk `index.html` is a source template, not runnable
-// bytes (e.g. Vite: `<script src="/src/main.tsx">`).
 function readProjectProxyPrefix(project) {
   try {
     const meta = JSON.parse(fs.readFileSync(
@@ -2201,302 +1192,12 @@ function readProjectRoutes(project) {
 }
 
 
-function renderDirectory(project, relPath, absPath) {
-  const entries = fs.readdirSync(absPath, { withFileTypes: true });
-  // Hide a few noise dirs by default; reachable by typing the URL.
-  const hidden = new Set(['node_modules', '.git', '.serve', 'dist', 'build']);
-  const dirs = entries
-    .filter((e) => e.isDirectory() && !hidden.has(e.name))
-    .map((e) => e.name)
-    .sort();
-  const files = entries
-    .filter((e) => e.isFile())
-    .map((e) => e.name)
-    .sort();
-  const items = [];
-  if (relPath !== '') {
-    const parent = relPath.split('/').slice(0, -1).join('/');
-    const url = parent
-      ? `/view/${encodeURIComponent(project)}/${parent.split('/').map(encodeURIComponent).join('/')}/`
-      : `/view/${encodeURIComponent(project)}/`;
-    items.push(`<li><a href="${url}"><span class="dir-icon">↑</span>..</a></li>`);
-  }
-  for (const d of dirs) {
-    const url = `/view/${encodeURIComponent(project)}${relPath ? '/' + relPath : ''}/${encodeURIComponent(d)}/`;
-    items.push(`<li><a href="${url}"><span class="dir-icon">▸</span>${escapeHtml(d)}/</a></li>`);
-  }
-  for (const f of files) {
-    const url = `/view/${encodeURIComponent(project)}${relPath ? '/' + relPath : ''}/${encodeURIComponent(f)}`;
-    items.push(`<li><a href="${url}"><span class="file-icon">·</span>${escapeHtml(f)}</a></li>`);
-  }
-  const list =
-    items.length > 0
-      ? `<ul class="dir">${items.join('')}</ul>`
-      : '<div class="empty">empty directory</div>';
-  const uploadUi = `
-<style>
-  .upload-bar { margin: 0 0 16px; }
-  .upload-btn { background: rgba(125,211,252,0.1); color: var(--accent);
-    border: 1px solid transparent; border-radius: 8px; padding: 8px 14px;
-    font-family: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
-  .upload-btn:hover { background: rgba(125,211,252,0.2); }
-</style>
-<div class="upload-bar"><button type="button" class="upload-btn" id="upload-here">⬆ Upload file here</button></div>
-<script src="/static/upload-dialog.js"></script>
-<script>
-(function () {
-  const btn = document.getElementById('upload-here');
-  if (!btn) return;
-  btn.addEventListener('click', () => {
-    window.UploadDialog.open({
-      project: ${JSON.stringify(project)},
-      path: ${JSON.stringify(relPath)},
-      lockProject: true,
-    });
-  });
-  window.addEventListener('upload-complete', () => {
-    // Flat listing has no live updates — reload to surface the new file.
-    setTimeout(() => location.reload(), 500);
-  });
-})();
-</script>`;
-  return viewerShell(
-    `${project}${relPath ? '/' + relPath : ''}`,
-    renderBreadcrumb(project, relPath),
-    uploadUi + list,
-  );
-}
-
-function renderFrontmatter(meta) {
-  const keys = Object.keys(meta);
-  if (keys.length === 0) return '';
-  // Pretty-print as syntax-highlighted YAML. Strings are escaped for HTML
-  // safety since values can come from arbitrary user content.
-  const lines = keys.map((k) => {
-    const v = meta[k];
-    let valHtml;
-    if (Array.isArray(v)) {
-      const items = v.map((x) => {
-        const s = String(x);
-        return /[\s,[\]]/.test(s) ? `"${escapeHtml(s)}"` : escapeHtml(s);
-      }).join('<span class="fm-punct">, </span>');
-      valHtml = `<span class="fm-punct">[</span>${items}<span class="fm-punct">]</span>`;
-    } else {
-      valHtml = `<span class="fm-str">${escapeHtml(String(v))}</span>`;
-    }
-    return `<span class="fm-key">${escapeHtml(k)}</span><span class="fm-punct">:</span> ${valHtml}`;
-  });
-  return `<pre class="frontmatter">${lines.join('\n')}</pre>`;
-}
-
-function renderMarkdown(project, relPath, content, embed = false) {
-  const { meta, body } = parseFrontmatter(content);
-  const html = marked.parse(body);
-  return viewerShell(
-    `${project}/${relPath}`,
-    renderBreadcrumb(project, relPath) +
-      ` <span class="sep">·</span> <a class="raw-link" href="?raw=1">raw</a>`,
-    `${renderFrontmatter(meta)}<article class="md">${html}</article>`,
-    null,
-    { embed },
-  );
-}
-
-function renderCode(project, relPath, content, lang, embed = false) {
-  const langClass = lang ? ` class="language-${lang}"` : '';
-  const HLJS_CDN_BASE = 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build';
-  const head = `
-<link rel="stylesheet" href="${HLJS_CDN_BASE}/styles/atom-one-dark.min.css">
-<script defer src="${HLJS_CDN_BASE}/highlight.min.js"></script>
-<script defer>document.addEventListener('DOMContentLoaded',()=>hljs.highlightAll());</script>`;
-  return viewerShell(
-    `${project}/${relPath}`,
-    renderBreadcrumb(project, relPath) +
-      ` <span class="sep">·</span> <a class="raw-link" href="?raw=1">raw</a>`,
-    `<pre><code${langClass}>${escapeHtml(content)}</code></pre>`,
-    head,
-    { embed },
-  );
-}
-
-function serveRaw(res, absPath, ext, downloadName) {
-  const mime = RAW_MIME[ext] || 'application/octet-stream';
-  fs.readFile(absPath, (err, data) => {
-    if (err) {
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('read error: ' + err.message);
-      return;
-    }
-    const headers = {
-      'Content-Type': mime,
-      'Content-Length': data.length,
-      'Cache-Control': 'no-cache',
-    };
-    if (downloadName) {
-      // RFC 5987 — filename* handles non-ASCII; plain filename= keeps legacy
-      // browsers happy. Sanitize quotes/CR/LF out of the fallback name.
-      const safe = downloadName.replace(/["\r\n]/g, '_');
-      headers['Content-Disposition'] =
-        `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`;
-    }
-    res.writeHead(200, headers);
-    res.end(data);
-  });
-}
-
-function handleViewRequest(req, res, urlPath) {
-  // urlPath like "/view/<project>/src/App.tsx" or "/view/<project>/" or "/view/"
-  const rest = urlPath.slice('/view/'.length); // e.g. "<project>/src/App.tsx"
-  if (rest === '' || rest === '/') {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Pick a project: /view/<project>/');
-    return;
-  }
-  const slash = rest.indexOf('/');
-  const projectRaw = slash < 0 ? rest : rest.slice(0, slash);
-  let relPath = slash < 0 ? '' : rest.slice(slash + 1);
-  // Trim trailing slash for consistent rel path; we re-add it for directories below.
-  if (relPath.endsWith('/')) relPath = relPath.slice(0, -1);
-
-  let project;
-  try {
-    project = decodeURIComponent(projectRaw);
-  } catch {
-    res.writeHead(400, { 'Content-Type': 'text/plain' });
-    res.end('bad project name');
-    return;
-  }
-  if (!isViewableProject(project)) {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('unknown project');
-    return;
-  }
-
-  let decodedRel;
-  try {
-    decodedRel = relPath
-      .split('/')
-      .map((seg) => (seg ? decodeURIComponent(seg) : seg))
-      .join('/');
-  } catch {
-    res.writeHead(400, { 'Content-Type': 'text/plain' });
-    res.end('bad path');
-    return;
-  }
-
-  const projectRoot = path.join(PROJECTS_ROOT, project);
-  const absPath = path.resolve(projectRoot, decodedRel);
-  // Ensure resolved path stays inside the project root (no ../ escapes).
-  if (absPath !== projectRoot && !absPath.startsWith(projectRoot + path.sep)) {
-    res.writeHead(403, { 'Content-Type': 'text/plain' });
-    res.end('path escapes project root');
-    return;
-  }
-
-  let stat;
-  try {
-    stat = fs.statSync(absPath);
-  } catch (e) {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('not found: ' + e.message);
-    return;
-  }
-
-  if (stat.isDirectory()) {
-    // Force trailing slash so relative URLs in the directory listing resolve correctly.
-    if (!urlPath.endsWith('/')) {
-      res.writeHead(301, { Location: urlPath + '/' });
-      res.end();
-      return;
-    }
-    // Project root → two-pane shell (tree + tabbed iframes). Subdirectory
-    // URLs continue to render the flat directory listing so old links still
-    // work. The shell's tree renders the whole project from root, so user
-    // never needs to navigate into a subdirectory URL anyway.
-    try {
-      const html = decodedRel === ''
-        ? renderViewShell(project, {
-          proxyPrefix: readProjectProxyPrefix(project),
-          routes: readProjectRoutes(project),
-        })
-        : renderDirectory(project, decodedRel, absPath);
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-      res.end(html);
-    } catch (e) {
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('render error: ' + e.message);
-    }
-    return;
-  }
-
-  if (!stat.isFile()) {
-    res.writeHead(415, { 'Content-Type': 'text/plain' });
-    res.end('not a regular file');
-    return;
-  }
-
-  const ext = path.extname(absPath).toLowerCase();
-  const qs = req.url.split('?')[1] || '';
-  const wantRaw = qs.includes('raw=1');
-  const wantEmbed = qs.includes('embed=1');
-  const wantDownload = qs.includes('download=1');
-
-  // Raw delivery path: bypass render. Used for ?raw=1, ?download=1, or any
-  // binary. ?download=1 also adds a Content-Disposition: attachment header
-  // so the browser saves rather than displays.
-  if (wantRaw || wantDownload || BINARY_EXTS.has(ext)) {
-    const name = wantDownload ? path.basename(absPath) : undefined;
-    serveRaw(res, absPath, ext, name);
-    return;
-  }
-
-  if (stat.size > RENDER_AS_TEXT_MAX_BYTES) {
-    res.writeHead(413, { 'Content-Type': 'text/plain' });
-    res.end(`file too large to render in viewer (${stat.size} bytes); add ?raw=1 to download`);
-    return;
-  }
-
-  const content = fs.readFileSync(absPath, 'utf8');
-  let html;
-  if (ext === '.md' || ext === '.markdown') {
-    html = renderMarkdown(project, decodedRel, content, wantEmbed);
-  } else {
-    const lang = HLJS_LANG[ext] || (path.basename(absPath).toLowerCase() === 'dockerfile' ? 'dockerfile' : '');
-    html = renderCode(project, decodedRel, content, lang, wantEmbed);
-  }
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-  res.end(html);
-}
-
 // ---------- Hub v2 (/v2/ shell + /api/v2/*) ----------
 // State (profiles, sessions) lives OUTSIDE the projects tree so it is never a
 // file a tab could browse into or a repo could commit. Published to the
 // environment so ttyd-attach-hub.sh reads the same records.
 const HUB_STATE_DIR = process.env.HUB_STATE_DIR || path.join(os.homedir(), '.claude-hub');
 process.env.HUB_STATE_DIR = HUB_STATE_DIR;
-
-// The v1 develop tabs (`<project>__sN`, one ttyd unit each) listed beside the
-// v2 sessions so a v2 workspace can open every conversation already running.
-function listLegacySessions() {
-  const out = [];
-  let entries;
-  try { entries = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true }); } catch { return out; }
-  for (const e of entries) {
-    if (!e.isDirectory() || !PROJECT_ID_RE.test(e.name) || e.name.startsWith('.')) continue;
-    const dir = path.join(PROJECTS_ROOT, e.name);
-    if (!fs.existsSync(path.join(dir, termSessionsLib.SESSIONS_FILE))) continue;
-    const map = termSessionsLib.readSessionsMap(dir);
-    for (const [id, entry] of Object.entries(map.sessions)) {
-      const key = termSessionsLib.joinTermKey(e.name, id);
-      // Titles are resolved by the v2 router (hub store → transcript), not here.
-      out.push({
-        id: key, kind: 'legacy', cwd: e.name, agent: entry.agent, uuid: entry.uuid, profile: null,
-        title: null, createdAt: null, termKey: key, termUrl: `/term/${key}/`,
-      });
-    }
-  }
-  return out;
-}
 
 // [{name, activity}] — activity = tmux's last-activity epoch seconds, the
 // "most recent response" a shell or codex session can report (V92).
@@ -2510,29 +1211,28 @@ async function tmuxListSessions() {
   } catch { return []; }
 }
 
-// A v1 tab whose claude moved to a new session id (resume / clear): keep the
-// map in step so ttyd-attach.sh resumes that conversation after a reboot.
-function updateLegacyUuid(s, sessionId) {
-  const { project, tabId } = termSessionsLib.parseTermKey(s.termKey);
-  if (!project || !tabId) return;
-  const dir = path.join(PROJECTS_ROOT, project);
-  const map = termSessionsLib.readSessionsMap(dir);
-  if (!map.sessions[tabId] || map.sessions[tabId].uuid === sessionId) return;
-  map.sessions[tabId].uuid = sessionId;
-  termSessionsLib.writeSessionsMap(dir, map);
-}
-
 const v2Router = makeV2Router({
-  projectsRoot: PROJECTS_ROOT, hubDir: HUB_STATE_DIR, sendJson, readJsonBody, execFileP, marked,
-  readProjectRoutes, readProjectProxyPrefix, listLegacySessions, tmuxListSessions, updateLegacyUuid, claudeBin: CLAUDE_BIN,
+  projectsRoot: PROJECTS_ROOT, hubDir: HUB_STATE_DIR, sendJson, readJsonBody, execFileP,
+  readProjectRoutes, readProjectProxyPrefix, tmuxListSessions, claudeBin: CLAUDE_BIN,
 });
+// The glasses app's four read-only v1 routes, served from v2 data (V97).
+const g2Compat = makeG2Compat({ projectsRoot: PROJECTS_ROOT, sendJson, fsApi: v2Router.fs, listSessions: v2Router.listSessions });
 
 const server = http.createServer(async (req, res) => {
-  const url = req.url || '/';
+  let url = req.url || '/';
+  const q = url.indexOf('?');
+  const urlPath = q < 0 ? url : url.slice(0, q);
+  const query = q < 0 ? '' : url.slice(q);
 
-  // Hub v2: the /v2/ shell and everything under /api/v2/. Handled first so
-  // nothing in the v1 dispatcher below needs to know it exists.
-  if (url === '/v2' || url.startsWith('/v2/') || url.startsWith('/v2?') || url.startsWith('/api/v2/')) {
+  // The v2 workspace IS the site now: `/` serves it, `/v2/` keeps serving its
+  // files, old `/v2/` and `/landing.html` links come home (V96).
+  if (urlPath === '/' || urlPath === '/index.html') url = '/v2/' + query;
+  else if (urlPath === '/v2' || urlPath === '/v2/' || urlPath === '/landing.html') {
+    res.writeHead(301, { Location: '/' + query });
+    res.end();
+    return;
+  }
+  if (url.startsWith('/v2/') || url.startsWith('/api/v2/')) {
     try {
       if (await v2Router.handle(req, res, url)) return;
     } catch (e) {
@@ -2551,135 +1251,79 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Managed-projects API — list/create/delete.
-  const apiPath = url.split('?', 1)[0];
-  if (apiPath === '/api/projects') {
-    if (req.method === 'GET') return handleListProjects(req, res);
+  // Read-only v1 routes the glasses app still calls (lib/g2-compat.js).
+  try {
+    if (await g2Compat.handle(req, res, url)) return;
+  } catch (e) {
+    if (!res.headersSent) sendJson(res, 500, { error: e.message });
+    return;
+  }
+
+  // Repo creation (templates / clone / onboard) and its helpers.
+  if (urlPath === '/api/projects') {
     if (req.method === 'POST') return handleCreateProject(req, res);
     res.writeHead(405, { 'Content-Type': 'text/plain' });
     res.end('method not allowed');
     return;
   }
-  if (apiPath === '/api/projects/orphans') {
+  if (urlPath === '/api/projects/orphans') {
     if (req.method === 'GET') return handleListOrphans(req, res);
     res.writeHead(405, { 'Content-Type': 'text/plain' });
     res.end('method not allowed');
     return;
   }
-  const projectMatch = /^\/api\/projects\/([^/]+)$/.exec(apiPath);
-  if (projectMatch) {
-    const name = projectMatch[1];
-    if (req.method === 'DELETE') return handleDeleteProject(req, res, name);
-    res.writeHead(405, { 'Content-Type': 'text/plain' });
-    res.end('method not allowed');
-    return;
-  }
-  const treeMatch = /^\/api\/view-tree\/([^/]+)$/.exec(apiPath);
-  if (treeMatch) {
-    if (req.method === 'GET') return handleViewTree(req, res, treeMatch[1]);
-    res.writeHead(405, { 'Content-Type': 'text/plain' });
-    res.end('method not allowed');
-    return;
-  }
-  const termCaptureMatch = /^\/api\/term-capture\/([^/]+)$/.exec(apiPath);
-  if (termCaptureMatch) {
-    if (req.method === 'GET') return handleTermCapture(req, res, decodeURIComponent(termCaptureMatch[1])).catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: e.message }); });
-    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
-  }
-  const termInputMatch = /^\/api\/term-input\/([^/]+)$/.exec(apiPath);
-  if (termInputMatch) {
-    if (req.method === 'POST') return handleTermInput(req, res, decodeURIComponent(termInputMatch[1]));
-    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
-  }
-  const termScrollMatch = /^\/api\/term-scroll\/([^/]+)$/.exec(apiPath);
-  if (termScrollMatch) {
-    if (req.method === 'POST') return handleTermScroll(req, res, decodeURIComponent(termScrollMatch[1]));
-    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
-  }
-  const termPendingAnswerMatch = /^\/api\/term-pending\/([^/]+)\/answer$/.exec(apiPath);
-  if (termPendingAnswerMatch) {
-    if (req.method === 'POST') return handleTermPendingAnswer(req, res, decodeURIComponent(termPendingAnswerMatch[1]));
-    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
-  }
-  const termPendingMatch = /^\/api\/term-pending\/([^/]+)$/.exec(apiPath);
-  if (termPendingMatch) {
-    const key = decodeURIComponent(termPendingMatch[1]);
-    if (req.method === 'GET') return handleTermPendingGet(req, res, key);
-    if (req.method === 'POST') return handleTermPendingPost(req, res, key);
-    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
-  }
-  if (apiPath === '/api/stt') {
-    if (req.method === 'POST') return handleStt(req, res).catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: e.message }); });
-    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
-  }
-  const termSessionsList = /^\/api\/term-sessions\/([^/]+)$/.exec(apiPath);
-  if (termSessionsList) {
-    const proj = decodeURIComponent(termSessionsList[1]);
-    if (req.method === 'GET') return handleListTermSessions(req, res, proj);
-    if (req.method === 'POST') return handleCreateTermSession(req, res, proj);
-    res.writeHead(405, { 'Content-Type': 'text/plain' });
-    res.end('method not allowed');
-    return;
-  }
-  const termSessionsActive = /^\/api\/term-sessions\/([^/]+)\/active$/.exec(apiPath);
-  if (termSessionsActive) {
-    const proj = decodeURIComponent(termSessionsActive[1]);
-    if (req.method === 'PUT') return handleSetActiveTermSession(req, res, proj);
-    res.writeHead(405, { 'Content-Type': 'text/plain' });
-    res.end('method not allowed');
-    return;
-  }
-  const termSessionsItem = /^\/api\/term-sessions\/([^/]+)\/([^/]+)$/.exec(apiPath);
-  if (termSessionsItem) {
-    const proj = decodeURIComponent(termSessionsItem[1]);
-    const id = decodeURIComponent(termSessionsItem[2]);
-    if (req.method === 'DELETE') return handleDeleteTermSession(req, res, proj, id);
-    res.writeHead(405, { 'Content-Type': 'text/plain' });
-    res.end('method not allowed');
-    return;
-  }
-  if (apiPath === '/api/gh/repos') {
+  if (urlPath === '/api/gh/repos') {
     if (req.method === 'GET') return handleGhRepos(req, res);
     res.writeHead(405, { 'Content-Type': 'text/plain' });
     res.end('method not allowed');
     return;
   }
-  const uploadMatch = /^\/api\/upload\/([^/]+)$/.exec(apiPath);
-  if (uploadMatch) {
-    if (req.method === 'POST') {
-      const query = new URLSearchParams(url.split('?')[1] || '');
-      return handleUpload(req, res, uploadMatch[1], query);
-    }
+  if (urlPath === '/api/upload-anywhere') {
+    if (req.method === 'POST') return handleUploadAnywhere(req, res, new URLSearchParams(query.slice(1)));
     res.writeHead(405, { 'Content-Type': 'text/plain' });
     res.end('method not allowed');
     return;
   }
-  if (apiPath === '/api/upload-anywhere') {
-    if (req.method === 'POST') {
-      const query = new URLSearchParams(url.split('?')[1] || '');
-      return handleUploadAnywhere(req, res, query);
-    }
-    res.writeHead(405, { 'Content-Type': 'text/plain' });
-    res.end('method not allowed');
-    return;
+
+  // Glasses relay + speech-to-text.
+  const termCaptureMatch = /^\/api\/term-capture\/([^/]+)$/.exec(urlPath);
+  if (termCaptureMatch) {
+    if (req.method === 'GET') return handleTermCapture(req, res, canonicalTermKey(decodeURIComponent(termCaptureMatch[1]))).catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: e.message }); });
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
   }
-  if (apiPath === '/api/browse-dirs') {
-    if (req.method === 'GET') {
-      const query = new URLSearchParams(url.split('?')[1] || '');
-      return handleBrowseDirs(req, res, query);
-    }
-    res.writeHead(405, { 'Content-Type': 'text/plain' });
-    res.end('method not allowed');
-    return;
+  const termInputMatch = /^\/api\/term-input\/([^/]+)$/.exec(urlPath);
+  if (termInputMatch) {
+    if (req.method === 'POST') return handleTermInput(req, res, canonicalTermKey(decodeURIComponent(termInputMatch[1])));
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
   }
-  if (apiPath === '/static/upload-dialog.js') {
-    if (req.method !== 'GET') {
-      res.writeHead(405, { 'Content-Type': 'text/plain' });
-      res.end('method not allowed');
-      return;
-    }
-    return serveUploadDialogAsset(res);
+  const termScrollMatch = /^\/api\/term-scroll\/([^/]+)$/.exec(urlPath);
+  if (termScrollMatch) {
+    if (req.method === 'POST') return handleTermScroll(req, res, canonicalTermKey(decodeURIComponent(termScrollMatch[1])));
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
   }
+  const termPendingAnswerMatch = /^\/api\/term-pending\/([^/]+)\/answer$/.exec(urlPath);
+  if (termPendingAnswerMatch) {
+    if (req.method === 'POST') return handleTermPendingAnswer(req, res, canonicalTermKey(decodeURIComponent(termPendingAnswerMatch[1])));
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
+  }
+  const termPendingMatch = /^\/api\/term-pending\/([^/]+)$/.exec(urlPath);
+  if (termPendingMatch) {
+    const key = canonicalTermKey(decodeURIComponent(termPendingMatch[1]));
+    if (req.method === 'GET') return handleTermPendingGet(req, res, key);
+    if (req.method === 'POST') return handleTermPendingPost(req, res, key);
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
+  }
+  if (urlPath === '/api/stt') {
+    if (req.method === 'POST') return handleStt(req, res).catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: e.message }); });
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
+  }
+
+  // PWA glue. /sw.js MUST live at the root so its default scope is "/".
+  if (urlPath === '/sw.js') return serveAsset(res, 'sw.js', 'no-cache');
+  if (urlPath === '/manifest.webmanifest') return serveAsset(res, 'manifest.webmanifest', 'no-cache');
+  if (urlPath === '/favicon.ico' || urlPath === '/favicon.png') return serveAsset(res, 'favicon-32.png', 'public, max-age=86400');
+  if (urlPath === '/apple-touch-icon.png' || urlPath === '/apple-touch-icon-precomposed.png') return serveAsset(res, 'apple-touch-icon.png', 'public, max-age=86400');
+  if (urlPath.startsWith('/assets/')) return serveAsset(res, urlPath.slice('/assets/'.length), 'public, max-age=86400');
 
   // Bare prefix without trailing slash — redirect so relative-path resolution
   // in the upstream HTML lands correctly.
@@ -2691,77 +1335,16 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // /view/<project>/<path> — markdown + code viewer (read-only).
-  const urlPathOnly = url.split('?', 1)[0];
-
-  if (urlPathOnly === '/' || urlPathOnly === '/index.html' || urlPathOnly === '/landing.html') {
-    serveLanding(res);
-    return;
-  }
-  // PWA glue. /sw.js MUST live at the root so its default scope is "/" — a
-  // service worker can only control paths at or below its own URL.
-  if (urlPathOnly === '/sw.js') {
-    // Service-Worker-Allowed not needed since we're already at root scope;
-    // no-cache so updates roll out immediately.
-    return serveAsset(res, 'sw.js', 'no-cache');
-  }
-  if (urlPathOnly === '/manifest.webmanifest') {
-    return serveAsset(res, 'manifest.webmanifest', 'no-cache');
-  }
-  if (urlPathOnly === '/favicon.ico' || urlPathOnly === '/favicon.png') {
-    return serveAsset(res, 'favicon-32.png', 'public, max-age=86400');
-  }
-  if (urlPathOnly === '/apple-touch-icon.png' || urlPathOnly === '/apple-touch-icon-precomposed.png') {
-    return serveAsset(res, 'apple-touch-icon.png', 'public, max-age=86400');
-  }
-  if (urlPathOnly.startsWith('/assets/')) {
-    return serveAsset(res, urlPathOnly.slice('/assets/'.length), 'public, max-age=86400');
-  }
-  // /p/<name>/ — three-pane shell for fast Develop/Open/Browse cycling in the PWA.
-  // Matches /p/<name>, /p/<name>/, or /p/<name>/?view=... only — anything
-  // deeper falls through to 404 (no shell sub-resources today).
-  {
-    const m = /^\/p\/([^/?]+)\/?$/.exec(urlPathOnly);
-    if (m) {
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
-        res.writeHead(405, { 'Content-Type': 'text/plain' });
-        res.end('method not allowed');
-        return;
-      }
-      let name;
-      try { name = decodeURIComponent(m[1]); } catch {
-        res.writeHead(400, { 'Content-Type': 'text/plain' });
-        res.end('bad project name');
-        return;
-      }
-      const query = new URLSearchParams(url.split('?')[1] || '');
-      const view = query.get('view');
-      handleShellRequest(res, name, view);
-      return;
-    }
-  }
-  if (urlPathOnly === '/view' || urlPathOnly === '/view/' || urlPathOnly.startsWith('/view/')) {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { 'Content-Type': 'text/plain' });
-      res.end('viewer is read-only');
-      return;
-    }
-    handleViewRequest(req, res, urlPathOnly);
-    return;
-  }
-
   const route = findRoute(url);
   if (!route) {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Not found. Try /, /api/projects, /view/<project>/, or /term/<project>/.');
+    res.end('Not found. Try /, /api/v2/sessions, or /term/hub/?arg=<id>.');
     return;
   }
 
   rewriteUrl(req, route);
-  // For bare /term/<key>/ HTML index requests we need to inject the touch-
-  // wheel translator into the body. ttyd will gzip if the client accepts it,
-  // and we'd rather not decompress/recompress just to splice 3KB. Force
-  // identity so the upstream returns plaintext we can buffer and rewrite.
+  // For bare /term/<key>/ HTML index requests we inject the mobile shims;
+  // force identity encoding so the upstream returns plaintext we can rewrite.
   if (req.method === 'GET' && TERM_INDEX_RE.test(req.url)) {
     req.headers['accept-encoding'] = 'identity';
   }
@@ -2769,27 +1352,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.on('upgrade', async (req, socket, head) => {
-  const url = req.url || '';
-
-  // Live file-tree updates: /ws/view-tree/<project>. Handled in-process so
-  // we don't proxy these to anything; they ride a dedicated WSS instance.
-  const wsTreeMatch = /^\/ws\/view-tree\/([^/?]+)/.exec(url);
-  if (wsTreeMatch) {
-    const rawProject = wsTreeMatch[1];
-    let project;
-    try { project = decodeURIComponent(rawProject); } catch { socket.destroy(); return; }
-    if (!isViewableProject(project)) { socket.destroy(); return; }
-    viewTreeWss.handleUpgrade(req, socket, head, (ws) => {
-      const entry = getOrCreateWatcher(project);
-      if (!entry) { try { ws.close(); } catch {} return; }
-      entry.clients.add(ws);
-      ws.on('close', () => releaseWatcher(project, ws));
-      ws.on('error', () => releaseWatcher(project, ws));
-    });
-    return;
-  }
-
-  const route = findRoute(url);
+  const route = findRoute(req.url || '');
   if (!route) {
     socket.destroy();
     return;
@@ -2800,74 +1363,6 @@ server.on('upgrade', async (req, socket, head) => {
 
 refreshStaticRoutes();
 
-// Migrate legacy single-session ttyd@<project>.service units to the new
-// multi-tab schema (V47). For each such unit we synthesise tab id "s1",
-// reuse the existing claude conversation by extracting its uuid from the
-// latest jsonl in ~/.claude/projects/<encoded>/, rename the live tmux
-// session (if any) to <project>__s1, then atomic-swap the systemd unit.
-// Idempotent: skips projects whose .develop-sessions.json already exists.
-async function migrateLegacyTermUnits() {
-  let stdout;
-  try {
-    stdout = (await execFileP('systemctl', ['list-units', 'ttyd@*.service', '--all', '--no-legend', '--plain'], { timeout: 10000 })).stdout || '';
-  } catch {
-    return;
-  }
-  // Guards against a template instance literally named ttyd@develop/@shell.
-  // 'wsl' is retained: it is the pre-rename name of the shell terminal, and a
-  // stale ttyd@wsl.service on an un-migrated host must not be mistaken for a
-  // project. (The standalone ttyd-shell.service never matches this glob.)
-  const ADMIN_KEYS = new Set(['develop', 'shell', 'wsl']);
-  for (const line of stdout.split('\n')) {
-    const m = /^ttyd@([^.\s]+)\.service\s/.exec(line);
-    if (!m) continue;
-    const key = m[1];
-    if (key.includes(termSessionsLib.TERM_KEY_SEP)) continue; // already migrated
-    if (ADMIN_KEYS.has(key)) continue;
-    const project = key;
-    const dir = path.join(PROJECTS_ROOT, project);
-    if (!fs.existsSync(dir)) continue;
-    const existing = termSessionsLib.readSessionsMap(dir);
-    if (Object.keys(existing.sessions).length > 0) continue;
-
-    // Find existing claude convo uuid for this project, if any.
-    const encoded = '-' + dir.replace(/^\//, '').replace(/\//g, '-');
-    const sessionsDir = path.join(os.homedir(), '.claude', 'projects', encoded);
-    let uuid = null;
-    try {
-      const files = fs.readdirSync(sessionsDir)
-        .filter((f) => f.endsWith('.jsonl'))
-        .map((f) => ({ f, m: fs.statSync(path.join(sessionsDir, f)).mtimeMs }))
-        .sort((a, b) => b.m - a.m);
-      if (files.length > 0) uuid = files[0].f.replace(/\.jsonl$/, '');
-    } catch {}
-    if (!uuid) uuid = crypto.randomUUID();
-
-    const newKey = termSessionsLib.joinTermKey(project, 's1');
-    termSessionsLib.writeSessionsMap(dir, { sessions: { s1: uuid }, lastActive: 's1' });
-
-    // Rename live tmux session if present. Best-effort.
-    try {
-      await execFileP('tmux', ['has-session', '-t', project], { timeout: 3000 });
-      try { await execFileP('tmux', ['rename-session', '-t', project, newKey], { timeout: 3000 }); } catch {}
-    } catch {}
-
-    // Swap systemd units. Best-effort — leaves the new map in place even on
-    // sudo failure so the migration completes on the next restart attempt.
-    try {
-      await execFileP('sudo', ['-n', 'systemctl', 'disable', '--now', `ttyd@${project}.service`], { timeout: 30000 });
-    } catch (e) {
-      console.warn(`migrate: disable ttyd@${project} failed: ${e.message}`);
-    }
-    try {
-      await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', `ttyd@${newKey}.service`], { timeout: 30000 });
-    } catch (e) {
-      console.warn(`migrate: enable ttyd@${newKey} failed: ${e.message}`);
-    }
-    console.log(`migrated ttyd@${project} → ttyd@${newKey} (uuid ${uuid})`);
-  }
-}
-
 // Only auto-listen when invoked as the entry point (`node server.js`). Tests
 // require this file in-process and call `server.listen` themselves on a
 // random port to avoid collisions with the systemd-managed instance.
@@ -2877,8 +1372,7 @@ if (require.main === module) {
     for (const r of STATIC_ROUTES) {
       console.log(`  ${r.prefix}/* → ${r.target}${r.stripPrefix ? ' (prefix stripped)' : ''}`);
     }
-    migrateLegacyTermUnits().catch((e) => console.warn('migrateLegacyTermUnits failed:', e.message));
   });
 }
 
-module.exports = { server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES, projectWatchers };
+module.exports = { server, PROJECT_ID_RE, RESERVED_PROJECT_NAMES };
