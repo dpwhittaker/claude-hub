@@ -51,4 +51,9 @@ module.exports = [
     files: ['services/**/*.mjs'],
     languageOptions: { sourceType: 'module' },
   },
+  // The Omni glasses app root: ESM (glasses/package.json), run by the omnieven server.
+  {
+    files: ['glasses/**/*.js'],
+    languageOptions: { sourceType: 'module', globals: { ...globals.node } },
+  },
 ];

@@ -188,18 +188,37 @@ tmux server lives in one of their cgroups (stopping that unit would kill every
 session), so they run until the next reboot and never come back. The unit
 files and `ttyd-attach.sh` are gone from `/etc` and the repo.
 
-## Glasses relay (claude-hub-g2)
+## The glasses app (`glasses/`)
 
-The G2 app reads a terminal through tmux — `/api/term-capture` for the text,
-`/api/term-input` for typed/spoken prompts, `/api/term-scroll` for wheel
-ticks — and answers Claude's interactive prompts through
-`services/glasses-relay-hook.mjs` (`node services/install-glasses-hooks.mjs`
-wires it). The hook is inert unless a glasses client polled
-`/api/term-capture/<key>` within the last 5 s; a held prompt goes back to the
-TUI when the glasses stop polling or after 540 s. The glasses compose a key as
-`<project>__<id>`; `canonicalTermKey` in `server.js` strips that prefix off a
-`hub-…` name. Until claude-hub-g2 is ported to `/api/v2/*`, `lib/g2-compat.js`
-answers its four v1 reads from v2 data.
+The G2 client is an **Omni app** that lives in this repo — `glasses/claude-hub/index.js`
+(+ `text.js`; `glasses/package.json` makes the folder ESM) — and is loaded by
+the omnieven server on this box through its `data/app-roots`
+(`/home/david/projects/claude-hub/glasses`). Save the file and the glasses
+update within a second; there is no build, no packaging, no second server.
+It talks only to `/api/v2/*` and the relay routes, and mirrors the workspace:
+sessions by recency with state glyphs (● busy ◐ waiting ○ idle · stopped),
+an Explorer rooted at `/` whose folders offer "terminal here", files as
+byte-budgeted blocks, and a terminal read through tmux with the TUI chrome
+stripped — native scrolling, where `up` at the top freezes the capture and
+scrolls tmux back and `down` goes live again; hold to speak (the hub's
+`/api/stt`), tap to send; Claude's questions and permission prompts arrive
+as lists (double-tap hands them back to the terminal). `POST
+/api/apps/claude-hub/message {open: {session|file|folder}}` pushes a view.
+
+Two rules from its bugs: `onEvent` must stay **synchronous** — Omni reads the
+boolean, and an async handler's Promise reads as "not consumed", so every
+gesture falls through to the default binding (B34); and `ctx.ui.headerBody`
+returns an array of containers, so it goes in `{ containers: … }`. Drive it
+without hardware from `~/projects/omnieven`: `npm run fake-client -- --sandbox`
+(keys `t d u w l r s<N> m<N>`; the sandbox copies `app-roots`, so this folder
+is there too). `test/glasses-text.test.js` covers the pure helpers.
+
+**Relay.** The app reads a terminal through `/api/term-capture`, types
+through `/api/term-input`, scrolls through `/api/term-scroll`, and answers
+prompts through `services/glasses-relay-hook.mjs` (`node
+services/install-glasses-hooks.mjs` wires it). The hook is inert unless a
+glasses client polled `/api/term-capture/<key>` within the last 5 s; a held
+prompt goes back to the TUI when the glasses stop polling or after 540 s.
 
 ## Mobile terminal input
 

@@ -1,0 +1,6 @@
+{
+  "name": "claude-hub-glasses",
+  "private": true,
+  "type": "module",
+  "description": "Omni app root: the claude-hub app for Even Realities G2 glasses. List this folder in omnieven's data/app-roots."
+}

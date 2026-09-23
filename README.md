@@ -11,7 +11,7 @@ There is no "project" in the UI. A **session** is an agent running in some folde
 - **Files anywhere.** A browser rooted at `~/projects`, folders coloured by whether a terminal is open there. Raw shows highlighted source, View renders markdown, images, PDFs and the live page for html behind a dev server, Edit is CodeMirror with Ctrl+Space completion from the local `claude` CLI, Diff compares against HEAD or any commit that touched the file. Saves refuse to clobber a file an agent changed meanwhile.
 - **Services with their sites.** Units you maintain are discovered, not registered, and matched to their `tailscale serve` listeners. A service tab shows the site, the unit file or a live log tail, with start, stop and restart in its bar.
 - **New repos.** From a template (Vite + React, Phaser, react-three-fiber, Babylon, Jekyll, an Even Realities G2 app), a clone of one of your GitHub repos, or an existing folder. The scaffold gets a dev-server unit behind the proxy and a Claude session seeded with an orientation prompt.
-- **Glasses.** The G2 app reads a terminal through tmux, speaks prompts into it, and answers Claude's questions and permission prompts through a hook that is inert unless the glasses are watching.
+- **Glasses.** `glasses/` is an [Omni](https://github.com/lettucegoblin/omnieven) app for the Even Realities G2: sessions, the Explorer and a live terminal read through tmux, spoken prompts, and Claude's questions and permission prompts answered from the glasses through a hook that is inert unless they are watching. List the folder in Omni's `data/app-roots` and it is on the glasses.
 
 ## Run it
 
