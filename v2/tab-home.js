@@ -77,6 +77,7 @@
         if (i > 0) crumbs.append(el('span', { class: 'sep' }, '/'));
         crumbs.append(el('button', { class: i === segs.length - 1 ? 'cur' : '', onclick: () => load(target) }, s));
       });
+      if (lastData && lastData.branch) crumbs.append(Hub.branchChip(lastData.branch));
       crumbs.append(el('span', { class: 'spacer' }));
       const tools = el('span', { class: 'tools' },
         opts.standalone ? el('button', { title: 'Rename this folder', disabled: !cur, onclick: renameHere }, Hub.icon('pencil')) : null,
@@ -389,7 +390,7 @@
         const row = el('li', { class: 'row', title: s.description || s.unit },
           el('span', { class: 'dot' + (s.active === 'active' ? ' on' : s.active === 'failed' ? ' bad' : '') }),
           el('span', { class: 'main' }, el('span', { class: 't' }, s.title), el('span', { class: 's' }, (s.sub || s.active) + (s.project ? ' · ' + s.project : '') + (s.url ? ' · ' + s.url : ''))));
-        row.onclick = () => { noteVisit(s.unit); Hub.openTab({ kind: 'service', unit: s.unit, url: s.url || null, title: s.title, active: s.active, mode: s.url ? 'site' : 'unit' }); };
+        row.onclick = () => { noteVisit(s.unit); Hub.openTab({ kind: 'service', unit: s.unit, url: s.url || null, title: s.title, active: s.active, branch: s.branch || null, mode: s.url ? 'site' : 'unit' }); };
         return row;
       }
 

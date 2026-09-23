@@ -103,7 +103,8 @@
         catch (e) { toast(e.message, true); }
       } }, Hub.icon('trash'));
       const status = el('span', { class: 'hint' });
-      const bar = el('div', { class: 'tabbar' }, seg, pathEl, status, el('span', { class: 'spacer' }), refSel, aiBtn, saveBtn, renameBtn, deleteBtn, dl);
+      const branch = Hub.branchChip(null);
+      const bar = el('div', { class: 'tabbar' }, seg, pathEl, branch, status, el('span', { class: 'spacer' }), refSel, aiBtn, saveBtn, renameBtn, deleteBtn, dl);
       const view = el('div', { class: 'view' });
       root.append(el('div', { class: 'filetab' }, bar, view));
 
@@ -120,6 +121,7 @@
         try { stat = await api('/api/v2/fs/stat?path=' + encodeURIComponent(path)); }
         catch (e) { view.innerHTML = ''; view.append(el('div', { class: 'err' }, e.message)); return; }
         for (const m of Object.keys(modeBtns)) modeBtns[m].disabled = !stat.modes.includes(m);
+        Hub.setBranch(branch, stat.branch);
         setMode(mode && stat.modes.includes(mode) ? mode : stat.defaultMode);
       }
 

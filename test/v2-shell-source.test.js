@@ -101,3 +101,14 @@ test('V99: the + repo tool is on every folder and sends the folder as dir', () =
   assert.match(home, /const payload = \{ name: n, dir, template/);
   assert.match(home, /\/api\/projects\/orphans\?dir=/);
 });
+
+test('V101: every bar shows the branch chip — terminal, service, file, folder crumbs', () => {
+  const tabs = read('tabs.js');
+  const file = read('tab-file.js');
+  const home = read('tab-home.js');
+  assert.match(tabs, /Hub\.branchChip = function branchChip/);
+  assert.match(tabs, /Hub\.setBranch\(branch, s && s\.branch\)/, 'terminal bar follows the session');
+  assert.match(tabs, /Hub\.setBranch\(branch, me\.branch\)/, 'service bar follows the unit\'s project');
+  assert.match(file, /Hub\.setBranch\(branch, stat\.branch\)/, 'file bar from stat');
+  assert.match(home, /if \(lastData && lastData\.branch\) crumbs\.append\(Hub\.branchChip\(lastData\.branch\)\)/, 'folder crumbs from the listing');
+});

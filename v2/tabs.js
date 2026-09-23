@@ -50,6 +50,7 @@
     logs: '<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="14" y1="18" y2="18"/>',
     pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
     x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    branch: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
     trash: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
     play: '<polygon points="6 3 20 12 6 21 6 3"/>',
     stop: '<rect width="14" height="14" x="5" y="5" rx="2"/>',
@@ -68,6 +69,14 @@
     svg.innerHTML = ICONS[name] || '';
     return svg;
   };
+  // The branch chip every bar shows when its subject sits in a repository (V101).
+  Hub.branchChip = function branchChip(name) {
+    const chip = Hub.el('span', { class: 'branch', title: name ? 'branch ' + name : '' }, Hub.icon('branch'), Hub.el('span', { class: 'bn' }, name || ''));
+    chip.hidden = !name;
+    return chip;
+  };
+  Hub.setBranch = function setBranch(chip, name) { chip.querySelector('.bn').textContent = name || ''; chip.title = name ? 'branch ' + name : ''; chip.hidden = !name; };
+
   // "<icon> +" — the new-thing buttons all read the same way.
   Hub.iconPlus = function iconPlus(name) {
     return [Hub.icon(name), Hub.el('span', { class: 'plus' }, '+')];
@@ -194,8 +203,9 @@
         try { await api('/api/v2/sessions/' + tab.sessionId, { method: 'DELETE' }); Hub.sessions.at = 0; Hub.closeTabsWhere((x) => x.kind === 'term' && x.termKey === tab.termKey); }
         catch (e) { toast(e.message, true); }
       } }, Hub.icon('x'), ' End');
+      const branch = Hub.branchChip(null);
       const bar = el('div', { class: 'tabbar' }, dot, el('span', { class: 'badge ' + tab.agent }, tab.agent || 'claude'),
-        el('span', { class: 'path mono', title: tab.termKey }, Hub.slashPath(tab.cwd)), state, el('span', { class: 'spacer' }), suspend, reconnect, tab.sessionId ? end : null);
+        el('span', { class: 'path mono', title: tab.termKey }, Hub.slashPath(tab.cwd)), branch, state, el('span', { class: 'spacer' }), suspend, reconnect, tab.sessionId ? end : null);
       Hub.append(root, bar, f);
       function paint() {
         const s = Hub.sessions.list.find((x) => x.termKey === tab.termKey);
@@ -203,6 +213,7 @@
         dot.className = 'dot' + (running ? ' on' : '') + (running && s.activity === 'busy' ? ' busy' : '') + (running && s.activity === 'waiting' ? ' waiting' : '');
         state.textContent = !s ? '' : !running ? 'suspended' : (s.activity || 'running');
         suspend.hidden = !running;
+        Hub.setBranch(branch, s && s.branch);
       }
       const onSessions = () => paint();
       document.addEventListener('hub:sessions', onSessions);
@@ -242,7 +253,8 @@
       const startStop = el('button', { class: 'btn muted', onclick: () => act(state.active === 'active' ? 'stop' : 'start') });
       const restart = el('button', { class: 'btn muted', title: 'Restart', onclick: () => act('restart') }, Hub.icon('refresh'), ' Restart');
       const status = el('span', { class: 'hint' });
-      const bar = el('div', { class: 'tabbar' }, seg, dot, el('span', { class: 'path mono', title: tab.unit }, tab.unit), status, el('span', { class: 'spacer' }), startStop, restart,
+      const branch = Hub.branchChip(tab.branch || null);
+      const bar = el('div', { class: 'tabbar' }, seg, dot, el('span', { class: 'path mono', title: tab.unit }, tab.unit), branch, status, el('span', { class: 'spacer' }), startStop, restart,
         tab.url ? el('a', { class: 'btn muted', href: tab.url, target: '_blank', rel: 'noopener', title: 'Open the site in a new browser tab' }, Hub.icon('popout')) : null);
       const view = el('div', { class: 'view' });
       root.append(el('div', { class: 'filetab' }, bar, view));
@@ -257,7 +269,7 @@
         try {
           const d = await api('/api/v2/services');
           const me = d.services.find((x) => x.unit === tab.unit);
-          if (me) { state = { active: me.active, sub: me.sub }; ctx.update({ active: me.active }, { silent: true }); }
+          if (me) { state = { active: me.active, sub: me.sub }; ctx.update({ active: me.active }, { silent: true }); Hub.setBranch(branch, me.branch); }
           paintState();
         } catch {}
       }

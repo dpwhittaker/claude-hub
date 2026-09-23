@@ -129,6 +129,8 @@ test('V83/V96: sessions API creates records anywhere under the root; a migrated 
     assert.equal(c.status, 200, JSON.stringify(c.body));
     assert.equal(c.body.kind, 'hub');
     assert.equal(c.body.cwd, 'proj/src');
+    const listed = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((s) => s.id === c.body.id);
+    assert.equal(listed.branch, execFileSync('git', ['-C', path.join(fx.projectsRoot, 'proj'), 'symbolic-ref', '--short', 'HEAD'], { encoding: 'utf8' }).trim(), 'a session in a repo carries its branch (V101)');
     assert.equal(c.body.termUrl, '/term/hub/?arg=' + c.body.id);
     assert.ok(fs.existsSync(path.join(fx.hubStateDir, 'sessions', c.body.id + '.json')));
     const after = await json(fx.url + '/api/v2/sessions');
@@ -154,6 +156,10 @@ test('V79/V81: file API — list, stat with previewUrl, text read/write with 409
     assert.equal(proj.repo, true);
     const st = await json(fx.url + '/api/v2/fs/stat?path=proj/README.md');
     assert.equal(st.body.fileKind, 'markdown');
+    const head = execFileSync('git', ['-C', path.join(fx.projectsRoot, 'proj'), 'symbolic-ref', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
+    assert.equal(st.body.branch, head, 'a file in a repo carries its branch (V101)');
+    assert.equal(root.body.branch, null, 'the root is not a repo');
+    assert.equal((await json(fx.url + '/api/v2/fs/list?path=proj/src')).body.branch, head);
     assert.equal(st.body.previewUrl, '/proj/README.html', 'routes rule maps the file to its live URL');
     assert.equal((await json(fx.url + '/api/v2/fs/stat?path=proj/src/a.js')).body.previewUrl, null);
     const t = await json(fx.url + '/api/v2/fs/text?path=proj/src/a.js');
@@ -330,6 +336,7 @@ test('V85: services API lists {services, tailnet}; actions on unknown units are 
       assert.match(s.unit, /\.service$/);
       assert.doesNotMatch(s.unit, /^ttyd/);
       assert.equal(typeof s.active, 'string');
+      assert.ok('branch' in s, 'every service carries a branch field (null without a project repo)');
     }
     assert.equal((await post(fx.url + '/api/v2/services/definitely-not-a-unit.service/restart', {})).status, 404);
     assert.equal((await post(fx.url + '/api/v2/services/..%2Fx.service/restart', {})).status, 404);

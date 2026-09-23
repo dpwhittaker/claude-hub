@@ -152,3 +152,22 @@ test('V98: remove deletes a file or a whole folder, never the root', () => {
   assert.throws(() => api.remove('../x'), (e) => e.statusCode === 400);
   assert.throws(() => api.remove('gone'), (e) => e.statusCode === 404);
 });
+
+test('V101: branch() names the checked-out branch of the enclosing repo, the short sha when detached, null outside', () => {
+  const { root, api } = scratch();
+  const repo = path.join(root, 'r');
+  fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+  git(repo, 'init', '-q', '-b', 'trunk');
+  fs.writeFileSync(path.join(repo, 'src/a.js'), '1');
+  git(repo, 'add', '.'); git(repo, 'commit', '-q', '-m', 'one');
+  assert.deepEqual(api.branch('r/src/a.js'), { path: 'r/src/a.js', repo: 'r', branch: 'trunk' });
+  assert.equal(api.list('r/src').branch, 'trunk');
+  assert.equal(api.stat('r/src/a.js').branch, 'trunk');
+  git(repo, 'checkout', '-q', '-b', 'feature/x');
+  assert.equal(api.branch('r').branch, 'feature/x');
+  git(repo, 'checkout', '-q', '--detach');
+  assert.match(api.branch('r').branch, /^\([0-9a-f]{7,}\)$/);
+  fs.mkdirSync(path.join(root, 'plain'));
+  assert.deepEqual(api.branch('plain'), { path: 'plain', repo: null, branch: null });
+  assert.equal(api.list('plain').branch, null);
+});

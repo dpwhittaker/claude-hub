@@ -75,7 +75,8 @@ test('V85: discovery = local unit files + vite/jekyll instances + sentinel extra
     if (cmd === 'systemctl' && args[0] === 'list-units') return { stdout: 'vite@game.service loaded active running Vite\nvite@other.service loaded failed failed Vite\n' };
     if (cmd === 'systemctl' && args[0] === 'show') {
       const units = args.slice(3);
-      return { stdout: units.map((u) => `Id=${u}\nDescription=d ${u}\nActiveState=${u.startsWith('vite@other') ? 'failed' : 'active'}\nSubState=running\nMainPID=1\n`).join('\n') };
+      const wd = (u) => (u === 'claude-hub.service' ? projectsRoot + '/hub' : u === 'vite@other.service' ? projectsRoot + '/other' : u === 'stt.service' ? '/home/me/stt' : '');
+      return { stdout: units.map((u) => `Id=${u}\nDescription=d ${u}\nActiveState=${u.startsWith('vite@other') ? 'failed' : 'active'}\nSubState=running\nMainPID=1\nWorkingDirectory=${wd(u)}\n`).join('\n') };
     }
     if (cmd === 'tailscale') return { stdout: 'https://h.ts.net:7788 (tailnet only)\n|-- / proxy http://localhost:7788\nhttps://h.ts.net:8443 (tailnet only)\n|-- / proxy http://localhost:4096\n' };
     if (cmd === 'ss') return { stdout: 'LISTEN 0 512 127.0.0.1:4096 0.0.0.0:* users:(("claude-hub",pid=500,fd=1))\nLISTEN 0 512 127.0.0.1:5173 0.0.0.0:* users:(("node",pid=501,fd=1))\n' };
@@ -97,6 +98,10 @@ test('V85: discovery = local unit files + vite/jekyll instances + sentinel extra
   assert.equal(services.find((s) => s.unit === 'vite@other.service').active, 'failed');
   const hub = services.find((s) => s.unit === 'claude-hub.service');
   assert.equal(hub.title, 'claude-hub');
+  assert.equal(hub.project, 'hub', 'no sentinel → the unit\'s WorkingDirectory under the root is its project (V101)');
+  assert.equal(services.find((s) => s.unit === 'vite@other.service').project, 'other');
+  assert.equal(stt.project, null, 'a WorkingDirectory outside the root is not a project');
+  assert.equal(services.find((s) => s.unit === 'omni.service').project, null);
   assert.deepEqual(hub.ports, [4096]);
   assert.equal(hub.tailnetUrl, 'https://h.ts.net:8443/');
   assert.equal(hub.url, 'https://h.ts.net:8443/', 'a unit with no sentinel URL takes the tailnet listener on its port');
