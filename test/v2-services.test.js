@@ -29,6 +29,27 @@ test('V85: parseTailscaleServeStatus reads listeners and their mounts', () => {
   assert.deepEqual(S.parseTailscaleServeStatus(''), []);
 });
 
+test('B33: ss listeners + cgroups map units to ports, and a tailnet mount on that port becomes the unit\'s URL', () => {
+  const ss = [
+    'LISTEN 0      511                      127.0.0.1:8002  0.0.0.0:* users:(("MainThread",pid=1526072,fd=21))  ',
+    'LISTEN 0      512                      127.0.0.1:4096  0.0.0.0:* users:(("opencode",pid=172951,fd=17))     ',
+    'LISTEN 0      4096                100.123.82.109:7788  0.0.0.0:*                                           ',
+    'LISTEN 0      128                           [::]:5173     [::]:* users:(("node",pid=77,fd=3),("node",pid=78,fd=3))',
+  ].join('\n');
+  assert.deepEqual(S.parseSsListeners(ss), [{ port: 8002, pid: 1526072 }, { port: 4096, pid: 172951 }, { port: 5173, pid: 77 }, { port: 5173, pid: 78 }]);
+  assert.equal(S.unitFromCgroup('0::/system.slice/opencode-web.service\n'), 'opencode-web.service');
+  assert.equal(S.unitFromCgroup('0::/system.slice/system-vite.slice/vite@x.service'), 'vite@x.service');
+  assert.equal(S.unitFromCgroup('0::/user.slice/user-1000.slice/session-3.scope'), null);
+  const byPort = S.tailnetByPort([
+    { url: 'https://h.ts.net', mounts: [{ path: '/', mode: 'proxy', target: 'http://localhost:8002' }] },
+    { url: 'https://h.ts.net:8443', mounts: [{ path: '/', mode: 'proxy', target: 'http://localhost:4096' }] },
+    { url: 'https://h.ts.net:9000', mounts: [{ path: '/api', mode: 'proxy', target: 'http://127.0.0.1:9001/x' }] },
+  ]);
+  assert.equal(byPort.get(4096), 'https://h.ts.net:8443/');
+  assert.equal(byPort.get(8002), 'https://h.ts.net/');
+  assert.equal(byPort.get(9001), 'https://h.ts.net:9000/api');
+});
+
 test('V85: discovery = local unit files + vite/jekyll instances + sentinel extraUnits, never ttyd; URLs from sentinels + overrides; actions only on known units', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v2svc-'));
   const projectsRoot = path.join(root, 'projects');
@@ -56,10 +77,12 @@ test('V85: discovery = local unit files + vite/jekyll instances + sentinel extra
       const units = args.slice(3);
       return { stdout: units.map((u) => `Id=${u}\nDescription=d ${u}\nActiveState=${u.startsWith('vite@other') ? 'failed' : 'active'}\nSubState=running\nMainPID=1\n`).join('\n') };
     }
-    if (cmd === 'tailscale') return { stdout: 'https://h.ts.net:7788 (tailnet only)\n|-- / proxy http://localhost:7788\n' };
+    if (cmd === 'tailscale') return { stdout: 'https://h.ts.net:7788 (tailnet only)\n|-- / proxy http://localhost:7788\nhttps://h.ts.net:8443 (tailnet only)\n|-- / proxy http://localhost:4096\n' };
+    if (cmd === 'ss') return { stdout: 'LISTEN 0 512 127.0.0.1:4096 0.0.0.0:* users:(("claude-hub",pid=500,fd=1))\nLISTEN 0 512 127.0.0.1:5173 0.0.0.0:* users:(("node",pid=501,fd=1))\n' };
     throw new Error('unexpected ' + cmd);
   };
-  const lister = S.makeServiceLister({ projectsRoot, hubDir, exec, unitDir, user: 'me', home: '/home/me' });
+  const readCgroup = (pid) => ({ 500: '0::/system.slice/claude-hub.service\n', 501: '0::/system.slice/system-vite.slice/vite@game.service\n' })[pid] || '';
+  const lister = S.makeServiceLister({ projectsRoot, hubDir, exec, unitDir, user: 'me', home: '/home/me', readCgroup });
   const { services, tailnet } = await lister.list();
   const units = services.map((s) => s.unit);
   assert.deepEqual(units, ['claude-hub.service', 'omni.service', 'site.service', 'stt.service', 'vite@game.service', 'vite@other.service']);
@@ -72,8 +95,14 @@ test('V85: discovery = local unit files + vite/jekyll instances + sentinel extra
   assert.equal(stt.title, 'Whisper');
   assert.equal(stt.url, 'https://x:8012/');
   assert.equal(services.find((s) => s.unit === 'vite@other.service').active, 'failed');
-  assert.equal(services.find((s) => s.unit === 'claude-hub.service').title, 'claude-hub');
-  assert.equal(tailnet.length, 1);
+  const hub = services.find((s) => s.unit === 'claude-hub.service');
+  assert.equal(hub.title, 'claude-hub');
+  assert.deepEqual(hub.ports, [4096]);
+  assert.equal(hub.tailnetUrl, 'https://h.ts.net:8443/');
+  assert.equal(hub.url, 'https://h.ts.net:8443/', 'a unit with no sentinel URL takes the tailnet listener on its port');
+  assert.deepEqual(game.ports, [5173]);
+  assert.equal(game.url, '/game/', 'a sentinel URL still wins over a port match');
+  assert.equal(tailnet.length, 2);
   assert.equal(await lister.isKnownUnit('vite@game.service'), true);
   assert.equal(await lister.isKnownUnit('ssh.service'), false, 'symlinked distro unit is not ours');
   assert.equal(await lister.isKnownUnit('cloud-init-network.service'), false, 'root-run distro unit dropped here is not ours');
