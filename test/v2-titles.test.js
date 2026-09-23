@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { makeTitleStore, cleanTitle } = require('../lib/v2-titles');
 const { digestTranscript, buildPrompt, parseReply, validTitle, USER_NAME_FLOOR } = require('../lib/session-title');
-const { readSessionTitle, readTranscriptTitle } = require('../lib/term-sessions');
+const { readSessionTitle, readTranscriptTitle, readTranscriptLastAt } = require('../lib/term-sessions');
 const { readLiveSessions, parseEntry } = require('../lib/claude-registry');
 
 const U1 = '11111111-2222-3333-4444-555555555555';
@@ -182,3 +182,22 @@ test('V90: the worker leaves a fresh /rename alone, asks KEEP-or-new otherwise, 
 });
 
 
+
+test('B32: readTranscriptLastAt is the last record timestamp, not the file mtime', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'v2home-'));
+  const dir = path.join(home, '.claude', 'projects', '-srv-projects-x');
+  fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, U1 + '.jsonl');
+  assert.equal(readTranscriptLastAt('/srv/projects/x', U1, { homedir: home }), 0);
+  fs.writeFileSync(f, [
+    JSON.stringify({ type: 'user', timestamp: '2026-09-22T07:00:00.000Z', message: { role: 'user', content: 'x' } }),
+    JSON.stringify({ type: 'assistant', timestamp: '2026-09-22T07:19:23.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'y' }] } }),
+    JSON.stringify({ type: 'system' }),
+  ].join('\n') + '\n');
+  // Touch the file well after the last record: the answer must not move.
+  fs.utimesSync(f, new Date(), new Date());
+  assert.equal(readTranscriptLastAt('/srv/projects/x', U1, { homedir: home }), Date.parse('2026-09-22T07:19:23.000Z'));
+  // A huge trailing line (a tool result) pushes the last timestamp past 64 KB: the 1 MB pass finds it.
+  fs.appendFileSync(f, JSON.stringify({ type: 'user', timestamp: '2026-09-22T08:00:00.000Z', message: { role: 'user', content: 'z'.repeat(200 * 1024) } }) + '\n');
+  assert.equal(readTranscriptLastAt('/srv/projects/x', U1, { homedir: home }), Date.parse('2026-09-22T08:00:00.000Z'));
+});

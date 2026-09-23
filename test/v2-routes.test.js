@@ -210,7 +210,8 @@ test('V92/V90: a live claude session (Claude registry) supplies status, its curr
   try {
     const LIVE = '33333333-3333-3333-3333-333333333333';
     // Pretend the seeded v1 tab's tmux session runs THIS process (alive pid) and moved to a new id after a /clear.
-    fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'renamed-by-user', nameSource: 'user', nameSince: Date.now(), status: 'waiting', updatedAt: Date.now() }));
+    const statusAt = Date.now() - 3600000; // an hour ago: tmux will be "active" right now, and must not win
+    fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'renamed-by-user', nameSource: 'user', nameSince: Date.now(), status: 'waiting', statusUpdatedAt: statusAt, updatedAt: statusAt }));
     // The tab must count as running for the registry to apply: seed a tmux entry by name.
     let tmuxOk = true;
     try { execFileSync('tmux', ['new-session', '-d', '-s', 'proj__s1', 'sleep 30']); } catch { tmuxOk = false; }
@@ -220,7 +221,7 @@ test('V92/V90: a live claude session (Claude registry) supplies status, its curr
     assert.equal(s.activity, 'waiting');
     assert.equal(s.uuid, LIVE, 'the live id replaces the launch id');
     assert.equal(s.title, 'renamed-by-user');
-    assert.ok(s.lastActive > Date.now() - 5000);
+    assert.equal(s.lastActive, statusAt, 'a live claude session\'s recency is the registry\'s status change (B32), not tmux activity');
     const map = JSON.parse(fs.readFileSync(path.join(fx.projectsRoot, 'proj', '.develop-sessions.json'), 'utf8'));
     assert.equal(map.sessions.s1.uuid, LIVE, 'the v1 map follows so a reboot resumes the right conversation');
     // A newer hub auto-title beats the user's older name; an older one does not.
