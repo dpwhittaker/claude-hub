@@ -79,7 +79,7 @@
     icon: '◈',
     title: (t) => Hub.basename(t.path),
     mount(tab, root, ctx) {
-      const path = tab.path;
+      let path = tab.path;
       let stat = null;
       let mode = tab.mode || null;
       const modeBtns = {};
@@ -88,8 +88,22 @@
       const aiBtn = el('button', { class: 'btn muted', hidden: true, title: 'AI completion at the cursor (Ctrl+Space)', onclick: () => complete() }, '✨');
       const refSel = el('select', { class: 'sel', hidden: true, onchange: () => showDiff() });
       const dl = el('a', { class: 'btn muted', title: 'Download', href: '/api/v2/fs/raw?path=' + encodeURIComponent(path) + '&download=1' }, '↧');
+      const pathEl = el('span', { class: 'path mono', title: path }, path);
+      const renameBtn = el('button', { class: 'btn muted', title: 'Rename', onclick: async () => {
+        const name = await Hub.ask({ title: 'Rename file', label: 'New name', value: Hub.basename(path) });
+        if (!name || name.trim() === Hub.basename(path)) return;
+        const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+        const to = (parent ? parent + '/' : '') + name.trim();
+        try { await api('/api/v2/fs/rename', { method: 'POST', body: { path, to } }); Hub.repathTabs(path, to); }
+        catch (e) { toast(e.message, true); }
+      } }, Hub.icon('pencil'));
+      const deleteBtn = el('button', { class: 'btn muted', title: 'Delete', onclick: async () => {
+        if (!(await Hub.confirm('Delete "' + path + '"?', 'Removed from disk. This cannot be undone.', 'Delete', true))) return;
+        try { await api('/api/v2/fs/delete', { method: 'POST', body: { path } }); Hub.closeTab(ctx.tabId, { force: true }); }
+        catch (e) { toast(e.message, true); }
+      } }, Hub.icon('trash'));
       const status = el('span', { class: 'hint' });
-      const bar = el('div', { class: 'tabbar' }, seg, el('span', { class: 'path mono', title: path }, path), status, el('span', { class: 'spacer' }), refSel, aiBtn, saveBtn, dl);
+      const bar = el('div', { class: 'tabbar' }, seg, pathEl, status, el('span', { class: 'spacer' }), refSel, aiBtn, saveBtn, renameBtn, deleteBtn, dl);
       const view = el('div', { class: 'view' });
       root.append(el('div', { class: 'filetab' }, bar, view));
 
@@ -264,7 +278,11 @@
 
       init();
       return {
-        refresh: () => { if (mode !== 'edit' || !dirty) { editor = null; editorHost?.remove(); editorHost = null; init(); } },
+        // Also how a rename lands: the tab's path changed under us.
+        refresh: () => {
+          if (tab.path !== path) { path = tab.path; pathEl.textContent = path; pathEl.title = path; dl.href = '/api/v2/fs/raw?path=' + encodeURIComponent(path) + '&download=1'; }
+          if (mode !== 'edit' || !dirty) { editor = null; editorHost?.remove(); editorHost = null; init(); }
+        },
         isDirty: () => dirty,
       };
     },

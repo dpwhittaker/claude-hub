@@ -29,6 +29,10 @@ function seed(root) {
   fs.writeFileSync(path.join(root, 'proj/README.md'), '---\ntags: [AI]\n---\n# Proj\n\nHello *world*.\n');
   fs.writeFileSync(path.join(root, 'proj/src/a.js'), 'const a = 1;\n');
   fs.writeFileSync(path.join(root, 'AGENTS.md'), 'root notes\n');
+  // A project below the top level (V99).
+  fs.mkdirSync(path.join(root, 'group/site/docs'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'group/site/.project-meta.json'), JSON.stringify({ name: 'site', proxyTarget: 'http://127.0.0.1:59998', routes: [{ match: '**/*.md', to: '/:dir/:name.html' }] }));
+  fs.writeFileSync(path.join(root, 'group/site/docs/a.md'), '# a\n');
   const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
   execFileSync('git', ['-C', path.join(root, 'proj'), 'init', '-q'], { env });
   execFileSync('git', ['-C', path.join(root, 'proj'), 'add', '.'], { env });
@@ -144,9 +148,10 @@ test('V79/V81: file API — list, stat with previewUrl, text read/write with 409
   try {
     const root = await json(fx.url + '/api/v2/fs/list');
     assert.equal(root.status, 200);
-    assert.deepEqual(root.body.entries.map((e) => e.name), ['proj', 'AGENTS.md']);
-    assert.equal(root.body.entries[0].project, true);
-    assert.equal(root.body.entries[0].repo, true);
+    assert.deepEqual(root.body.entries.map((e) => e.name), ['group', 'proj', 'AGENTS.md']);
+    const proj = root.body.entries.find((e) => e.name === 'proj');
+    assert.equal(proj.project, true);
+    assert.equal(proj.repo, true);
     const st = await json(fx.url + '/api/v2/fs/stat?path=proj/README.md');
     assert.equal(st.body.fileKind, 'markdown');
     assert.equal(st.body.previewUrl, '/proj/README.html', 'routes rule maps the file to its live URL');
@@ -182,6 +187,9 @@ test('V79/V81: file API — list, stat with previewUrl, text read/write with 409
     assert.equal((await post(fx.url + '/api/v2/fs/create', { path: 'proj/docs/new.md' })).status, 200);
     assert.equal((await post(fx.url + '/api/v2/fs/rename', { path: 'proj/docs/new.md', to: 'proj/docs/renamed.md' })).status, 200);
     assert.ok(fs.existsSync(path.join(fx.projectsRoot, 'proj/docs/renamed.md')));
+    assert.equal((await post(fx.url + '/api/v2/fs/delete', { path: 'proj/docs' })).status, 200);
+    assert.ok(!fs.existsSync(path.join(fx.projectsRoot, 'proj/docs')), 'a folder is deleted whole');
+    assert.equal((await post(fx.url + '/api/v2/fs/delete', { path: '' })).status, 400, 'the root cannot be deleted');
     for (const u of ['/api/v2/fs/list?path=..', '/api/v2/fs/text?path=../../etc/passwd', '/api/v2/fs/raw?path=..%2F..%2Fetc%2Fpasswd']) {
       const r = await json(fx.url + u);
       assert.ok(r.status === 400 || r.status === 403, u + ' → ' + r.status);
@@ -189,6 +197,35 @@ test('V79/V81: file API — list, stat with previewUrl, text read/write with 409
     assert.equal((await post(fx.url + '/api/v2/fs/mkdir', { path: '../escape' })).status, 400);
     assert.equal((await json(fx.url + '/api/v2/fs/text?path=nope.txt')).status, 404);
     assert.equal((await json(fx.url + '/api/v2/nope')).status, 404);
+  } finally { await fx.close(); }
+});
+
+test('V99: a repo can be created in any folder — sentinel, session and preview follow the nested path', async () => {
+  const fx = await startFixture({ seed });
+  try {
+    const bad = await post(fx.url + '/api/projects', { name: 'x', dir: '../etc', template: 'none', github: { mode: 'skip' } });
+    assert.equal(bad.status, 400);
+    assert.equal((await post(fx.url + '/api/projects', { name: 'x', dir: 'nope', template: 'none', github: { mode: 'skip' } })).status, 404);
+    const r = await post(fx.url + '/api/projects', { name: 'Nested One', dir: 'group', template: 'none', github: { mode: 'skip' } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.name, 'nested-one');
+    assert.equal(r.body.path, 'group/nested-one');
+    assert.match(r.body.termUrl, /^\/term\/hub\/\?arg=/);
+    assert.ok(fs.existsSync(path.join(fx.projectsRoot, 'group/nested-one/.project-meta.json')));
+    assert.ok(fs.existsSync(path.join(fx.projectsRoot, 'group/nested-one/SPEC.md')));
+    const sess = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((s) => s.id === r.body.sessionId);
+    assert.equal(sess.cwd, 'group/nested-one', 'the first session runs in the nested folder');
+    assert.ok(fs.existsSync(path.join(fx.hubStateDir, 'sessions', sess.id + '.prompt')), 'seeded with the bootstrap prompt');
+    assert.equal((await post(fx.url + '/api/projects', { name: 'nested-one', dir: 'group', template: 'none', github: { mode: 'skip' } })).status, 409);
+    // Orphans are listed per folder.
+    fs.mkdirSync(path.join(fx.projectsRoot, 'group/plain'));
+    const orphans = await json(fx.url + '/api/projects/orphans?dir=group');
+    assert.deepEqual(orphans.body, { dir: 'group', folders: ['plain'] });
+    assert.equal((await json(fx.url + '/api/projects/orphans?dir=..')).status, 400);
+    // A file inside a nested sentinel previews through that project's proxy.
+    const st = await json(fx.url + '/api/v2/fs/stat?path=group/site/docs/a.md');
+    assert.equal(st.body.previewUrl, '/site/docs/a.html');
+    assert.equal((await json(fx.url + '/api/v2/fs/stat?path=group/nested-one/SPEC.md')).body.previewUrl, null, 'no proxy target → no preview');
   } finally { await fx.close(); }
 });
 

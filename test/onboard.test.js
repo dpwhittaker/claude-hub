@@ -91,7 +91,7 @@ test('GET /api/projects/orphans returns the orphan list', async () => {
     const r = await fetch(fx.url + '/api/projects/orphans');
     assert.equal(r.status, 200);
     const body = await r.json();
-    assert.deepEqual(body, { folders: ['a-orphan'] });
+    assert.deepEqual(body, { dir: '', folders: ['a-orphan'] });
   } finally {
     await fx.close();
   }

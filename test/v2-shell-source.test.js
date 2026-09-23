@@ -81,3 +81,23 @@ test('V95: terminal tabs carry a bar with Suspend / Reconnect; Sessions header h
   assert.match(home, /title: '~\/projects', onclick: \(\) => load\(''\) \}, '\/'\)/, 'the crumb root is /');
   assert.match(css, /\.sec:not\(\.open\) \.sec-h \.btn, \.sec:not\(\.open\) \.sec-h \.tools \{ display: none; \}/, 'folded sections hide their controls');
 });
+
+test('V98: no .. row; a . row opens the folder as a tab; folder and file bars rename/delete', () => {
+  const home = read('tab-home.js');
+  const file = read('tab-file.js');
+  assert.doesNotMatch(home, /'\.\.'\)/, 'no .. entry');
+  assert.match(home, /class: 'entry dir self'[\s\S]*Hub\.openTab\(\{ kind: 'browse', path: cur \}\)/, '. opens this folder as its own tab');
+  assert.match(home, /opts\.standalone \? el\('button', \{ title: 'Rename this folder'/);
+  assert.match(home, /opts\.standalone \? el\('button', \{ title: 'Delete this folder'/);
+  assert.match(home, /\/api\/v2\/fs\/delete/);
+  assert.match(file, /title: 'Rename'/);
+  assert.match(file, /title: 'Delete'/);
+  assert.match(file, /Hub\.closeTab\(ctx\.tabId, \{ force: true \}\)/, 'a deleted file\'s tab closes without a dirty prompt');
+});
+
+test('V99: the + repo tool is on every folder and sends the folder as dir', () => {
+  const home = read('tab-home.js');
+  assert.match(home, /title: 'New repo here[^']*', onclick: \(\) => Hub\.newRepoDialog\(\(\) => load\(cur\), cur\)/);
+  assert.match(home, /const payload = \{ name: n, dir, template/);
+  assert.match(home, /\/api\/projects\/orphans\?dir=/);
+});

@@ -201,7 +201,8 @@ select.sel:focus, input.inp:focus, textarea.inp:focus { outline: none; border-co
 .entry .ico svg { width: 15px; height: 15px; }
 .entry.file .ico { color: var(--muted); }
 .entry.dir.live .ico { color: var(--good); }
-.entry.up .ico { color: var(--muted); }
+.entry.self .ico { color: var(--muted); }
+.entry.self .nm { color: var(--muted); }
 .entry .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entry .meta { color: var(--muted); font-size: 0.7rem; flex: 0 0 auto; }
 .entry.git-M .nm, .entry.git-MM .nm, .entry.git-AM .nm { color: #fde68a; }

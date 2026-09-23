@@ -1,0 +1,18 @@
+[Unit]
+Description=Vite dev server for %I (a project below the top level of ~/projects)
+After=network.target
+
+[Service]
+Type=simple
+# EDIT BEFORE INSTALLING: User= and the home path must match the account that owns ~/projects.
+User=david
+# %I = the instance name unescaped: `vite-path@glasses-my\x2dapp.service` → glasses/my-app
+# (claude-hub writes the instance with lib/systemd-escape.js = `systemd-escape --path`).
+WorkingDirectory=/home/david/projects/%I
+Environment=NODE_ENV=development
+ExecStart=/bin/bash -lc 'export NVM_DIR=$HOME/.nvm && . $NVM_DIR/nvm.sh && exec npm run dev'
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

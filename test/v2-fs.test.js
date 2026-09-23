@@ -138,3 +138,17 @@ test('V81: classify picks the default mode per file kind', () => {
   assert.equal(classify('a.zip').fileKind, 'binary');
   assert.equal(classify('index.html').fileKind, 'html');
 });
+
+test('V98: remove deletes a file or a whole folder, never the root', () => {
+  const { root, api } = scratch();
+  fs.mkdirSync(path.join(root, 'd/sub'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'd/sub/x.txt'), 'x');
+  fs.writeFileSync(path.join(root, 'f.txt'), 'f');
+  assert.deepEqual(api.remove('f.txt'), { path: 'f.txt', kind: 'file', deleted: true });
+  assert.ok(!fs.existsSync(path.join(root, 'f.txt')));
+  assert.deepEqual(api.remove('d'), { path: 'd', kind: 'dir', deleted: true });
+  assert.ok(!fs.existsSync(path.join(root, 'd')));
+  assert.throws(() => api.remove(''), (e) => e.statusCode === 400);
+  assert.throws(() => api.remove('../x'), (e) => e.statusCode === 400);
+  assert.throws(() => api.remove('gone'), (e) => e.statusCode === 404);
+});

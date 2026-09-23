@@ -273,10 +273,10 @@
     if (save) persist(silent ? 2000 : 400);
   };
 
-  Hub.closeTab = async function closeTab(id) {
+  Hub.closeTab = async function closeTab(id, { force = false } = {}) {
     if (state.tabs[id] && state.tabs[id].kind === 'home') return;
     const m = mounted.get(id);
-    if (m && m.dirty && !(await Hub.confirm('Discard unsaved changes?', Hub.basename(state.tabs[id]?.path || ''), 'Discard', true))) return;
+    if (!force && m && m.dirty && !(await Hub.confirm('Discard unsaved changes?', Hub.basename(state.tabs[id]?.path || ''), 'Discard', true))) return;
     if (m) { try { m.handle?.destroy?.(); } catch {} m.el.remove(); mounted.delete(id); }
     state.layout = L.removeTab(state.layout, id);
     delete state.tabs[id];
@@ -284,8 +284,23 @@
     renderAll(); persist();
   };
 
-  Hub.closeTabsWhere = function closeTabsWhere(pred) {
-    for (const [id, t] of Object.entries(state.tabs)) if (pred(t)) Hub.closeTab(id);
+  // A rename moved everything under `from` to `to`: every file/browse tab on
+  // that prefix follows (V98).
+  Hub.repathTabs = function repathTabs(from, to) {
+    for (const t of Object.values(state.tabs)) {
+      if (typeof t.path !== 'string') continue;
+      if (t.path === from) t.path = to;
+      else if (from && t.path.startsWith(from + '/')) t.path = to + t.path.slice(from.length);
+      else continue;
+      const m = mounted.get(Object.keys(state.tabs).find((k) => state.tabs[k] === t));
+      if (m && m.handle && m.handle.refresh) { try { m.handle.refresh(); } catch {} }
+    }
+    refreshTabLabels();
+    persist();
+  };
+
+  Hub.closeTabsWhere = function closeTabsWhere(pred, opts) {
+    for (const [id, t] of Object.entries(state.tabs)) if (pred(t)) Hub.closeTab(id, opts);
   };
 
   function focusTab(id) {

@@ -38,6 +38,9 @@ const termRelayLib = require('./lib/term-relay');
 const scaffoldInstall = require('./lib/scaffold-install');
 const { makeV2Router } = require('./lib/v2-routes');
 const { makeG2Compat } = require('./lib/g2-compat');
+const { findSentinels } = require('./lib/sentinels');
+const { systemdEscapePath } = require('./lib/systemd-escape');
+const { resolveUnder } = require('./lib/v2-paths');
 
 const PORT = Number(process.env.PROXY_PORT) || 8002;
 
@@ -52,23 +55,12 @@ let STATIC_ROUTES = [];
 
 function buildStaticRoutes() {
   const out = [];
-  let entries;
-  try {
-    entries = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const e of entries) {
-    if (!e.isDirectory() || e.name.startsWith('.')) continue;
-    const metaPath = path.join(PROJECTS_ROOT, e.name, '.project-meta.json');
-    if (!fs.existsSync(metaPath)) continue;
-    let meta;
-    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch { continue; }
+  for (const { name, meta } of findSentinels(PROJECTS_ROOT)) {
     const target = typeof meta.proxyTarget === 'string' ? meta.proxyTarget.trim() : '';
     if (!target) continue;
     const prefix = typeof meta.proxyPrefix === 'string' && meta.proxyPrefix.startsWith('/')
       ? meta.proxyPrefix
-      : `/${e.name}`;
+      : `/${name}`;
     if (!/^\/[A-Za-z0-9_./-]+$/.test(prefix)) continue;
     const stripPrefix = meta.stripPrefix !== false; // default true
     out.push({ prefix, target, stripPrefix });
@@ -738,9 +730,18 @@ async function bootstrapCreateRepo(dir, name, visibility) {
 // reuse the one unit — no per-template service (SPEC §V43). Cleans up on any
 // failure so the caller's "doesn't exist" precondition is restored on retry.
 // SPEC §V21–V26, §V43–V45.
+// The dev-server unit for a project folder: a top-level folder rides the
+// plain template (`vite@<name>`), a nested one the path template
+// (`vite-path@<escaped rel>`, whose %I unescapes to the folder) (V99).
+function devServerUnit(kind, dir) {
+  const rel = path.relative(PROJECTS_ROOT, dir).split(path.sep).join('/');
+  return rel.includes('/') ? `${kind}-path@${systemdEscapePath(rel)}.service` : `${kind}@${path.basename(dir)}.service`;
+}
+
 async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {}) {
   fs.mkdirSync(dir, { recursive: false });
   const port = allocatePort(PROJECTS_ROOT);
+  const unit = devServerUnit('vite', dir);
   const templateDir = path.join(__dirname, 'templates', templateId);
   try {
     copyTemplate(templateDir, dir, { NAME: name, PORT: String(port), NAMESLUG: nameSlug(name) });
@@ -763,7 +764,7 @@ async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {
         proxyPrefix: '/' + name,
         stripPrefix: false,
         openUrl: '/' + name + '/',
-        extraUnits: ['vite@' + name + '.service'],
+        extraUnits: [unit],
       }, null, 2) + '\n',
     );
     // Command AND env both come from lib/scaffold-install.js — the hub runs
@@ -777,7 +778,7 @@ async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {
     });
     // sudoers grant for `sudo -n systemctl enable --now vite@<name>.service`
     // mirrors the existing ttyd@ grant — see services/ install instructions.
-    await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', `vite@${name}.service`], {
+    await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', unit], {
       timeout: 30000,
     });
   } catch (e) {
@@ -799,6 +800,7 @@ async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {
 async function bootstrapJekyll(dir, name) {
   fs.mkdirSync(dir, { recursive: false });
   const port = allocatePort(PROJECTS_ROOT, 4000);
+  const unit = devServerUnit('jekyll', dir);
   try {
     copyTemplate(path.join(__dirname, 'templates', 'jekyll'), dir, { NAME: name, PORT: String(port) });
     // copyTemplate writes files 0644; the systemd unit execs serve-local.sh
@@ -816,7 +818,7 @@ async function bootstrapJekyll(dir, name) {
         proxyPrefix: '/' + name,
         stripPrefix: false,
         openUrl: '/' + name + '/',
-        extraUnits: ['jekyll@' + name + '.service'],
+        extraUnits: [unit],
         // Default-permalink Jekyll → URL mapping, so Browse shows a preview
         // eye-icon on .md files that render via the live preview (SPEC §V54).
         // README → site index; index.md → pretty dir URL; other .md → .html.
@@ -831,7 +833,7 @@ async function bootstrapJekyll(dir, name) {
     await execFileP('/bin/bash', ['-lc', 'cd "$0" && BUNDLE_GEMFILE=Gemfile.local bundle install', dir], {
       timeout: 5 * 60 * 1000,
     });
-    await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', `jekyll@${name}.service`], {
+    await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', unit], {
       timeout: 30000,
     });
   } catch (e) {
@@ -851,8 +853,12 @@ function scaffoldProject(dir, name, template, { firebase = false } = {}) {
     : bootstrapTemplate(dir, name, template, { firebase });
 }
 
-function handleListOrphans(_req, res) {
-  sendJson(res, 200, { folders: listOrphanFolderNames(PROJECTS_ROOT) });
+// Folders under `?dir=` (default the root) that have no sentinel yet (V99).
+function handleListOrphans(_req, res, query) {
+  let parent;
+  try { parent = resolveUnder(PROJECTS_ROOT, query.get('dir') || '').abs; }
+  catch (e) { return sendJson(res, e.statusCode || 400, { error: e.message }); }
+  sendJson(res, 200, { dir: path.relative(PROJECTS_ROOT, parent).split(path.sep).join('/'), folders: listOrphanFolderNames(parent) });
 }
 
 function handleCreateProject(req, res) {
@@ -869,7 +875,15 @@ function handleCreateProject(req, res) {
     if (RESERVED_PROJECT_NAMES.has(name)) {
       return sendJson(res, 400, { error: `"${name}" is a reserved name` });
     }
-    const dir = path.join(PROJECTS_ROOT, name);
+    // `dir` = the folder the repo goes in, relative to the root; '' = the root (V99).
+    let parent;
+    try { parent = resolveUnder(PROJECTS_ROOT, body.dir || ''); }
+    catch (e) { return sendJson(res, e.statusCode || 400, { error: 'bad dir: ' + e.message }); }
+    let parentStat;
+    try { parentStat = fs.statSync(parent.abs); } catch { parentStat = null; }
+    if (!parentStat || !parentStat.isDirectory()) return sendJson(res, 404, { error: 'dir not found' });
+    const dir = path.join(parent.abs, name);
+    const relDir = parent.rel ? parent.rel + '/' + name : name;
     const gh = body.github || { mode: 'skip' };
     // Onboard adopts an existing folder, so its 404/409 logic lives in
     // bootstrapOnboard. Every other mode requires `dir` not yet exist.
@@ -920,13 +934,14 @@ function handleCreateProject(req, res) {
       let prompt;
       const bootstrapFile = path.join(dir, '.claude-bootstrap.txt');
       try { prompt = fs.readFileSync(bootstrapFile, 'utf8'); fs.unlinkSync(bootstrapFile); } catch {}
-      session = v2Router.sessions.create({ cwd: name, agent: 'claude', profile: body.profile || null, prompt });
+      session = v2Router.sessions.create({ cwd: relDir, agent: 'claude', profile: body.profile || null, prompt });
     } catch (e) {
       return sendJson(res, 500, { error: 'session create failed: ' + e.message });
     }
     refreshStaticRoutes();
     sendJson(res, 200, {
       name,
+      path: relDir,
       sessionId: session.id,
       termKey: session.termKey,
       termUrl: session.termUrl,
@@ -1150,6 +1165,7 @@ const PROJECTS_ROOT = process.env.PROJECTS_ROOT || path.join(process.env.HOME ||
 process.env.PROJECTS_ROOT = PROJECTS_ROOT;
 process.env.CLAUDE_BIN = CLAUDE_BIN;
 
+// `project` = a sentinel folder's path relative to the root (any depth, V99).
 function readProjectProxyPrefix(project) {
   try {
     const meta = JSON.parse(fs.readFileSync(
@@ -1158,7 +1174,7 @@ function readProjectProxyPrefix(project) {
     if (!target) return null;
     const prefix = typeof meta.proxyPrefix === 'string' && meta.proxyPrefix.startsWith('/')
       ? meta.proxyPrefix
-      : '/' + project;
+      : '/' + path.basename(project);
     if (!/^\/[A-Za-z0-9_./-]+$/.test(prefix)) return null;
     return prefix;
   } catch {
@@ -1267,7 +1283,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (urlPath === '/api/projects/orphans') {
-    if (req.method === 'GET') return handleListOrphans(req, res);
+    if (req.method === 'GET') return handleListOrphans(req, res, new URLSearchParams(query.slice(1)));
     res.writeHead(405, { 'Content-Type': 'text/plain' });
     res.end('method not allowed');
     return;

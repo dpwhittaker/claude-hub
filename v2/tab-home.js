@@ -36,7 +36,8 @@
   };
 
   // ---------- file browser ----------
-  // opts: { path, onOpenFile(entry, mode), onPathChange(path), toolsHost }
+  // opts: { path, onOpenFile(entry, mode), onPathChange(path), toolsHost, standalone }
+  // `standalone`: the browse tab — its bar renames/deletes the folder, no `.` row.
   // `toolsHost`: an element to render the toolbar into (a section header)
   // instead of the crumb bar.
   Hub.makeBrowser = function makeBrowser(opts) {
@@ -78,14 +79,37 @@
       });
       crumbs.append(el('span', { class: 'spacer' }));
       const tools = el('span', { class: 'tools' },
+        opts.standalone ? el('button', { title: 'Rename this folder', disabled: !cur, onclick: renameHere }, Hub.icon('pencil')) : null,
+        opts.standalone ? el('button', { title: 'Delete this folder', disabled: !cur, onclick: deleteHere }, Hub.icon('trash')) : null,
         el('button', { title: 'New folder', onclick: newFolder }, Hub.iconPlus('folder')),
         el('button', { title: 'New file (opens in the editor)', onclick: newFile }, Hub.iconPlus('file')),
         el('button', { title: 'Upload files here', onclick: upload }, Hub.icon('upload')),
-        cur === '' ? el('button', { title: 'New repo from a template, clone, or onboard a folder', onclick: () => Hub.newRepoDialog(() => load(cur)) }, Hub.iconPlus('fork')) : null,
+        el('button', { title: 'New repo here — from a template, a clone, or an existing folder', onclick: () => Hub.newRepoDialog(() => load(cur), cur) }, Hub.iconPlus('fork')),
         el('button', { title: 'Open a terminal here (Claude, Codex or a shell)', onclick: () => Hub.newSessionDialog({ cwd: cur }) }, Hub.iconPlus('terminal')),
         el('button', { title: 'Refresh', onclick: () => load(cur) }, Hub.icon('refresh')),
       );
       if (opts.toolsHost) opts.toolsHost.replaceChildren(tools); else crumbs.append(tools);
+    }
+
+    async function renameHere() {
+      if (!cur) return;
+      const name = await Hub.ask({ title: 'Rename folder', label: 'New name', value: Hub.basename(cur) });
+      if (!name || name.trim() === Hub.basename(cur)) return;
+      const parent = cur.includes('/') ? cur.slice(0, cur.lastIndexOf('/')) : '';
+      const to = (parent ? parent + '/' : '') + name.trim();
+      try { await api('/api/v2/fs/rename', { method: 'POST', body: { path: cur, to } }); Hub.repathTabs(cur, to); if (opts.onPathChange) opts.onPathChange(to); load(to); }
+      catch (e) { toast(e.message, true); }
+    }
+    async function deleteHere() {
+      if (!cur) return;
+      if (!(await Hub.confirm('Delete "' + cur + '"?', 'The folder and everything in it are removed from disk. This cannot be undone.', 'Delete', true))) return;
+      const parent = cur.includes('/') ? cur.slice(0, cur.lastIndexOf('/')) : '';
+      try {
+        await api('/api/v2/fs/delete', { method: 'POST', body: { path: cur } });
+        Hub.closeTabsWhere((t) => t.kind === 'file' && typeof t.path === 'string' && (t.path === cur || t.path.startsWith(cur + '/')), { force: true });
+        Hub.repathTabs(cur, parent);
+        load(parent);
+      } catch (e) { toast(e.message, true); }
     }
 
     function liveHere(p) {
@@ -96,9 +120,11 @@
     function render() {
       renderCrumbs();
       list.innerHTML = '';
-      if (cur) {
-        const up = cur.includes('/') ? cur.slice(0, cur.lastIndexOf('/')) : '';
-        list.append(el('li', { class: 'entry dir up', onclick: () => load(up) }, el('span', { class: 'ico' }, '↑'), el('span', { class: 'nm' }, '..')));
+      // `.` opens THIS folder as its own tab, whose bar renames or deletes it.
+      // No `..`: the crumbs go up (V98).
+      if (!opts.standalone) {
+        list.append(el('li', { class: 'entry dir self', title: 'Open this folder in its own tab', onclick: () => Hub.openTab({ kind: 'browse', path: cur }) },
+          el('span', { class: 'ico' }, Hub.icon('folder')), el('span', { class: 'nm' }, '.'), el('span', { class: 'meta' }, 'open as tab')));
       }
       if (!lastData.entries.length) list.append(el('li', { class: 'empty-note' }, 'empty folder'));
       for (const e of lastData.entries) {
@@ -211,7 +237,8 @@
   };
 
   // The v1 create-project dialog, rebuilt on the sheet. Same POST /api/projects.
-  Hub.newRepoDialog = function newRepoDialog(onDone) {
+  // `dir` = the folder the repo goes in ('' = the root) (V99).
+  Hub.newRepoDialog = function newRepoDialog(onDone, dir = '') {
     Hub.sheet((card, close) => {
       const name = el('input', { class: 'inp', type: 'text', placeholder: 'my-project' });
       const err = el('div', { class: 'err' });
@@ -242,13 +269,13 @@
         if (!d.repos || !d.repos.length) throw new Error();
         for (const r of d.repos) cloneSel.append(el('option', { value: r.nameWithOwner, title: r.description || '' }, r.nameWithOwner + (r.isFork ? ' [fork]' : r.isPrivate ? ' [private]' : '')));
       }).catch(() => { cloneSel.hidden = true; cloneTxt.hidden = false; });
-      api('/api/projects/orphans').then((d) => { for (const f of d.folders || []) onboardSel.append(el('option', { value: f }, f)); }).catch(() => {});
+      api('/api/projects/orphans?dir=' + encodeURIComponent(dir)).then((d) => { for (const f of d.folders || []) onboardSel.append(el('option', { value: f }, f)); }).catch(() => {});
       onboardSel.onchange = () => { if (onboardSel.value) name.value = onboardSel.value; };
       const go = el('button', { class: 'btn', onclick: async () => {
         err.textContent = '';
         const n = name.value.trim();
         if (!n) { err.textContent = 'Name required.'; return; }
-        const payload = { name: n, template, firebase: firebase.checked && !firebase.disabled };
+        const payload = { name: n, dir, template, firebase: firebase.checked && !firebase.disabled };
         if (ghMode === 'clone') {
           const source = (cloneSel.hidden ? cloneTxt.value : cloneSel.value).trim();
           if (!source) { err.textContent = 'Pick a repo to clone.'; return; }
@@ -265,12 +292,12 @@
           close();
           toast('created ' + r.name);
           if (onDone) onDone(r);
-          Hub.openTab({ kind: 'term', sessionId: null, termUrl: r.termUrl, termKey: r.termUrl.split('/')[2], cwd: r.name, agent: 'claude', title: null });
+          Hub.openTab({ kind: 'term', sessionId: r.sessionId, termUrl: r.termUrl, termKey: r.termKey, cwd: r.path || r.name, agent: 'claude', title: null });
         } catch (e) { err.textContent = e.message; go.disabled = false; go.textContent = 'Create'; }
       } }, 'Create');
       card.append(
-        el('h2', null, 'New repo in /'),
-        el('label', { class: 'field' }, el('span', null, 'Name (becomes /<name>)'), name),
+        el('h2', null, 'New repo in ' + Hub.slashPath(dir)),
+        el('label', { class: 'field' }, el('span', null, 'Name (becomes ' + Hub.slashPath(dir).replace(/\/$/, '') + '/<name>)'), name),
         el('h4', null, 'GitHub'), ghGroup,
         el('h4', null, 'Template'), tplGroup, fbRow,
         err,
@@ -402,9 +429,9 @@
     icon: 'folder',
     title: (t) => (t.path ? Hub.basename(t.path) : '') + '/',
     mount(tab, root, ctx) {
-      const browser = Hub.makeBrowser({ path: tab.path || '', onPathChange: (p) => ctx.update({ path: p }) });
+      const browser = Hub.makeBrowser({ path: tab.path || '', standalone: true, onPathChange: (p) => ctx.update({ path: p }) });
       root.append(browser.el);
-      return { refresh: () => browser.load(browser.path) };
+      return { refresh: () => browser.load(tab.path || '') };
     },
   });
 })();

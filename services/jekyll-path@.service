@@ -1,0 +1,16 @@
+[Unit]
+Description=Jekyll preview for %I (a project below the top level of ~/projects)
+After=network.target
+
+[Service]
+Type=simple
+# EDIT BEFORE INSTALLING: User= and the home path must match the account that owns ~/projects.
+User=david
+# %I = the instance name unescaped (see vite-path@.service).
+WorkingDirectory=/home/david/projects/%I
+ExecStart=/home/david/projects/%I/serve-local.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
