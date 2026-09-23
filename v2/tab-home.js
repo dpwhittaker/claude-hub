@@ -21,6 +21,7 @@
       byCwd.get(k).push(s);
     }
     Hub.sessions = { list: sessions, byCwd, at: Date.now() };
+    document.dispatchEvent(new CustomEvent('hub:sessions'));
     // Open terminal tabs follow the session's current title (V90).
     const byKey = new Map(sessions.map((s) => [s.termKey, s]));
     for (const [id, t] of Object.entries(Hub.state.tabs)) {
@@ -35,7 +36,9 @@
   };
 
   // ---------- file browser ----------
-  // opts: { path, onOpenFile(entry, mode), onPathChange(path) }
+  // opts: { path, onOpenFile(entry, mode), onPathChange(path), toolsHost }
+  // `toolsHost`: an element to render the toolbar into (a section header)
+  // instead of the crumb bar.
   Hub.makeBrowser = function makeBrowser(opts) {
     let cur = opts.path || '';
     const root = el('div', { class: 'browser' });
@@ -65,12 +68,13 @@
     function renderCrumbs() {
       crumbs.innerHTML = '';
       const segs = cur ? cur.split('/') : [];
-      crumbs.append(el('button', { class: segs.length ? '' : 'cur', onclick: () => load('') }, '~/projects'));
+      crumbs.append(el('button', { class: segs.length ? '' : 'cur', title: '~/projects', onclick: () => load('') }, '/'));
       let acc = '';
       segs.forEach((s, i) => {
         acc += (acc ? '/' : '') + s;
         const target = acc;
-        crumbs.append(el('span', { class: 'sep' }, '/'), el('button', { class: i === segs.length - 1 ? 'cur' : '', onclick: () => load(target) }, s));
+        if (i > 0) crumbs.append(el('span', { class: 'sep' }, '/'));
+        crumbs.append(el('button', { class: i === segs.length - 1 ? 'cur' : '', onclick: () => load(target) }, s));
       });
       crumbs.append(el('span', { class: 'spacer' }));
       const tools = el('span', { class: 'tools' },
@@ -81,7 +85,7 @@
         el('button', { title: 'Open a terminal here (Claude, Codex or a shell)', onclick: () => Hub.newSessionDialog({ cwd: cur }) }, Hub.iconPlus('terminal')),
         el('button', { title: 'Refresh', onclick: () => load(cur) }, Hub.icon('refresh')),
       );
-      crumbs.append(tools);
+      if (opts.toolsHost) opts.toolsHost.replaceChildren(tools); else crumbs.append(tools);
     }
 
     function liveHere(p) {
@@ -132,7 +136,7 @@
       catch (e) { toast(e.message, true); }
     }
     function upload() {
-      if (!cur) { toast('pick a folder first — uploads cannot land in ~/projects itself', true); return; }
+      if (!cur) { toast('pick a folder first — uploads cannot land in / itself', true); return; }
       const input = el('input', { type: 'file', multiple: true, style: { display: 'none' } });
       input.onchange = async () => {
         for (const f of input.files) {
@@ -160,7 +164,7 @@
   Hub.newSessionDialog = function newSessionDialog({ cwd = '' } = {}) {
     Hub.sheet((card, close) => {
       const here = el('div', { class: 'here' });
-      const cwdInp = el('input', { class: 'inp', type: 'text', value: cwd, placeholder: '(root of ~/projects)' });
+      const cwdInp = el('input', { class: 'inp', type: 'text', value: cwd, placeholder: '/' });
       function renderHere() {
         here.innerHTML = '';
         const list = (Hub.sessions.byCwd.get(cwdInp.value.trim()) || []).slice().sort((a, b) => (b.running - a.running));
@@ -170,7 +174,7 @@
           here.append(el('div', { class: 'row', onclick: () => { close(); Hub.openSessionTab(s); } },
             el('span', { class: 'dot' + (s.running ? ' on' : '') }),
             el('span', { class: 'badge ' + s.agent }, s.agent),
-            el('span', { class: 'main' }, el('span', { class: 't' }, s.title || (s.cwd ? Hub.basename(s.cwd) : '~/projects')),
+            el('span', { class: 'main' }, el('span', { class: 't' }, s.title || (s.cwd ? Hub.basename(s.cwd) : '/')),
               el('span', { class: 's' }, (s.running ? 'running' : 'stopped') + (s.kind === 'legacy' ? ' · v1 tab' : ''))),
             el('span', { class: 'hint' }, 'open →')));
         }
@@ -193,9 +197,9 @@
         } catch (e) { err.textContent = e.message; go.disabled = false; }
       } }, 'Launch');
       card.append(
-        el('h2', null, 'Terminal in ' + (cwd ? '~/projects/' + cwd : '~/projects')),
+        el('h2', null, 'Terminal in ' + Hub.slashPath(cwd)),
         here,
-        el('label', { class: 'field' }, el('span', null, 'Folder (under ~/projects)'), cwdInp),
+        el('label', { class: 'field' }, el('span', null, 'Folder'), cwdInp),
         el('label', { class: 'field' }, el('span', null, 'Agent'), radios),
         el('label', { class: 'field' }, el('span', null, 'First prompt'), promptInp),
         el('p', { class: 'hint' }, `Profile "${Hub.state.profile.name}" — its instructions are appended to Claude sessions.`),
@@ -265,8 +269,8 @@
         } catch (e) { err.textContent = e.message; go.disabled = false; go.textContent = 'Create'; }
       } }, 'Create');
       card.append(
-        el('h2', null, 'New repo in ~/projects'),
-        el('label', { class: 'field' }, el('span', null, 'Name (becomes ~/projects/<name>)'), name),
+        el('h2', null, 'New repo in /'),
+        el('label', { class: 'field' }, el('span', null, 'Name (becomes /<name>)'), name),
         el('h4', null, 'GitHub'), ghGroup,
         el('h4', null, 'Template'), tplGroup, fbRow,
         err,
@@ -283,9 +287,11 @@
     mount(tab, root, ctx) {
       const sessionsUl = el('ul', { class: 'rows' });
       const servicesUl = el('ul', { class: 'rows' });
+      const explorerTools = el('span', { class: 'tools' });
       const browser = Hub.makeBrowser({
         path: tab.path || '',
         onPathChange: (p) => ctx.update({ path: p }, { silent: true }),
+        toolsHost: explorerTools,
       });
       // Three sections with always-visible headers; click a header to fold
       // it. Wide containers lay them out as a grid (sessions | services over
@@ -315,9 +321,10 @@
       }
       const stop = (fn) => (ev) => { ev.stopPropagation(); fn(); };
       const home = el('div', { class: 'home' },
-        section('sessions', 'Sessions', [el('button', { class: 'btn', onclick: stop(() => Hub.newSessionDialog({ cwd: browser.path })) }, Hub.iconPlus('terminal'), ' New')], sessionsUl),
+        section('sessions', 'Sessions', [], sessionsUl),
         section('services', 'Services', [el('button', { class: 'btn muted', title: 'Refresh', onclick: stop(() => refresh()) }, Hub.icon('refresh'))], servicesUl),
-        section('explorer', 'Explorer', [], browser.el));
+        section('explorer', 'Explorer', [explorerTools], browser.el));
+      explorerTools.addEventListener('click', (ev) => ev.stopPropagation());
       root.append(home);
       // First run: everything open, except Services in a narrow container
       // where three open sections would leave each one a sliver.
@@ -331,8 +338,8 @@
       // working right now, amber = it is waiting on you (V92). No buttons —
       // ending a session is on the tab's context menu.
       function sessionRow(s) {
-        const title = s.title || (s.cwd ? Hub.basename(s.cwd) : '~/projects');
-        const sub = (s.cwd ? '~/projects/' + s.cwd : '~/projects');
+        const title = s.title || (s.cwd ? Hub.basename(s.cwd) : '/');
+        const sub = Hub.slashPath(s.cwd);
         const dotCls = 'dot' + (s.running ? ' on' : '') + (s.running && s.activity === 'busy' ? ' busy' : '') + (s.running && s.activity === 'waiting' ? ' waiting' : '');
         const when = s.lastActive ? Hub.fmtAgo(s.lastActive) : '';
         const row = el('li', { class: 'row', title: s.termKey + (s.activity ? ' · ' + s.activity : '') },
@@ -366,7 +373,7 @@
           const [ss, sv] = await Promise.all([Hub.loadSessions(), api('/api/v2/services')]);
           sessionsUl.innerHTML = '';
           const list = ss.list.slice().sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0) || (a.cwd || '').localeCompare(b.cwd || ''));
-          if (!list.length) sessionsUl.append(el('li', { class: 'empty-note' }, 'no sessions yet — press + New'));
+          if (!list.length) sessionsUl.append(el('li', { class: 'empty-note' }, 'no sessions yet — open a terminal from a folder in the Explorer'));
           for (const s of list) sessionsUl.append(sessionRow(s));
           servicesUl.innerHTML = '';
           const seen = visits();
@@ -393,7 +400,7 @@
   // ---------- browse tab: just the browser ----------
   Hub.registerKind('browse', {
     icon: 'folder',
-    title: (t) => (t.path ? Hub.basename(t.path) : '~/projects') + '/',
+    title: (t) => (t.path ? Hub.basename(t.path) : '') + '/',
     mount(tab, root, ctx) {
       const browser = Hub.makeBrowser({ path: tab.path || '', onPathChange: (p) => ctx.update({ path: p }) });
       root.append(browser.el);

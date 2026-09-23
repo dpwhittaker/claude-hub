@@ -244,6 +244,28 @@ test('V92/V90: a live claude session (Claude registry) supplies status, its curr
   }
 });
 
+test('V95: POST /api/v2/term/<key>/suspend kills a known tmux session and refuses unknown keys', async () => {
+  const fx = await startFixture({ seed });
+  try {
+    let tmuxOk = true;
+    try { execFileSync('tmux', ['new-session', '-d', '-s', 'proj__s1', 'sleep 30']); } catch { tmuxOk = false; }
+    if (!tmuxOk) return;
+    assert.equal((await post(fx.url + '/api/v2/term/nope__s9/suspend', {})).status, 404, 'not a session the hub knows');
+    assert.equal((await post(fx.url + '/api/v2/term/..%2Fx/suspend', {})).status, 400);
+    const r = await post(fx.url + '/api/v2/term/proj__s1/suspend', {});
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body, { key: 'proj__s1', suspended: true });
+    assert.throws(() => execFileSync('tmux', ['has-session', '-t', '=proj__s1'], { stdio: 'ignore' }), 'the tmux session is gone');
+    assert.equal((await post(fx.url + '/api/v2/term/proj__s1/suspend', {})).status, 404, 'already stopped');
+    const s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === 'proj__s1');
+    assert.ok(s, 'the record survives a suspend');
+    assert.equal(s.running, false);
+  } finally {
+    try { execFileSync('tmux', ['kill-session', '-t', '=proj__s1']); } catch {}
+    await fx.close();
+  }
+});
+
 test('V85: services API lists {services, tailnet}; actions on unknown units are 404 before any sudo', async () => {
   const fx = await startFixture({ seed });
   try {

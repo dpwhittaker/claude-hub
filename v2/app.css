@@ -129,6 +129,13 @@ select.sel:focus, input.inp:focus, textarea.inp:focus { outline: none; border-co
   display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; background: var(--bg-1); flex: 0 0 auto; min-height: 32px; }
 .sec-h:hover { color: var(--fg); }
 .sec-h .spacer { flex: 1; }
+/* A folded section shows its title only. */
+.sec:not(.open) .sec-h .btn, .sec:not(.open) .sec-h .tools { display: none; }
+.sec-h .tools { display: inline-flex; gap: 2px; }
+.sec-h .tools button { border: none; background: transparent; color: var(--muted); border-radius: 4px; cursor: pointer; padding: 3px 6px;
+  display: inline-flex; align-items: center; gap: 1px; font-size: 0.85rem; }
+.sec-h .tools button:hover { color: var(--accent); background: rgba(125,211,252,0.12); }
+.sec-h .tools button svg { width: 15px; height: 15px; }
 .sec-h .chev { display: inline-block; width: 12px; transition: transform 0.12s; transform: rotate(-90deg); font-size: 0.8rem; }
 .sec.open .sec-h .chev { transform: none; }
 .sec-body { display: none; min-height: 0; flex: 1 1 auto; overflow: auto; padding: 4px 6px 8px; flex-direction: column; }

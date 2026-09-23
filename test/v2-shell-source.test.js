@@ -67,3 +67,17 @@ test('V91: no separate Tailnet list — services carry their tailnet URL, and on
   assert.match(home, /const covered = new Set\(sv\.services\.map\(\(s\) => s\.tailnetUrl\)/);
   assert.match(home, /if \(covered\.has\(url\)\) continue;/);
 });
+
+test('V95: terminal tabs carry a bar with Suspend / Reconnect; Sessions header has no New button; paths read from /', () => {
+  const tabs = read('tabs.js');
+  const home = read('tab-home.js');
+  const css = read('app.css');
+  assert.match(tabs, /\/api\/v2\/term\/' \+ encodeURIComponent\(tab\.termKey\) \+ '\/suspend'/);
+  assert.match(tabs, /' Suspend'\)/);
+  assert.match(tabs, /' Reconnect'\)/);
+  assert.match(home, /section\('sessions', 'Sessions', \[\], sessionsUl\)/, 'no New button on Sessions');
+  assert.match(home, /section\('explorer', 'Explorer', \[explorerTools\], browser\.el\)/, 'explorer tools live in its header');
+  assert.doesNotMatch(home, /'~\/projects\/' \+|: '~\/projects'\)/, 'no path is built or shown as ~/projects/…');
+  assert.match(home, /title: '~\/projects', onclick: \(\) => load\(''\) \}, '\/'\)/, 'the crumb root is /');
+  assert.match(css, /\.sec:not\(\.open\) \.sec-h \.btn, \.sec:not\(\.open\) \.sec-h \.tools \{ display: none; \}/, 'folded sections hide their controls');
+});

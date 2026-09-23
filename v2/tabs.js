@@ -165,14 +165,48 @@
     return Hub.el('iframe', { class: 'fill', src, allow: 'clipboard-read; clipboard-write; microphone', ...extra });
   }
 
-  // ---- term: a live agent session ----
+  // Paths are shown relative to ~/projects, the hub's root: '' → '/', 'a/b' → '/a/b'.
+  Hub.slashPath = (rel) => '/' + String(rel || '').replace(/^\/+/, '');
+
+  // ---- term: a live agent session, with a bar like files and sites have:
+  // state dot · where it runs · Suspend (kill the tmux session; the record
+  // and the conversation stay) / Reconnect (re-attach, which starts it
+  // again) / End for hub sessions (V95) ----
   Hub.registerKind('term', {
     icon: 'terminal',
-    title: (t) => t.title || (t.cwd ? Hub.basename(t.cwd) : '~/projects'),
-    mount(tab, el) {
+    title: (t) => t.title || (t.cwd ? Hub.basename(t.cwd) : '/'),
+    mount(tab, root) {
+      const { el, api, toast } = Hub;
       const f = iframe(tab.termUrl);
-      el.append(f);
-      return { refresh: () => { f.src = tab.termUrl; } };
+      const dot = el('span', { class: 'dot' });
+      const state = el('span', { class: 'hint' });
+      const suspend = el('button', { class: 'btn muted', title: 'Close the tmux session; the conversation can be resumed later', onclick: async () => {
+        if (!(await Hub.confirm('Suspend this terminal?', 'The tmux session and its agent process are closed. Reconnect starts it again; a Claude conversation resumes where it was.', 'Suspend'))) return;
+        suspend.disabled = true;
+        try { await api('/api/v2/term/' + encodeURIComponent(tab.termKey) + '/suspend', { method: 'POST', body: {} }); toast('suspended ' + tab.termKey); Hub.sessions.at = 0; await Hub.loadSessions().catch(() => {}); }
+        catch (e) { toast(e.message, true); }
+        finally { suspend.disabled = false; }
+      } }, Hub.icon('stop'), ' Suspend');
+      const reconnect = el('button', { class: 'btn muted', title: 'Re-attach (starts the session again if it was suspended)', onclick: () => { f.src = tab.termUrl; setTimeout(() => { Hub.sessions.at = 0; Hub.loadSessions().catch(() => {}); }, 2500); } }, Hub.icon('refresh'), ' Reconnect');
+      const end = el('button', { class: 'btn muted', title: 'End this session for good (removes it from the list)', onclick: async () => {
+        if (!(await Hub.confirm('End session?', 'The tmux session is killed and the session leaves the list. A Claude conversation can still be resumed by its id from a shell.', 'End', true))) return;
+        try { await api('/api/v2/sessions/' + tab.sessionId, { method: 'DELETE' }); Hub.sessions.at = 0; Hub.closeTabsWhere((x) => x.kind === 'term' && x.termKey === tab.termKey); }
+        catch (e) { toast(e.message, true); }
+      } }, Hub.icon('x'), ' End');
+      const bar = el('div', { class: 'tabbar' }, dot, el('span', { class: 'badge ' + tab.agent }, tab.agent || 'claude'),
+        el('span', { class: 'path mono', title: tab.termKey }, Hub.slashPath(tab.cwd)), state, el('span', { class: 'spacer' }), suspend, reconnect, tab.sessionId ? end : null);
+      Hub.append(root, bar, f);
+      function paint() {
+        const s = Hub.sessions.list.find((x) => x.termKey === tab.termKey);
+        const running = !!(s && s.running);
+        dot.className = 'dot' + (running ? ' on' : '') + (running && s.activity === 'busy' ? ' busy' : '') + (running && s.activity === 'waiting' ? ' waiting' : '');
+        state.textContent = !s ? '' : !running ? 'suspended' : (s.activity || 'running');
+        suspend.hidden = !running;
+      }
+      const onSessions = () => paint();
+      document.addEventListener('hub:sessions', onSessions);
+      paint();
+      return { refresh: () => { f.src = tab.termUrl; }, onShow: paint, destroy: () => document.removeEventListener('hub:sessions', onSessions) };
     },
   });
 
