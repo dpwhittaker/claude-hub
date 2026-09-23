@@ -59,3 +59,11 @@ test('B29: session titles are live per page, never written into the shared profi
   assert.match(app, /if \(rest\.kind === 'term'\) rest\.title = null;/, 'flush strips term titles');
   assert.match(app, /renderAll\(\);\n\s+\/\/ Whatever titles[\s\S]*?Hub\.loadSessions\(\)\.catch/, 'a profile (re)load resyncs titles at once');
 });
+
+test('V91: no separate Tailnet list — services carry their tailnet URL, and only unaccounted listeners get a row', () => {
+  const home = read('tab-home.js');
+  assert.doesNotMatch(home, /'Tailnet'\)/);
+  assert.doesNotMatch(home, /tailnetUl/);
+  assert.match(home, /const covered = new Set\(sv\.services\.map\(\(s\) => s\.tailnetUrl\)/);
+  assert.match(home, /if \(covered\.has\(url\)\) continue;/);
+});

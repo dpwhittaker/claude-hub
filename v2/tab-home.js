@@ -283,7 +283,6 @@
     mount(tab, root, ctx) {
       const sessionsUl = el('ul', { class: 'rows' });
       const servicesUl = el('ul', { class: 'rows' });
-      const tailnetUl = el('ul', { class: 'rows' });
       const browser = Hub.makeBrowser({
         path: tab.path || '',
         onPathChange: (p) => ctx.update({ path: p }, { silent: true }),
@@ -317,7 +316,7 @@
       const stop = (fn) => (ev) => { ev.stopPropagation(); fn(); };
       const home = el('div', { class: 'home' },
         section('sessions', 'Sessions', [el('button', { class: 'btn', onclick: stop(() => Hub.newSessionDialog({ cwd: browser.path })) }, Hub.iconPlus('terminal'), ' New')], sessionsUl),
-        section('services', 'Services', [el('button', { class: 'btn muted', title: 'Refresh', onclick: stop(() => refresh()) }, Hub.icon('refresh'))], servicesUl, el('h4', null, 'Tailnet'), tailnetUl),
+        section('services', 'Services', [el('button', { class: 'btn muted', title: 'Refresh', onclick: stop(() => refresh()) }, Hub.icon('refresh'))], servicesUl),
         section('explorer', 'Explorer', [], browser.el));
       root.append(home);
       // First run: everything open, except Services in a narrow container
@@ -372,13 +371,15 @@
           servicesUl.innerHTML = '';
           const seen = visits();
           for (const s of sv.services.slice().sort((a, b) => (seen[b.unit] || 0) - (seen[a.unit] || 0) || a.title.localeCompare(b.title))) servicesUl.append(serviceRow(s));
-          tailnetUl.innerHTML = '';
+          // A tailnet listener no unit accounts for (something run by hand,
+          // a root-owned unit) still gets a row, so the list stays complete.
+          const covered = new Set(sv.services.map((s) => s.tailnetUrl).filter(Boolean));
           for (const t of sv.tailnet) for (const m of t.mounts) {
             const url = t.url + (m.path === '/' ? '/' : m.path);
-            tailnetUl.append(el('li', { class: 'row', onclick: () => Hub.openTab({ kind: 'url', url, title: url.replace(/^https?:\/\//, '') }) },
-              el('span', { class: 'dot on' }), el('span', { class: 'main' }, el('span', { class: 't mono' }, url), el('span', { class: 's' }, m.mode + ' → ' + m.target))));
+            if (covered.has(url)) continue;
+            servicesUl.append(el('li', { class: 'row', title: 'tailscale serve → ' + m.target, onclick: () => Hub.openTab({ kind: 'url', url, title: url.replace(/^https?:\/\//, '') }) },
+              el('span', { class: 'dot on' }), el('span', { class: 'main' }, el('span', { class: 't mono' }, url.replace(/^https?:\/\//, '')), el('span', { class: 's' }, 'tailnet · ' + m.mode + ' → ' + m.target))));
           }
-          if (!sv.tailnet.length) tailnetUl.append(el('li', { class: 'empty-note' }, 'nothing served on the tailnet'));
         } catch (e) { toast(e.message, true); }
         busy = false;
       }
