@@ -277,8 +277,3 @@ curl -s http://127.0.0.1:8002/api/v2/services | jq .
 
 See `SPEC.md` §V for the invariants and §B for every bug that got out.
 
-## Hindsight memory (optional)
-
-Per-repo long-term memory for Claude sessions on this box — harness-level, in
-`~/.hindsight/` and `~/.claude/`, nothing here depends on it. Install, version
-table and gotchas: [`HINDSIGHT.md`](HINDSIGHT.md).

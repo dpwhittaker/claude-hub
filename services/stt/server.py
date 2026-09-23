@@ -6,7 +6,7 @@ POST /transcribe   body = raw PCM 16 kHz signed 16-bit little-endian mono
                    faster-whisper can decode (wav/flac/ogg/…) → {"text", "seconds", "ms", "device"}
 GET  /health       → {"ok": true, "model", "device", "loaded", "leased"}
 
-GPU policy (~/projects/gpu-gate): the RTX 4080 is shared with Hindsight's
+GPU policy (~/projects/gpu-gate): the RTX 4080 is shared with ollama's
 ollama. On the first request we take a gpu-gate lease (which evicts ollama),
 load the model onto the GPU, and keep both while requests keep coming. After
 IDLE_SECONDS without a request the model is dropped and the lease released, so

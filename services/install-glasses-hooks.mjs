@@ -4,7 +4,7 @@
 //   node services/install-glasses-hooks.mjs            # add the four hook entries (idempotent)
 //   node services/install-glasses-hooks.mjs --remove   # take exactly those entries out again
 //
-// Merges by command string, so existing hooks (Hindsight's, yours) are left
+// Merges by command string, so existing hooks (yours) are left
 // untouched and running it twice changes nothing. Timeouts: the two held
 // events get Claude Code's 600 s default explicitly; the two fire-and-forget
 // events get 5 s so a stuck hub can never slow a turn down.
