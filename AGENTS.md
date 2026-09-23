@@ -67,8 +67,7 @@ https://<box>.<tailnet>.ts.net/  →  tailscale serve :443  →  127.0.0.1:8002 
   /<proj>/*          a project's dev server, if its .project-meta.json has proxyTarget
   /api/projects POST new repo (template / clone / onboard)  server.js
   /api/term-*        the glasses relay                       lib/term-relay.js
-  GET /api/projects, /api/term-sessions/<p>, /api/view-tree/<p>, /view/<p>/<f>
-                     read-only shims for the G2 app          lib/g2-compat.js
+  glasses/           the G2 client, an Omni app root         glasses/claude-hub/index.js
 ```
 
 `server.js` is the proxy, the request dispatcher, repo creation and the
@@ -269,9 +268,10 @@ curl -s http://127.0.0.1:8002/api/v2/services | jq .
 | `lib/v2-paths.js`, `lib/v2-fs.js` | the path guard; list/read/write/diff/log |
 | `lib/v2-profiles.js`, `lib/v2-sessions.js`, `lib/v2-services.js`, `lib/v2-titles.js` | the stores and discovery |
 | `lib/claude-registry.js`, `lib/claude-transcript.js`, `lib/session-title.js` | Claude Code's live registry, its transcripts, the titler's digest + prompt |
-| `lib/v1-migrate.js`, `lib/g2-compat.js` | the v1 migration; the glasses shim (delete when g2 is ported) |
+| `lib/v1-migrate.js`, `lib/sentinels.js`, `lib/systemd-escape.js` | the v1 migration; sentinel discovery at any depth; `systemd-escape --path` in JS |
+| `glasses/claude-hub/index.js`, `glasses/claude-hub/text.js` | the Omni glasses app and its pure helpers |
 | `lib/term-relay.js` | watched-terminal registry + held prompts behind `/api/term-*` |
-| `lib/template.js`, `lib/template-policy.js`, `lib/port-alloc.js`, `lib/scaffold-install.js`, `lib/onboard.js`, `lib/gh-repos.js`, `lib/bootstrap-prompt.js`, `lib/file-routes.js`, `lib/readme-meta.js` | repo creation and the sentinel readers |
+| `lib/template.js`, `lib/template-policy.js`, `lib/port-alloc.js`, `lib/scaffold-install.js`, `lib/onboard.js`, `lib/gh-repos.js`, `lib/bootstrap-prompt.js`, `lib/file-routes.js`, `lib/readme-meta.js` | repo creation, the sentinel readers, frontmatter |
 | `lib/android-input.js`, `lib/keyboard-fit.js`, `lib/term-reconnect.js`, `lib/osc52.js`, `lib/touch-wheel.js` | the injected terminal shims |
 | `v2/app.js`, `v2/tabs.js`, `v2/tab-home.js`, `v2/tab-file.js`, `v2/app.css`, `v2/index.html` | the workspace, tab kinds, Home + Explorer, the file tab |
 

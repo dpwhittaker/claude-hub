@@ -62,7 +62,7 @@ test('V96: the workspace is served at /, /v2/ comes home, and its files stay und
       assert.equal(redir.headers.get('location'), '/?profile=x', old);
     }
     assert.equal((await fetch(fx.url + '/p/proj/')).status, 404, 'the PWA shell is gone');
-    assert.equal((await fetch(fx.url + '/api/view-tree/proj')).status, 200, 'but the glasses shim answers');
+    assert.equal((await fetch(fx.url + '/api/view-tree/proj')).status, 404, 'and so is the glasses shim (T109)');
     assert.equal((await fetch(fx.url + '/v2/../server.js')).status, 404);
     assert.equal((await fetch(fx.url + '/v2/nope.txt')).status, 404);
   } finally { await fx.close(); }
@@ -317,39 +317,6 @@ test('V95: POST /api/v2/term/<key>/suspend kills a known tmux session and refuse
     try { execFileSync('tmux', ['kill-session', '-t', '=proj__s1']); } catch {}
     await fx.close();
   }
-});
-
-test('V97: the glasses shim serves the four v1 reads from v2 data', async () => {
-  const fx = await startFixture({ seed });
-  try {
-    const mig = await migratedSession(fx.url);
-    const hub = (await post(fx.url + '/api/v2/sessions', { cwd: 'proj', agent: 'claude' })).body;
-    const pr = await json(fx.url + '/api/projects');
-    assert.equal(pr.status, 200);
-    const proj = pr.body.projects.find((p) => p.name === 'proj');
-    assert.equal(proj.title, 'Proj');
-    assert.equal(proj.description, 'Hello world.');
-    assert.deepEqual(proj.tags, ['AI']);
-    assert.equal((await post(fx.url + '/api/projects', {})).status, 400, 'POST is still the create route');
-    const ts = await json(fx.url + '/api/term-sessions/proj');
-    assert.equal(ts.status, 200);
-    const ids = ts.body.sessions.map((x) => x.id).sort();
-    assert.deepEqual(ids, ['s1', hub.termKey].sort(), 'a migrated session answers to its old sN, a hub one to its tmux name');
-    assert.equal(ts.body.sessions.find((x) => x.id === 's1').uuid, mig.uuid);
-    assert.equal((await json(fx.url + '/api/term-sessions/nope')).status, 404);
-    const tree = await json(fx.url + '/api/view-tree/proj?path=');
-    assert.deepEqual(tree.body.entries.filter((e) => !e.dim).map((e) => [e.name, e.type, e.path]), [['src', 'dir', 'src'], ['README.md', 'file', 'README.md']]);
-    assert.ok(tree.body.entries.some((e) => e.name === '.git' && e.dim), 'hidden entries come through dim, as v1 did');
-    const sub = await json(fx.url + '/api/view-tree/proj?path=src');
-    assert.deepEqual(sub.body.entries.map((e) => e.path), ['src/a.js']);
-    const raw = await fetch(fx.url + '/view/proj/src/a.js?raw=1', { redirect: 'manual' });
-    assert.equal(raw.status, 302);
-    assert.equal(raw.headers.get('location'), '/api/v2/fs/raw?path=' + encodeURIComponent('proj/src/a.js'));
-    assert.equal(await (await fetch(fx.url + '/view/proj/src/a.js?raw=1')).text(), 'const a = 1;\n');
-    // The relay strips a `<proj>__` prefix off a hub-… key the glasses composed.
-    assert.equal((await json(fx.url + '/api/term-capture/' + encodeURIComponent('proj__' + hub.termKey))).status, 404, 'canonicalised, then no such tmux session');
-    assert.equal((await json(fx.url + '/api/term-capture/' + encodeURIComponent('bad key'))).status, 400);
-  } finally { await fx.close(); }
 });
 
 test('V85: services API lists {services, tailnet}; actions on unknown units are 404 before any sudo', async () => {

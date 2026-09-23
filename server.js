@@ -13,8 +13,6 @@
  *                          prefix = "/<name>", stripPrefix = true).
  *   /api/projects (POST) → new repo: template scaffold / clone / onboard
  *   /api/term-*          → the glasses relay (tmux capture / input / prompts)
- *   /api/projects (GET), /api/term-sessions, /api/view-tree, /view/*
- *                        → read-only shims for the glasses app (lib/g2-compat.js)
  *
  * WebSocket upgrades are forwarded so Vite HMR (and ttyd) keep working.
  *
@@ -37,7 +35,6 @@ const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const termRelayLib = require('./lib/term-relay');
 const scaffoldInstall = require('./lib/scaffold-install');
 const { makeV2Router } = require('./lib/v2-routes');
-const { makeG2Compat } = require('./lib/g2-compat');
 const { findSentinels } = require('./lib/sentinels');
 const { systemdEscapePath } = require('./lib/systemd-escape');
 const { resolveUnder } = require('./lib/v2-paths');
@@ -465,13 +462,6 @@ function readRawBody(req, res, maxBytes) {
       resolve(null);
     });
   });
-}
-
-// The glasses compose a key as `<project>__<id>`; for a hub session whose
-// tmux name is `hub-<id>` that prefix is noise — strip it (V97).
-function canonicalTermKey(key) {
-  const m = /^[A-Za-z0-9][A-Za-z0-9._-]*__(hub-[a-z0-9]{8})$/.exec(String(key || ''));
-  return m ? m[1] : key;
 }
 
 function relayKeyOr400(res, key) {
@@ -1231,8 +1221,6 @@ const v2Router = makeV2Router({
   projectsRoot: PROJECTS_ROOT, hubDir: HUB_STATE_DIR, sendJson, readJsonBody, execFileP,
   readProjectRoutes, readProjectProxyPrefix, tmuxListSessions, claudeBin: CLAUDE_BIN,
 });
-// The glasses app's four read-only v1 routes, served from v2 data (V97).
-const g2Compat = makeG2Compat({ projectsRoot: PROJECTS_ROOT, sendJson, fsApi: v2Router.fs, listSessions: v2Router.listSessions });
 
 const server = http.createServer(async (req, res) => {
   let url = req.url || '/';
@@ -1267,14 +1255,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Read-only v1 routes the glasses app still calls (lib/g2-compat.js).
-  try {
-    if (await g2Compat.handle(req, res, url)) return;
-  } catch (e) {
-    if (!res.headersSent) sendJson(res, 500, { error: e.message });
-    return;
-  }
-
   // Repo creation (templates / clone / onboard) and its helpers.
   if (urlPath === '/api/projects') {
     if (req.method === 'POST') return handleCreateProject(req, res);
@@ -1304,27 +1284,27 @@ const server = http.createServer(async (req, res) => {
   // Glasses relay + speech-to-text.
   const termCaptureMatch = /^\/api\/term-capture\/([^/]+)$/.exec(urlPath);
   if (termCaptureMatch) {
-    if (req.method === 'GET') return handleTermCapture(req, res, canonicalTermKey(decodeURIComponent(termCaptureMatch[1]))).catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: e.message }); });
+    if (req.method === 'GET') return handleTermCapture(req, res, decodeURIComponent(termCaptureMatch[1])).catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: e.message }); });
     res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
   }
   const termInputMatch = /^\/api\/term-input\/([^/]+)$/.exec(urlPath);
   if (termInputMatch) {
-    if (req.method === 'POST') return handleTermInput(req, res, canonicalTermKey(decodeURIComponent(termInputMatch[1])));
+    if (req.method === 'POST') return handleTermInput(req, res, decodeURIComponent(termInputMatch[1]));
     res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
   }
   const termScrollMatch = /^\/api\/term-scroll\/([^/]+)$/.exec(urlPath);
   if (termScrollMatch) {
-    if (req.method === 'POST') return handleTermScroll(req, res, canonicalTermKey(decodeURIComponent(termScrollMatch[1])));
+    if (req.method === 'POST') return handleTermScroll(req, res, decodeURIComponent(termScrollMatch[1]));
     res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
   }
   const termPendingAnswerMatch = /^\/api\/term-pending\/([^/]+)\/answer$/.exec(urlPath);
   if (termPendingAnswerMatch) {
-    if (req.method === 'POST') return handleTermPendingAnswer(req, res, canonicalTermKey(decodeURIComponent(termPendingAnswerMatch[1])));
+    if (req.method === 'POST') return handleTermPendingAnswer(req, res, decodeURIComponent(termPendingAnswerMatch[1]));
     res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
   }
   const termPendingMatch = /^\/api\/term-pending\/([^/]+)$/.exec(urlPath);
   if (termPendingMatch) {
-    const key = canonicalTermKey(decodeURIComponent(termPendingMatch[1]));
+    const key = decodeURIComponent(termPendingMatch[1]);
     if (req.method === 'GET') return handleTermPendingGet(req, res, key);
     if (req.method === 'POST') return handleTermPendingPost(req, res, key);
     res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed'); return;
