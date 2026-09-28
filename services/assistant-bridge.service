@@ -1,0 +1,18 @@
+[Unit]
+Description=claude-hub faceclaw assistant bridge (ws -> claude -p)
+After=network.target
+
+[Service]
+Type=simple
+User=david
+WorkingDirectory=/home/david/projects/claude-hub
+# bash login shell so nvm puts BOTH `node` and `claude` on PATH (the bridge
+# spawns `claude -p`). Binds ws on the port in data/assistant-bridge.json
+# (default 8013), IP-allowlisted to loopback + the tailnet.
+ExecStart=/bin/bash -lc 'export NVM_DIR=$HOME/.nvm && . $NVM_DIR/nvm.sh && exec node lib/assistant-bridge.js'
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

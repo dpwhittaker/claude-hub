@@ -8,3 +8,6 @@ dist/
 .env.*
 .develop-sessions.json
 .develop-sessions.json.v1
+
+# assistant bridge secrets/config
+/data/

@@ -15,7 +15,8 @@
   },
   "dependencies": {
     "http-proxy": "^1.18.1",
-    "marked": "^18.0.3"
+    "marked": "^18.0.3",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
