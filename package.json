@@ -1,7 +1,7 @@
 {
   "name": "claude-hub",
   "version": "1.0.0",
-  "description": "One page over every session, service and file under ~/projects: profiles, free-form panels, terminals in tmux that survive reconnects, a rootless file browser with raw/view/edit/diff, and a path-routed reverse proxy in front of each project's dev server. Tailnet-private via Tailscale.",
+  "description": "One page over every session, service and file under ~/projects: profiles, free-form panels, terminals that survive reconnects, a rootless file browser with raw/view/edit/diff, and a path-routed reverse proxy in front of each project's dev server. Tailnet-private via Tailscale.",
   "private": true,
   "type": "commonjs",
   "main": "server.js",

@@ -3,8 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const { startFixture } = require('./helpers/fixture');
+const { haveG2mirror, startTerminal } = require('./helpers/g2terminal');
 
 async function json(url, init) {
   const r = await fetch(url, init);
@@ -16,9 +17,9 @@ async function json(url, init) {
 const post = (url, body, method = 'POST') => json(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
 const U1 = '11111111-1111-1111-1111-111111111111';
-// A session the v1 migration would have produced: keeps the tmux name proj__s1.
-async function migratedSession(url) {
-  const r = await post(url + '/api/v2/sessions', { cwd: 'proj', agent: 'claude', termKey: 'proj__s1', uuid: U1 });
+// A claude session in proj launched with a known conversation id.
+async function claudeSession(url) {
+  const r = await post(url + '/api/v2/sessions', { cwd: 'proj', agent: 'claude', uuid: U1 });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return r.body;
 }
@@ -114,17 +115,16 @@ test('V82: profiles round-trip through the API with rev conflicts', async () => 
   } finally { await fx.close(); }
 });
 
-test('V83/V96: sessions API creates records anywhere under the root; a migrated session keeps its tmux name', async () => {
+test('V83: sessions API creates records anywhere under the root, keyed hub-<id>', async () => {
   const fx = await startFixture({ seed });
   try {
     const before = await json(fx.url + '/api/v2/sessions');
     assert.equal(before.status, 200);
     assert.deepEqual(before.body.sessions, []);
-    const mig = await migratedSession(fx.url);
-    assert.equal(mig.termKey, 'proj__s1');
+    const mig = await claudeSession(fx.url);
+    assert.equal(mig.termKey, 'hub-' + mig.id);
     assert.equal(mig.termUrl, '/term/hub/?arg=' + mig.id);
     assert.equal(mig.uuid, U1);
-    assert.equal((await post(fx.url + '/api/v2/sessions', { cwd: 'proj', termKey: '../x' })).status, 400);
     const c = await post(fx.url + '/api/v2/sessions', { cwd: 'proj/src', agent: 'shell', profile: 'david' });
     assert.equal(c.status, 200, JSON.stringify(c.body));
     assert.equal(c.body.kind, 'hub');
@@ -239,18 +239,18 @@ test('V90: titles API round-trips and the sessions list prefers hub title → tr
   const fx = await startFixture({ seed });
   try {
     const uuid = U1;
-    const mig = await migratedSession(fx.url);
+    const mig = await claudeSession(fx.url);
     let r = await json(fx.url + '/api/v2/sessions');
-    let legacy = r.body.sessions.find((s) => s.id === mig.id);
-    assert.equal(legacy.title, null, 'no transcript, no hub title → null');
+    let sess = r.body.sessions.find((s) => s.id === mig.id);
+    assert.equal(sess.title, null, 'no transcript, no hub title → null');
     assert.equal((await json(fx.url + '/api/v2/titles/' + uuid)).status, 404);
     const set = await post(fx.url + '/api/v2/titles', { uuid, title: '"Refactor The Tab Strip."', source: 'auto' });
     assert.equal(set.status, 200, JSON.stringify(set.body));
     assert.equal(set.body.title, 'Refactor The Tab Strip');
     assert.equal((await json(fx.url + '/api/v2/titles/' + uuid)).body.title, 'Refactor The Tab Strip');
     r = await json(fx.url + '/api/v2/sessions');
-    legacy = r.body.sessions.find((s) => s.id === mig.id);
-    assert.equal(legacy.title, 'Refactor The Tab Strip');
+    sess = r.body.sessions.find((s) => s.id === mig.id);
+    assert.equal(sess.title, 'Refactor The Tab Strip');
     assert.equal((await post(fx.url + '/api/v2/titles', { uuid: 'nope', title: 'x' })).status, 400);
     assert.equal((await post(fx.url + '/api/v2/titles', { uuid, title: '' })).status, 400);
     assert.equal((await json(fx.url + '/api/v2/titles/' + uuid, { method: 'DELETE' })).status, 200);
@@ -259,68 +259,68 @@ test('V90: titles API round-trips and the sessions list prefers hub title → tr
   } finally { await fx.close(); }
 });
 
-test('V92/V90: a live claude session (Claude registry) supplies status, its current id and the newest name; the hub follows the id', async () => {
+test('V92/V90: a live claude session (Claude registry) supplies status, its current id and the newest name; the hub follows the id', { skip: !haveG2mirror && 'g2mirror not installed' }, async () => {
   const regDir = fs.mkdtempSync(path.join(os.tmpdir(), 'v2reg-'));
   process.env.HUB_CLAUDE_SESSIONS_DIR = regDir;
   const fx = await startFixture({ seed });
+  let term; let agent;
   try {
     const LIVE = '33333333-3333-3333-3333-333333333333';
-    const mig = await migratedSession(fx.url);
-    // Pretend the seeded v1 tab's tmux session runs THIS process (alive pid) and moved to a new id after a /clear.
-    const statusAt = Date.now() - 3600000; // an hour ago: tmux will be "active" right now, and must not win
-    fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'renamed-by-user', nameSource: 'user', nameSince: Date.now(), status: 'waiting', statusUpdatedAt: statusAt, updatedAt: statusAt }));
-    // The tab must count as running for the registry to apply: seed a tmux entry by name.
-    let tmuxOk = true;
-    try { execFileSync('tmux', ['new-session', '-d', '-s', 'proj__s1', 'sleep 30']); } catch { tmuxOk = false; }
-    if (!tmuxOk) return; // no tmux on this box — nothing to assert
+    const mig = await claudeSession(fx.url);
+    // The terminal runs, and its "claude" — a process carrying the key in
+    // its environment, as the attach script gives every agent — moved to a
+    // new id after a /clear.
+    term = startTerminal(mig.termKey, 'sleep 30');
+    agent = spawn('sleep', ['30'], { env: { ...process.env, HUB_TERM_KEY: mig.termKey }, stdio: 'ignore' });
+    const statusAt = Date.now() - 3600000; // an hour ago: the terminal's output is newer, and must not win
+    const entry = (o) => fs.writeFileSync(path.join(regDir, agent.pid + '.json'), JSON.stringify({ pid: agent.pid, sessionId: LIVE, cwd: '/x', ...o }));
+    entry({ name: 'renamed-by-user', nameSource: 'user', nameSince: Date.now(), status: 'waiting', statusUpdatedAt: statusAt, updatedAt: statusAt });
     let s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === mig.id);
     assert.equal(s.running, true);
     assert.equal(s.activity, 'waiting');
     assert.equal(s.uuid, LIVE, 'the live id replaces the launch id');
     assert.equal(s.title, 'renamed-by-user');
-    assert.equal(s.lastActive, statusAt, 'a live claude session\'s recency is the registry\'s status change (B32), not tmux activity');
+    assert.equal(s.lastActive, statusAt, 'a live claude session\'s recency is the registry\'s status change (B32), not terminal output');
     const rec = JSON.parse(fs.readFileSync(path.join(fx.hubStateDir, 'sessions', mig.id + '.json'), 'utf8'));
     assert.equal(rec.uuid, LIVE, 'the record follows so a reboot resumes the right conversation');
-    assert.equal(rec.termKey, 'proj__s1', 'and keeps its tmux name');
     // A newer hub auto-title beats the user's older name; an older one does not.
     await post(fx.url + '/api/v2/titles', { uuid: LIVE, title: 'Auto Title Later' });
     s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === mig.id);
     assert.equal(s.title, 'Auto Title Later');
-    fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'renamed-again', nameSource: 'user', nameSince: Date.now() + 60000, status: 'idle', updatedAt: Date.now() }));
+    entry({ name: 'renamed-again', nameSource: 'user', nameSince: Date.now() + 60000, status: 'idle', updatedAt: Date.now() });
     s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === mig.id);
     assert.equal(s.title, 'renamed-again', 'a /rename after the auto title wins');
     assert.equal(s.activity, 'idle');
     // A derived placeholder name never shows.
-    fs.writeFileSync(path.join(regDir, process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId: LIVE, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'proj-1a', nameSource: 'derived', nameSince: Date.now() + 120000, status: 'busy', updatedAt: Date.now() }));
+    entry({ name: 'proj-1a', nameSource: 'derived', nameSince: Date.now() + 120000, status: 'busy', updatedAt: Date.now() });
     s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === mig.id);
     assert.equal(s.title, 'Auto Title Later');
     assert.equal(s.activity, 'busy');
   } finally {
-    try { execFileSync('tmux', ['kill-session', '-t', '=proj__s1']); } catch {}
+    if (agent) agent.kill();
+    if (term) await term.stop();
     delete process.env.HUB_CLAUDE_SESSIONS_DIR;
     await fx.close();
   }
 });
 
-test('V95: POST /api/v2/term/<key>/suspend kills a known tmux session and refuses unknown keys', async () => {
+test('V95: POST /api/v2/term/<key>/suspend closes a known terminal and refuses unknown keys', { skip: !haveG2mirror && 'g2mirror not installed' }, async () => {
   const fx = await startFixture({ seed });
+  let term;
   try {
-    let tmuxOk = true;
-    try { execFileSync('tmux', ['new-session', '-d', '-s', 'proj__s1', 'sleep 30']); } catch { tmuxOk = false; }
-    if (!tmuxOk) return;
-    const mig = await migratedSession(fx.url);
-    assert.equal((await post(fx.url + '/api/v2/term/nope__s9/suspend', {})).status, 404, 'not a session the hub knows');
+    const mig = await claudeSession(fx.url);
+    term = startTerminal(mig.termKey, 'sleep 30');
+    assert.equal((await post(fx.url + '/api/v2/term/hub-nope0000/suspend', {})).status, 404, 'not a session the hub knows');
     assert.equal((await post(fx.url + '/api/v2/term/..%2Fx/suspend', {})).status, 400);
-    const r = await post(fx.url + '/api/v2/term/proj__s1/suspend', {});
+    const r = await post(fx.url + `/api/v2/term/${mig.termKey}/suspend`, {});
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.deepEqual(r.body, { key: 'proj__s1', suspended: true });
-    assert.throws(() => execFileSync('tmux', ['has-session', '-t', '=proj__s1'], { stdio: 'ignore' }), 'the tmux session is gone');
-    assert.equal((await post(fx.url + '/api/v2/term/proj__s1/suspend', {})).status, 404, 'already stopped');
+    assert.deepEqual(r.body, { key: mig.termKey, suspended: true });
+    assert.equal((await post(fx.url + `/api/v2/term/${mig.termKey}/suspend`, {})).status, 404, 'already stopped');
     const s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === mig.id);
     assert.ok(s, 'the record survives a suspend');
     assert.equal(s.running, false);
   } finally {
-    try { execFileSync('tmux', ['kill-session', '-t', '=proj__s1']); } catch {}
+    if (term) await term.stop();
     await fx.close();
   }
 });

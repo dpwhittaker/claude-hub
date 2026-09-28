@@ -1,24 +1,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
 const { startFixture } = require('./helpers/fixture');
+const { haveG2mirror, startTerminal } = require('./helpers/g2terminal');
 
-// These routes shell out to tmux, which is a hard dependency of the hub
-// (every develop tab is a tmux session), so the tests use a real throwaway
-// session rather than a stub.
-let haveTmux = true;
-try { execFileSync('tmux', ['-V'], { stdio: 'ignore' }); } catch { haveTmux = false; }
-
+// These routes read and type into a real g2mirror session rather than a stub.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const KEY = `hubtest-${process.pid}-${Math.floor(Math.random() * 1e6)}`;
-
-function tmux(...args) { return execFileSync('tmux', args, { encoding: 'utf8' }); }
+const KEY = `hub-t${process.pid.toString(36)}`;
 
 async function withSession(fn) {
-  // `cat` echoes what we type, so send-keys is observable in the capture.
-  tmux('new-session', '-d', '-s', KEY, '-x', '60', '-y', '8', 'printf "hello glasses\\n"; exec cat');
+  // `cat` echoes what we type, so input is observable in the capture.
+  const term = startTerminal(KEY, 'printf "hello glasses\\n"; exec cat', { size: '60x8' });
   await sleep(300);
-  try { await fn(); } finally { try { tmux('kill-session', '-t', '=' + KEY); } catch {} }
+  try { await fn(); } finally { await term.stop(); }
 }
 
 async function json(url, init) {
@@ -29,7 +22,7 @@ async function json(url, init) {
 }
 const post = (url, body) => json(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-test('V76: GET /api/term-capture/<key> returns the visible pane and marks it watched', { skip: !haveTmux }, async () => {
+test('V76: GET /api/term-capture/<key> returns the visible screen and marks it watched', { skip: !haveG2mirror && 'g2mirror not installed' }, async () => {
   const fx = await startFixture();
   try {
     await withSession(async () => {
@@ -50,7 +43,7 @@ test('V76: GET /api/term-capture/<key> returns the visible pane and marks it wat
   }
 });
 
-test('V76/V77: term-input types into the pane, term-scroll sends wheel ticks', { skip: !haveTmux }, async () => {
+test('V76/V77: term-input types into the terminal, term-scroll sends wheel ticks', { skip: !haveG2mirror && 'g2mirror not installed' }, async () => {
   const fx = await startFixture();
   try {
     await withSession(async () => {
@@ -70,7 +63,7 @@ test('V76/V77: term-input types into the pane, term-scroll sends wheel ticks', {
   }
 });
 
-test('V75: a question is held only while the glasses are watching, and the answer flows back to the hook', { skip: !haveTmux }, async () => {
+test('V75: a question is held only while the glasses are watching, and the answer flows back to the hook', { skip: !haveG2mirror && 'g2mirror not installed' }, async () => {
   const fx = await startFixture();
   try {
     await withSession(async () => {
@@ -121,7 +114,7 @@ test('V75: a question is held only while the glasses are watching, and the answe
   }
 });
 
-test('V75: the hold ends on its own once the glasses stop polling', { skip: !haveTmux }, async () => {
+test('V75: the hold ends on its own once the glasses stop polling', { skip: !haveG2mirror && 'g2mirror not installed' }, async () => {
   process.env.TERM_WATCH_TTL_MS = '300';
   const fx = await startFixture();
   try {

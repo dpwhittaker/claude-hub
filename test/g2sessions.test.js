@@ -14,7 +14,6 @@ const haveG2 = fs.existsSync(G2);
 
 test('keyOfCommand finds the key only as a whole env assignment', () => {
   assert.equal(g2.keyOfCommand('env HUB_TERM_KEY=hub-abcd1234 TERM=xterm-256color claude'), 'hub-abcd1234');
-  assert.equal(g2.keyOfCommand('env HUB_TERM_KEY=proj__s1 bash -l'), 'proj__s1');
   assert.equal(g2.keyOfCommand('env XHUB_TERM_KEY=hub-abcd1234 sh'), null);
   assert.equal(g2.keyOfCommand('env HUB_TERM_KEY=../x sh'), null);
   assert.equal(g2.keyOfCommand('bash -l'), null);
@@ -59,6 +58,13 @@ test('a hub session is listed, typed into, read without being resized, and close
     shot = await g2.capture(key, opts);
     assert.deepEqual(shot.text.split('\n').filter((l) => /^\d+ \d+$/.test(l)), ['24 80', '24 80'],
       'reading the screen must not resize the app');
+
+    assert.equal(await g2.type(key, 'typed', true, opts), true, 'type() adds Enter after a pause');
+    for (let i = 0; i < 20 && !/^got:typed$/m.test(shot.text); i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      shot = await g2.capture(key, opts);
+    }
+    assert.match(shot.text, /^got:typed$/m);
 
     assert.equal(await g2.capture('hub-missing1', opts), null);
     assert.equal(await g2.input('hub-missing1', 'x', opts), false);

@@ -83,8 +83,7 @@ and the repo-creation dialog).
 
 - **Sessions** — an agent (claude / codex / a shell) in some folder under
   `~/projects`, one record at `~/.claude-hub/sessions/<id>.json`, one
-  terminal keyed by its `termKey` (`hub-<id>`, or the `<project>__sN` name a
-  session migrated from v1 kept). ONE ttyd unit serves them all:
+  terminal keyed `hub-<id>` (its `termKey`). ONE ttyd unit serves them all:
   `services/ttyd-hub.service` runs ttyd with `--url-arg`, the tab loads
   `/term/hub/?arg=<id>`, and `services/ttyd-attach-hub.sh <id>` attaches (or
   creates) the terminal. Creating a session is a file write, not a
@@ -98,18 +97,14 @@ and the repo-creation dialog).
   session folder. The key is how everything finds it: the hub probes the
   sockets in `~/.g2mirror` (each greets with its command, size and last
   output — `lib/g2sessions.js`), a tab attaches with `g2mirror -a
-  "HUB_TERM_KEY=<key> " --force --watch` (the trailing space keeps `x__s1`
-  from matching `x__s10`), and Claude's registry entries and the glasses hook
+  "HUB_TERM_KEY=<key> " --force --watch` (the trailing space makes the
+  substring match exact), and Claude's registry entries and the glasses hook
   read it from the agent's environment. `--force --watch`: the newest tab
   drives the session (and sizes it); older tabs keep showing it, titled
-  `[watching]`, and take it back on a click or key. A key that still has a
-  **tmux** session (one started before the switch, 2026-09-27) stays on tmux
-  until that session ends; `HUB_TERM_BACKEND=tmux` in ttyd-hub's environment
-  starts new ones on tmux too. `lib/hub-terms.js` sends every terminal
-  operation to whichever backend holds the key. Reading a g2mirror screen
-  views it as the lowest-ranked viewer at its current size, so a glasses
-  poll never resizes the app; End/Suspend hang up the agent's process group,
-  as `tmux kill-session` did.
+  `[watching]`, and take it back on a click or key. Reading a screen views
+  the session as the lowest-ranked viewer at its current size, so a glasses
+  poll never resizes the app; End/Suspend hang up the agent's process group.
+  (Terminals ran in tmux until 2026-09-27; that path is gone.)
 - **Services** — discovered, not registered (`lib/v2-services.js`): every
   regular unit file in `/etc/systemd/system` that runs as the hub's user or
   works under `$HOME`, plus `vite@`/`jekyll@` instances and sentinel
@@ -141,19 +136,17 @@ lands in the panel with the largest area.
 
 ## Claude Code's own records are the truth for a live session
 
-`~/.claude/sessions/<pid>.json` (`lib/claude-registry.js`) names the tmux pane
-a running `claude` lives in (under g2mirror there is no pane: the hub reads
-`HUB_TERM_KEY` from `/proc/<pid>/environ` instead), the session id it is
-ACTUALLY on (a `--resume` or
-`/clear` mints a new one; the hub follows it into the record so a reboot
+`~/.claude/sessions/<pid>.json` (`lib/claude-registry.js`) — mapped to its
+terminal by the `HUB_TERM_KEY` in `/proc/<pid>/environ` — names the session
+id a running `claude` is ACTUALLY on (a `--resume` or `/clear` mints a new one; the hub follows it into the record so a reboot
 resumes the right conversation), its name with source (`user` = `/rename`,
 `auto` = Claude's own, `derived` = the `folder-1a` placeholder, never shown)
 and its status (busy / waiting / idle), which is what pulses the dot on Home.
-When several processes claim one pane — a `claude -p` the session spawned
-registers against it too — the earliest-started interactive `cli` entry is the
+When several processes claim one terminal — a `claude -p` the session spawned
+inherits the key too — the earliest-started interactive `cli` entry is the
 tab. Recency is the registry's status change (idle TUI repaints bump the
-terminal's activity every few minutes, so terminal activity — tmux's, or
-g2mirror's last output — counts only for codex/shell).
+terminal's last output every few minutes, so that counts only for
+codex/shell).
 
 **Titles** follow the newest by time of the registry name and the hub's auto
 title, so `/rename` and the titler take turns. `services/session-title-hook.mjs`
@@ -193,21 +186,20 @@ sudo systemctl enable --now <unit>`.
 
 | Unit | What it runs |
 |---|---|
-| `services/claude-hub.service` | `node server.js`. `KillMode=process` so a restart never kills the ttyd/terminal children. |
-| `services/ttyd-hub.service` | ttyd on `/run/ttyd/hub.sock` with `--url-arg`; `ttyd-attach-hub.sh` (installed to `/usr/local/bin`) attaches the id's terminal. `KillMode=process`: every g2mirror session (and, after a boot, the user's tmux server) starts INSIDE this cgroup, and a unit restart must not take every session with it. `RuntimeDirectoryPreserve=yes`. |
+| `services/claude-hub.service` | `node server.js`. `KillMode=process` so a restart doesn't kill a child mid-run (a scaffold install, a completion); terminals live under ttyd-hub, not here. |
+| `services/ttyd-hub.service` | ttyd on `/run/ttyd/hub.sock` with `--url-arg`; `ttyd-attach-hub.sh` (installed to `/usr/local/bin`) attaches the id's terminal. `KillMode=process`: every g2mirror session starts INSIDE this cgroup, and a unit restart must not take every session with it. `RuntimeDirectoryPreserve=yes`. |
 | `services/vite@.service` / `services/jekyll@.service` | Templated dev servers, `Restart=always`; enabled by the scaffolds. |
 | `services/stt.service` | faster-whisper on `127.0.0.1:8012` for the glasses (`/api/stt`). |
 
 ## Retiring v1 (done 2026-09-23)
 
-v1 kept one `ttyd@<project>__sN.service` per tab and a
-`.develop-sessions.json` per project. `services/migrate-v1-sessions.mjs`
-turned every tab whose tmux session was alive into a hub session that KEPT
-its tmux name, let the dead ones expire, retargeted profile tabs and renamed
-each map to `.v1`. The v1 units were `disable`d but NOT stopped: the user's
-tmux server lives in one of their cgroups (stopping that unit would kill every
-session), so they run until the next reboot and never come back. The unit
-files and `ttyd-attach.sh` are gone from `/etc` and the repo.
+v1 kept one `ttyd@<project>__sN.service` per tab (plus `develop`/`shell`
+admin terminals) and a `.develop-sessions.json` per project. A one-shot
+migration turned every live tab into a hub session and renamed each map to
+`.v1`; the v1 units were `disable`d but not stopped, so they run until the
+next reboot and never come back. Their unit files, the migration script and
+every v1 code path are gone from the repo (the script is in git history
+before T113).
 
 ## The glasses app (`glasses/`)
 
@@ -243,10 +235,9 @@ prompt goes back to the TUI when the glasses stop polling or after 540 s.
 
 ## Mobile terminal input
 
-Every `/term/<key>/` HTML response gets the shims spliced into `<head>` on the
-way through the proxy: `installOsc52Bridge` (OSC 52 from the app — passed
-through by g2mirror's attach client, or by tmux `set-clipboard` → host
-clipboard), `installTermReconnect` (V63/V64: ttyd parks on "Press ⏎ to
+The `/term/hub/` HTML response gets the shims spliced into `<head>` on the
+way through the proxy: `installOsc52Bridge` (OSC 52 from the app, passed
+through by g2mirror's attach client → host clipboard), `installTermReconnect` (V63/V64: ttyd parks on "Press ⏎ to
 Reconnect" after a network drop; the shim retries and refits), the
 scrollbar-hide style, `installTouchWheel`, `installTouchSelect` (V103:
 long-press selects, dragging extends, lifting copies; a tap clears),
@@ -293,7 +284,8 @@ curl -s http://127.0.0.1:8002/api/v2/services | jq .
 | `lib/v2-paths.js`, `lib/v2-fs.js` | the path guard; list/read/write/diff/log |
 | `lib/v2-profiles.js`, `lib/v2-sessions.js`, `lib/v2-services.js`, `lib/v2-titles.js` | the stores and discovery |
 | `lib/claude-registry.js`, `lib/claude-transcript.js`, `lib/session-title.js` | Claude Code's live registry, its transcripts, the titler's digest + prompt |
-| `lib/v1-migrate.js`, `lib/sentinels.js`, `lib/systemd-escape.js` | the v1 migration; sentinel discovery at any depth; `systemd-escape --path` in JS |
+| `lib/g2sessions.js` | the terminals: list, read, type into and close g2mirror sessions by key |
+| `lib/sentinels.js`, `lib/systemd-escape.js` | sentinel discovery at any depth; `systemd-escape --path` in JS |
 | `glasses/claude-hub/index.js`, `glasses/claude-hub/text.js` | the Omni glasses app and its pure helpers |
 | `lib/term-relay.js` | watched-terminal registry + held prompts behind `/api/term-*` |
 | `lib/template.js`, `lib/template-policy.js`, `lib/port-alloc.js`, `lib/scaffold-install.js`, `lib/onboard.js`, `lib/gh-repos.js`, `lib/bootstrap-prompt.js`, `lib/file-routes.js`, `lib/readme-meta.js` | repo creation, the sentinel readers, frontmatter |

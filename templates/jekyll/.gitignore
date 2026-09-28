@@ -6,4 +6,3 @@ Gemfile.local.lock
 vendor/
 .bundle/
 node_modules/
-.develop-sessions.json

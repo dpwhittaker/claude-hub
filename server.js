@@ -4,15 +4,15 @@
  *
  *   /                    → the workspace (v2/: profiles, panels, tabs)
  *   /v2/*, /api/v2/*     → its files and its JSON API (lib/v2-routes.js)
- *   /term/hub/?arg=<id>  → ttyd terminal for a hub session, attached to a
- *                          long-lived tmux session (ttyd-hub.service; one
- *                          unit serves every session, the id picks the tmux)
+ *   /term/hub/?arg=<id>  → ttyd terminal for a hub session, attached to its
+ *                          long-lived g2mirror session (ttyd-hub.service; one
+ *                          unit serves every session, the id picks which)
  *   /<p>(/|$)            → reverse-proxy to a project's backend if its
  *                          .project-meta.json declares `proxyTarget`. Prefix
  *                          and stripPrefix come from the same file (defaults:
  *                          prefix = "/<name>", stripPrefix = true).
  *   /api/projects (POST) → new repo: template scaffold / clone / onboard
- *   /api/term-*          → the glasses relay (tmux capture / input / prompts)
+ *   /api/term-*          → the glasses relay (screen / input / prompts)
  *
  * WebSocket upgrades are forwarded so Vite HMR (and ttyd) keep working.
  *
@@ -35,7 +35,7 @@ const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const termRelayLib = require('./lib/term-relay');
 const scaffoldInstall = require('./lib/scaffold-install');
 const { makeV2Router } = require('./lib/v2-routes');
-const { makeHubTerms } = require('./lib/hub-terms');
+const g2sessions = require('./lib/g2sessions');
 const { findSentinels } = require('./lib/sentinels');
 const { systemdEscapePath } = require('./lib/systemd-escape');
 const { resolveUnder } = require('./lib/v2-paths');
@@ -73,37 +73,22 @@ function refreshStaticRoutes() {
 }
 
 // ---------- ttyd routing ----------
-// Each terminal "key" (project name, or 'develop' / 'shell' for the admin
-// terminals) is served by a systemd-managed ttyd unit that binds a unix
-// socket under /run/ttyd/. SPEC §V.13, §V.36 — claude-hub never spawns ttyd
-// itself; it just proxies /term/<key>/ to the systemd-bound socket.
-//   - ttyd@<name>.service      → /run/ttyd/<name>.sock     (per project)
-//   - ttyd-develop.service     → /run/ttyd/develop.sock    (admin: fresh claude)
-//   - ttyd-shell.service       → /run/ttyd/shell.sock      (admin: raw bash)
+// Every terminal is served by ONE systemd-managed ttyd unit
+// (ttyd-hub.service) bound to a unix socket; claude-hub never spawns ttyd
+// itself, it just proxies /term/hub/ to that socket (SPEC §V.36).
 const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local', 'bin', 'claude');
-const TTYD_RUNTIME_DIR = '/run/ttyd';
+const HUB_TTYD_SOCKET = '/run/ttyd/hub.sock';
 
-const TERM_KEY_RE = /^[A-Za-z0-9_.-]+$/;
-
-function ttydSocketPath(termKey) {
-  if (!TERM_KEY_RE.test(termKey) || termKey === '.' || termKey === '..') return null;
-  return path.join(TTYD_RUNTIME_DIR, `${termKey}.sock`);
-}
-
-// Synchronous lookup for /term/<key>/. Returns a route object pointing at
-// the systemd-managed socket if it's bound; null otherwise.
+// Synchronous lookup for /term/hub/. Returns a route object pointing at the
+// systemd-managed socket if it's bound; null otherwise.
 function findTermRoute(url) {
-  const m = /^\/term\/([A-Za-z0-9_.-]+)(?=\/|\?|$)/.exec(url);
-  if (!m) return null;
-  const name = m[1];
-  const sockPath = ttydSocketPath(name);
-  if (!sockPath) return null;
+  if (!/^\/term\/hub(?=\/|\?|$)/.test(url)) return null;
   try {
-    if (!fs.statSync(sockPath).isSocket()) return null;
+    if (!fs.statSync(HUB_TTYD_SOCKET).isSocket()) return null;
   } catch {
     return null;
   }
-  return { prefix: `/term/${name}`, socketPath: sockPath, stripPrefix: false };
+  return { prefix: '/term/hub', socketPath: HUB_TTYD_SOCKET, stripPrefix: false };
 }
 
 const proxy = httpProxy.createProxyServer({
@@ -112,7 +97,7 @@ const proxy = httpProxy.createProxyServer({
   ws: true,
   xfwd: true,
   // We self-handle responses so we can inject the touch-wheel translator
-  // into bare /term/<key>/ HTML pages (V40). Non-injecting routes still get
+  // into the bare /term/hub/ HTML page (V40). Non-injecting routes still get
   // a transparent pipe via the proxyRes handler below.
   selfHandleResponse: true,
 });
@@ -126,11 +111,11 @@ proxy.on('error', (err, _req, res) => {
   }
 });
 
-// True iff `url` is the ttyd index for a term key — i.e. /term/<key>/ or
-// /term/<key> (no extra path, optional query). Anything deeper (asset, ws,
-// token endpoint) is not the HTML index and must pass through verbatim.
-const TERM_INDEX_RE = /^\/term\/[A-Za-z0-9_.-]+\/?(?:\?.*)?$/;
-// Inject installTouchWheel into bare ttyd /term/<key>/ pages so touch-drag
+// True iff `url` is the ttyd index page — i.e. /term/hub/ or /term/hub (no
+// extra path, optional query). Anything deeper (asset, ws, token endpoint)
+// is not the HTML index and must pass through verbatim.
+const TERM_INDEX_RE = /^\/term\/hub\/?(?:\?.*)?$/;
+// Inject installTouchWheel into the bare ttyd /term/hub/ page so touch-drag
 // scrolls history on phones/tablets. Lives in <head> (runs before body
 // parses) since ttyd's preact mount replaces body children, which would
 // strip a body-end script before it could run.
@@ -150,8 +135,8 @@ const { installAndroidInput } = require('./lib/android-input');
 const ANDROID_INPUT_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${installAndroidInput.toString()})(document);});</script>`;
 // OSC 52 → navigator.clipboard. Runs synchronously at <head> parse time (no
 // DOMContentLoaded gate) so it wraps window.WebSocket BEFORE ttyd's bundle
-// constructs its socket. tmux `set-clipboard on` emits OSC 52 on mouse
-// selections; this turns those into actual host clipboard writes.
+// constructs its socket. Apps copy with OSC 52 (g2mirror's attach client
+// passes it through); this turns those into actual host clipboard writes.
 const { installOsc52Bridge } = require('./lib/osc52');
 const OSC52_INJECT = `<script>(${installOsc52Bridge.toString()})(window);</script>`;
 // Automatic reconnect (V63, B18). Also wraps window.WebSocket, so it runs at
@@ -360,7 +345,7 @@ the spec true as the project grows.
 ## Bootstrap
 
 This folder was just created from the hub's "+ repo" dialog. Your terminal is
-a hub session in this folder (a long-lived tmux session; the conversation
+a hub session in this folder (a long-lived g2mirror session; the conversation
 resumes across reconnects and reboots). The hub's file browser, editor and
 diff views sit beside it on the same page.
 
@@ -431,11 +416,7 @@ const termRelay = termRelayLib.makeRelay({
   watchTtlMs: Number(process.env.TERM_WATCH_TTL_MS) || undefined,
 });
 const STT_URL = process.env.STT_URL || 'http://127.0.0.1:8012';
-const execFileAsync = require('node:util').promisify(require('node:child_process').execFile);
 
-// Every terminal op goes by key to whichever backend runs it: tmux for
-// sessions started before the switch, g2mirror for the rest.
-const hubTerms = makeHubTerms({ execFileP: execFileAsync });
 
 function readRawBody(req, res, maxBytes) {
   return new Promise((resolve) => {
@@ -472,7 +453,7 @@ async function handleTermCapture(_req, res, key) {
   if (!relayKeyOr400(res, key)) return;
   let capture;
   try {
-    capture = await hubTerms.capture(key);
+    capture = await g2sessions.capture(key);
   } catch (e) {
     return sendJson(res, 500, { error: 'capture failed: ' + e.message });
   }
@@ -497,7 +478,7 @@ function handleTermInput(req, res, key) {
       return sendJson(res, 400, { error: 'text required (≤ 8192 chars)' });
     }
     (async () => {
-      if (!(await hubTerms.type(key, body.text, !!body.enter))) return sendJson(res, 404, { error: 'no such terminal' });
+      if (!(await g2sessions.type(key, body.text, !!body.enter))) return sendJson(res, 404, { error: 'no such terminal' });
       sendJson(res, 200, { ok: true });
     })().catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: 'input failed: ' + e.message }); });
   });
@@ -513,7 +494,7 @@ function handleTermScroll(req, res, key) {
     if (!Number.isFinite(lines)) return sendJson(res, 400, { error: 'lines required' });
     const seqs = termRelayLib.wheelSequences(lines);
     (async () => {
-      if (!(await hubTerms.sendRaw(key, seqs))) return sendJson(res, 404, { error: 'no such terminal' });
+      if (!(await g2sessions.input(key, seqs.join('')))) return sendJson(res, 404, { error: 'no such terminal' });
       sendJson(res, 200, { ok: true, ticks: seqs.length });
     })().catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: 'input failed: ' + e.message }); });
   });
@@ -754,8 +735,8 @@ async function bootstrapTemplate(dir, name, templateId, { firebase = false } = {
       timeout: 5 * 60 * 1000,
       env: scaffoldInstall.installEnv(process.env),
     });
-    // sudoers grant for `sudo -n systemctl enable --now vite@<name>.service`
-    // mirrors the existing ttyd@ grant — see services/ install instructions.
+    // `sudo -n systemctl enable --now vite@<name>.service` needs the hub's
+    // passwordless systemctl grant (/etc/sudoers.d/claude-hub).
     await execFileP('sudo', ['-n', 'systemctl', 'enable', '--now', unit], {
       timeout: 30000,
     });
@@ -1138,7 +1119,7 @@ async function handleUploadAnywhere(req, res, query) {
 
 // ---------- Roots ----------
 const PROJECTS_ROOT = process.env.PROJECTS_ROOT || path.join(process.env.HOME || '/', 'projects');
-// Publish PROJECTS_ROOT + CLAUDE_BIN so ttyd-attach.sh and any other child
+// Publish PROJECTS_ROOT + CLAUDE_BIN so ttyd-attach-hub.sh and any other child
 // scripts inherit the same values (no per-spawn env wiring needed).
 process.env.PROJECTS_ROOT = PROJECTS_ROOT;
 process.env.CLAUDE_BIN = CLAUDE_BIN;
@@ -1195,7 +1176,7 @@ process.env.HUB_STATE_DIR = HUB_STATE_DIR;
 
 const v2Router = makeV2Router({
   projectsRoot: PROJECTS_ROOT, hubDir: HUB_STATE_DIR, sendJson, readJsonBody, execFileP,
-  readProjectRoutes, readProjectProxyPrefix, terms: hubTerms, claudeBin: CLAUDE_BIN,
+  readProjectRoutes, readProjectProxyPrefix, terms: g2sessions, claudeBin: CLAUDE_BIN,
 });
 
 const server = http.createServer(async (req, res) => {
@@ -1219,16 +1200,6 @@ const server = http.createServer(async (req, res) => {
       if (!res.headersSent) sendJson(res, 500, { error: e.message });
       return;
     }
-  }
-
-  // Legacy redirect: the raw-shell admin terminal was called `wsl` back when
-  // this ran under WSL2. Keep old bookmarks working. 301 to the same subpath
-  // under /term/shell/ — a silent socket alias would not work, since ttyd is
-  // started with `-b /term/shell` and would emit asset URLs under that base.
-  if (url === '/term/wsl' || url.startsWith('/term/wsl/') || url.startsWith('/term/wsl?')) {
-    res.writeHead(301, { Location: '/term/shell' + url.slice('/term/wsl'.length) });
-    res.end();
-    return;
   }
 
   // Repo creation (templates / clone / onboard) and its helpers.
@@ -1315,7 +1286,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   rewriteUrl(req, route);
-  // For bare /term/<key>/ HTML index requests we inject the mobile shims;
+  // For the bare /term/hub/ HTML index request we inject the mobile shims;
   // force identity encoding so the upstream returns plaintext we can rewrite.
   if (req.method === 'GET' && TERM_INDEX_RE.test(req.url)) {
     req.headers['accept-encoding'] = 'identity';

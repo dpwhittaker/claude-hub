@@ -2,7 +2,7 @@
 //
 // Everything comes from the running claude-hub on this box through its v2
 // API: the sessions list (recency, state, title), the file explorer, a live
-// terminal read through tmux, spoken prompts via the hub's STT, and Claude's
+// terminal read through the hub, spoken prompts via the hub's STT, and Claude's
 // questions / permission prompts through the glasses relay. The design
 // mirrors the web workspace: no projects, sessions and folders and files.
 //
@@ -388,8 +388,8 @@ export default {
       case 'down': {
         if (s.kind === 'term') {
           // Native scrolling reports the edges: at the top the reader is
-          // looking back — freeze the capture and let tmux scroll the app's
-          // own history; at the bottom go live again.
+          // looking back — freeze the capture and scroll the app's own
+          // history; at the bottom go live again.
           const wasFrozen = m.term.frozen;
           m.term.frozen = ev.type === 'up';
           return go((async () => {

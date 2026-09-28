@@ -7,7 +7,7 @@
 // with no output, so a turn never waits on a model call. The worker reads the
 // transcript tail, asks Haiku for a 3–7 word title (told to keep the current
 // one unless the purpose drifted) and POSTs it to the hub, keyed by the
-// conversation uuid that hub sessions, v1 tabs and this hook all share.
+// conversation uuid that hub sessions and this hook share.
 //
 // Inert when: SESSION_TITLES=0; HUB_TITLE_WORKER=1 (we are the `claude -p`
 // the worker itself spawned — this is what stops the recursion); the Stop is a

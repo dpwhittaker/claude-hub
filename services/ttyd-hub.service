@@ -1,5 +1,5 @@
 [Unit]
-Description=ttyd terminal for hub v2 sessions (browser → tmux attach → agent, id from the URL)
+Description=ttyd terminal for hub v2 sessions (browser → g2mirror attach → agent, id from the URL)
 Documentation=man:ttyd(1)
 After=network.target
 
@@ -20,9 +20,9 @@ Environment=HUB_STATE_DIR=/home/david/.claude-hub
 #   -a                     --url-arg: ?arg=<id> in the page URL becomes $1 of the command
 #   -b /term/hub           base path so xterm assets load through the proxy
 ExecStart=/usr/bin/ttyd -i /run/ttyd/hub.sock -W -a -b /term/hub -t titleFixed=hub -t disableLeaveAlert=true /usr/local/bin/ttyd-attach-hub.sh
-# The FIRST attach after a boot starts the user's tmux server from inside
-# this unit's cgroup. KillMode=process stops only ttyd itself on a restart,
-# so every live session survives it (V96).
+# Every g2mirror session starts from inside this unit's cgroup.
+# KillMode=process stops only ttyd itself on a restart, so every live
+# session survives it (V96).
 KillMode=process
 Restart=always
 RestartSec=2

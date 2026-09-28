@@ -195,7 +195,7 @@ test('V63: a backgrounded page waits for visibility instead of burning retries',
 });
 
 test('V63: a clean code-1000 close is still handed to ttyd untouched', () => {
-  // The command exited / tmux went away. ttyd parks on "Press ⏎ to Reconnect"
+  // The command exited / the session ended. ttyd parks on "Press ⏎ to Reconnect"
   // for that, and it must keep doing so — retrying would loop a fresh attach.
   const page = makePage();
   installTermReconnect(page.view);
@@ -269,7 +269,7 @@ test('V42: installTermReconnect survives the round-trip through new Function', (
 // socket through `view.WebSocket`, which is osc52's wrapper whichever order the
 // two are installed in — so OSC 52 keeps working right up until the first
 // network drop, and only the sockets the reconnect shim builds afterwards
-// bypass the scanner. The symptom is "tmux copy stopped reaching the system
+// bypass the scanner. The symptom is "copying stopped reaching the system
 // clipboard, but only after a reconnect", which nobody would trace back to an
 // injection-order edit weeks earlier.
 test('V63: the injected blob puts OSC52 ahead of the reconnect shim', () => {

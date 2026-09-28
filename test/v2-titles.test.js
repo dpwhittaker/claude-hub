@@ -55,48 +55,37 @@ test('V90: readTranscriptTitle — custom-title.json first, then a custom-title 
   assert.ok(t.at > 0, 'the json file carries a time (its mtime)');
 });
 
-test('V92: the registry parser keeps live sessions keyed by tmux session; the pane\'s own interactive cli process wins, not a nested run; statuses normalise', () => {
+test('V92: the registry parser keys live sessions by HUB_TERM_KEY; the terminal\'s own interactive cli process wins, not a nested run; statuses normalise', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'v2reg-'));
-  const write = (pid, o) => fs.writeFileSync(path.join(dir, pid + '.json'), JSON.stringify({ pid, sessionId: U1, cwd: '/x', tmux: 'proj__s1:@1.%1', name: 'proj-1a', nameSource: 'derived', status: 'idle', kind: 'interactive', entrypoint: 'cli', startedAt: 100, updatedAt: 10, ...o }));
-  // The pane's own claude: started first, currently running a shell command.
+  const write = (pid, o) => fs.writeFileSync(path.join(dir, pid + '.json'), JSON.stringify({ pid, sessionId: U1, cwd: '/x', name: 'proj-1a', nameSource: 'derived', status: 'idle', kind: 'interactive', entrypoint: 'cli', startedAt: 100, updatedAt: 10, ...o }));
+  // The terminal's own claude: started first, currently running a shell command.
   write(11, { status: 'shell', startedAt: 100, updatedAt: 5, name: 'Real Name', nameSource: 'user', nameSince: 7 });
-  // A `claude -p` the session's harness spawned seconds ago (B31): newer, busier, and NOT the tab.
+  // A `claude -p` the session's harness spawned seconds ago (B31): it inherits the key, but is newer, busier, and NOT the tab.
   write(12, { sessionId: '22222222-2222-3333-4444-555555555555', status: 'busy', entrypoint: 'sdk-cli', startedAt: 900, updatedAt: 999 });
-  write(13, { tmux: '', status: 'waiting' });                 // no tmux → not a hub tab
-  write(14, { tmux: 'other__s2:@2.%2', status: 'waiting' });
+  write(13, { status: 'waiting' });                           // no key → not a hub terminal
+  write(14, { status: 'waiting' });                           // a dead pid
   fs.writeFileSync(path.join(dir, '15.json'), 'not json');
   fs.writeFileSync(path.join(dir, '16.key'), 'x');
-  const live = readLiveSessions({ dir, isAlive: (pid) => pid !== 14, envKey: () => null });
-  assert.deepEqual([...live.keys()], ['proj__s1'], 'dead pids and pane-less entries are dropped');
-  const e = live.get('proj__s1');
-  assert.equal(e.pid, 11, 'the pane\'s own interactive cli process wins over the nested sdk-cli run');
+  const env = { 11: 'hub-abcd1234', 12: 'hub-abcd1234', 14: 'hub-other000' };
+  const envKey = (pid) => env[pid] || null;
+  const live = readLiveSessions({ dir, isAlive: (pid) => pid !== 14, envKey });
+  assert.deepEqual([...live.keys()], ['hub-abcd1234'], 'dead pids and keyless entries are dropped');
+  const e = live.get('hub-abcd1234');
+  assert.equal(e.pid, 11, 'the terminal\'s own interactive cli process wins over the nested sdk-cli run');
   assert.equal(e.sessionId, U1);
   assert.equal(e.status, 'idle', 'shell reads idle');
   assert.equal(e.name, 'Real Name');
   assert.equal(e.nameSource, 'user');
   assert.equal(e.nameSince, 7);
-  // Two interactive cli claimants (a user ran `claude` inside the pane's shell): the earlier one is the tab.
+  // Two interactive cli claimants (a user ran `claude` inside the terminal's shell): the earlier one is the tab.
   write(12, { entrypoint: 'cli', startedAt: 900, updatedAt: 999, status: 'busy' });
-  assert.equal(readLiveSessions({ dir, isAlive: () => true }).get('proj__s1').pid, 11);
+  assert.equal(readLiveSessions({ dir, isAlive: () => true, envKey }).get('hub-abcd1234').pid, 11);
   // …unless the earlier one is gone (a resume started a fresh process).
-  assert.equal(readLiveSessions({ dir, isAlive: (pid) => pid !== 11 }).get('proj__s1').pid, 12);
+  assert.equal(readLiveSessions({ dir, isAlive: (pid) => pid !== 11, envKey }).get('hub-abcd1234').pid, 12);
   assert.equal(parseEntry(JSON.stringify({ pid: 1, sessionId: 'a', status: 'shell', nameSource: 'weird' })).status, 'idle');
   assert.equal(parseEntry(JSON.stringify({ pid: 1, sessionId: 'a', nameSource: 'weird' })).nameSource, 'derived');
   assert.equal(parseEntry('{}'), null);
   assert.deepEqual([...readLiveSessions({ dir: path.join(dir, 'missing') }).keys()], []);
-});
-
-test('V92: a g2mirror terminal has no tmux pane; its key is HUB_TERM_KEY in the agent\'s environment', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'v2reg-'));
-  const write = (pid, o) => fs.writeFileSync(path.join(dir, pid + '.json'), JSON.stringify({ pid, sessionId: U1, cwd: '/x', name: 'n', status: 'idle', kind: 'interactive', entrypoint: 'cli', startedAt: 100, updatedAt: 10, ...o }));
-  write(21, {});                                             // the terminal's own claude
-  write(22, { entrypoint: 'sdk-cli', startedAt: 900 });      // a nested `claude -p` inherits the key (B31)
-  write(23, {});                                             // no key at all → not a hub terminal
-  write(24, { tmux: 'old__s1:@1.%1' });                      // a tmux pane's name wins
-  const env = { 21: 'hub-abcd1234', 22: 'hub-abcd1234', 24: 'hub-other000' };
-  const live = readLiveSessions({ dir, isAlive: () => true, envKey: (pid) => env[pid] || null });
-  assert.deepEqual([...live.keys()].sort(), ['hub-abcd1234', 'old__s1']);
-  assert.equal(live.get('hub-abcd1234').pid, 21);
 
   // The real lookup reads /proc/<pid>/environ.
   const child = spawn('sleep', ['10'], { env: { ...process.env, HUB_TERM_KEY: 'hub-proc0001' }, stdio: 'ignore' });

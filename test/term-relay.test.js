@@ -6,7 +6,7 @@ const {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-test('V74: term keys are tmux session names, nothing path-shaped', () => {
+test('V74: term keys are hub terminal keys, nothing path-shaped', () => {
   assert.equal(isTermKey('claude-hub__s1'), true);
   assert.equal(isTermKey('develop'), true);
   assert.equal(isTermKey('world-builder-opus-5_avatar-model__s12'), true);

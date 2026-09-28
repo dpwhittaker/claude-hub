@@ -29,7 +29,7 @@ node services/install-glasses-hooks.mjs      # only if you have the glasses app
 
 The hub binds `127.0.0.1:8002`. `tailscale serve --bg --https=443 http://localhost:8002` puts it on your tailnet with a real certificate and nothing on the public internet. Open `https://<your-box>.<tailnet>.ts.net/`, pick or create a profile, and start a terminal from any folder in the Explorer.
 
-Requirements: Node 22+, g2mirror (the fork's `hub-deploy` branch, in `~/.local/bin`; tmux still serves sessions started before it), ttyd 1.7+, a `claude` login (the completion and the auto-titler use it), and passwordless `sudo systemctl` for the hub's user so it can start and stop units.
+Requirements: Node 22+, g2mirror (the fork's `hub-deploy` branch, in `~/.local/bin`), ttyd 1.7+, a `claude` login (the completion and the auto-titler use it), and passwordless `sudo systemctl` for the hub's user so it can start and stop units.
 
 ## Where things live
 
