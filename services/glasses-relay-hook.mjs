@@ -7,12 +7,12 @@
 //
 // INERT BY DEFAULT. It exits 0 with no output — which Claude Code treats as
 // "no decision, carry on" — unless every one of these holds:
-//   1. we are inside a tmux session (claude-hub's develop tabs are), so the
-//      session name is the terminal key;
+//   1. we are in a hub terminal: $HUB_TERM_KEY is set (g2mirror sessions),
+//      or we are inside a tmux session, whose name is the terminal key;
 //   2. claude-hub is up on CLAUDE_HUB_URL (default http://127.0.0.1:8002);
 //   3. the hub says a glasses client is watching this key RIGHT NOW, and it
 //      answered before the glasses stopped watching or the hold aged out.
-// Anything else — hub down, no tmux, no watcher, timeout, network error —
+// Anything else — hub down, no terminal key, no watcher, timeout, error —
 // falls through to the ordinary TUI prompt. GLASSES_RELAY=0 disables it.
 import { execFileSync } from 'node:child_process';
 
@@ -22,7 +22,7 @@ const QUICK_TIMEOUT_MS = 3000;
 
 function quit() { process.exit(0); }
 
-if (process.env.GLASSES_RELAY === '0' || !process.env.TMUX) quit();
+if (process.env.GLASSES_RELAY === '0' || !(process.env.HUB_TERM_KEY || process.env.TMUX)) quit();
 
 let raw = '';
 process.stdin.setEncoding('utf8');
@@ -30,12 +30,14 @@ for await (const chunk of process.stdin) raw += chunk;
 let data;
 try { data = JSON.parse(raw); } catch { quit(); }
 
-let key = '';
-try {
-  const args = ['display-message', '-p', '#S'];
-  if (process.env.TMUX_PANE) args.splice(1, 0, '-t', process.env.TMUX_PANE);
-  key = execFileSync('tmux', args, { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-} catch { quit(); }
+let key = process.env.HUB_TERM_KEY || '';
+if (!key) {
+  try {
+    const args = ['display-message', '-p', '#S'];
+    if (process.env.TMUX_PANE) args.splice(1, 0, '-t', process.env.TMUX_PANE);
+    key = execFileSync('tmux', args, { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { quit(); }
+}
 if (!key) quit();
 
 const ev = data.hook_event_name;

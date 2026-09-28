@@ -7,6 +7,7 @@ const { makeTitleStore, cleanTitle } = require('../lib/v2-titles');
 const { digestTranscript, buildPrompt, parseReply, validTitle, USER_NAME_FLOOR } = require('../lib/session-title');
 const { readSessionTitle, readTranscriptTitle, readTranscriptLastAt } = require('../lib/claude-transcript');
 const { readLiveSessions, parseEntry } = require('../lib/claude-registry');
+const { spawn } = require('node:child_process');
 
 const U1 = '11111111-2222-3333-4444-555555555555';
 
@@ -65,7 +66,7 @@ test('V92: the registry parser keeps live sessions keyed by tmux session; the pa
   write(14, { tmux: 'other__s2:@2.%2', status: 'waiting' });
   fs.writeFileSync(path.join(dir, '15.json'), 'not json');
   fs.writeFileSync(path.join(dir, '16.key'), 'x');
-  const live = readLiveSessions({ dir, isAlive: (pid) => pid !== 14 });
+  const live = readLiveSessions({ dir, isAlive: (pid) => pid !== 14, envKey: () => null });
   assert.deepEqual([...live.keys()], ['proj__s1'], 'dead pids and pane-less entries are dropped');
   const e = live.get('proj__s1');
   assert.equal(e.pid, 11, 'the pane\'s own interactive cli process wins over the nested sdk-cli run');
@@ -83,6 +84,28 @@ test('V92: the registry parser keeps live sessions keyed by tmux session; the pa
   assert.equal(parseEntry(JSON.stringify({ pid: 1, sessionId: 'a', nameSource: 'weird' })).nameSource, 'derived');
   assert.equal(parseEntry('{}'), null);
   assert.deepEqual([...readLiveSessions({ dir: path.join(dir, 'missing') }).keys()], []);
+});
+
+test('V92: a g2mirror terminal has no tmux pane; its key is HUB_TERM_KEY in the agent\'s environment', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'v2reg-'));
+  const write = (pid, o) => fs.writeFileSync(path.join(dir, pid + '.json'), JSON.stringify({ pid, sessionId: U1, cwd: '/x', name: 'n', status: 'idle', kind: 'interactive', entrypoint: 'cli', startedAt: 100, updatedAt: 10, ...o }));
+  write(21, {});                                             // the terminal's own claude
+  write(22, { entrypoint: 'sdk-cli', startedAt: 900 });      // a nested `claude -p` inherits the key (B31)
+  write(23, {});                                             // no key at all → not a hub terminal
+  write(24, { tmux: 'old__s1:@1.%1' });                      // a tmux pane's name wins
+  const env = { 21: 'hub-abcd1234', 22: 'hub-abcd1234', 24: 'hub-other000' };
+  const live = readLiveSessions({ dir, isAlive: () => true, envKey: (pid) => env[pid] || null });
+  assert.deepEqual([...live.keys()].sort(), ['hub-abcd1234', 'old__s1']);
+  assert.equal(live.get('hub-abcd1234').pid, 21);
+
+  // The real lookup reads /proc/<pid>/environ.
+  const child = spawn('sleep', ['10'], { env: { ...process.env, HUB_TERM_KEY: 'hub-proc0001' }, stdio: 'ignore' });
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir);
+    write(child.pid, {});
+    assert.deepEqual([...readLiveSessions({ dir }).keys()], ['hub-proc0001']);
+  } finally { child.kill(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('V90: the hook is inert for its own worker and the installer merges by command', () => {

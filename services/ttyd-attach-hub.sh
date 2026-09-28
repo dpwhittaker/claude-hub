@@ -7,13 +7,21 @@
 #   $HUB_STATE_DIR/sessions/<id>.json    {id, cwd, agent, uuid, profile, …}
 #   $HUB_STATE_DIR/sessions/<id>.prompt  optional first prompt (sent once, then deleted)
 #
-# It maps to tmux session `hub-<id>`, created here on first attach and shared
-# live by every later attach (phone, desktop, glasses relay). The agent:
+# It maps to a terminal keyed `hub-<id>` (or a v1 session's old tmux name),
+# created here on first attach and shared live by every later attach (phone,
+# desktop, glasses relay). The terminal is a detached g2mirror session running
+# `env HUB_TERM_KEY=<key> … <agent>` — the key is how the hub finds it
+# (lib/g2sessions.js) — and each tab attaches with `--force --watch`: the
+# newest tab drives the session, older ones keep showing it and take it back
+# on a click or key. A key that still has a tmux session (started before the
+# switch) stays on tmux until that session ends; HUB_TERM_BACKEND=tmux starts
+# new ones on tmux too. The agent:
 #   claude → `claude --session-id <uuid>` first time, `--resume <uuid>` after
 #            (transcript on disk under ~/.claude/projects/<encoded cwd>/), plus
 #            `--append-system-prompt-file <profile CLAUDE.md>` when the
 #            session's profile has instructions (SPEC §V84).
-#   codex  → plain `codex` (no id preassignment; tmux is its persistence).
+#   codex  → plain `codex` (no id preassignment; the terminal is its
+#            persistence).
 #   shell  → `bash -l` in the folder.
 
 set -e
@@ -22,6 +30,8 @@ ID="$1"
 HUB_DIR="${HUB_STATE_DIR:-$HOME/.claude-hub}"
 CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
 CODEX_BIN="${CODEX_BIN:-codex}"
+G2MIRROR_BIN="${G2MIRROR_BIN:-$HOME/.local/bin/g2mirror}"
+HUB_TERM_BACKEND="${HUB_TERM_BACKEND:-g2mirror}"
 PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/projects}"
 
 if [[ ! "$ID" =~ ^[a-z0-9]{8}$ ]]; then
@@ -47,8 +57,8 @@ if [[ ! -d "$DIR" ]]; then
     exit 1
 fi
 
-# The tmux session name: hub-<id>, or the name a session migrated from v1
-# already had (its tmux session was never renamed).
+# The terminal key: hub-<id>, or the tmux session name a session migrated
+# from v1 already had (it was never renamed).
 KEY="${TERMKEY:-hub-$ID}"
 if [[ ! "$KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
     echo "bad termKey in $FILE" >&2
@@ -58,44 +68,89 @@ INSTRUCTIONS="$HUB_DIR/profiles/$PROFILE/CLAUDE.md"
 
 case "$AGENT" in
     shell)
-        agent_cmd="bash -l"
+        agent=(bash -l)
         ;;
     codex)
-        agent_cmd="$CODEX_BIN"
+        agent=("$CODEX_BIN")
         ;;
     *)
         encoded="-$(printf '%s' "$DIR" | sed 's|^/||; s|/|-|g')"
         sessions_dir="$HOME/.claude/projects/$encoded"
         if [[ -n "$UUID" && -f "$sessions_dir/$UUID.jsonl" ]]; then
-            agent_cmd="$CLAUDE_BIN --resume $UUID --chrome"
+            agent=("$CLAUDE_BIN" --resume "$UUID" --chrome)
         else
-            agent_cmd="$CLAUDE_BIN --session-id $UUID --chrome"
+            agent=("$CLAUDE_BIN" --session-id "$UUID" --chrome)
         fi
         if [[ -n "$PROFILE" && -s "$INSTRUCTIONS" ]]; then
-            agent_cmd="$agent_cmd --append-system-prompt-file $INSTRUCTIONS"
+            agent+=(--append-system-prompt-file "$INSTRUCTIONS")
         fi
         ;;
 esac
 
-if ! tmux has-session -t "=$KEY" 2>/dev/null; then
-    tmux new-session -d -s "$KEY" -c "$DIR" "$agent_cmd"
-    # Same tmux tuning as ttyd-attach.sh: latest client's size wins, focus
-    # events through, mouse on (wheel → Claude's transcript), OSC 52 clipboard.
-    tmux set-option        -t "=$KEY" -g window-size latest
-    tmux set-window-option -t "=$KEY" -g aggressive-resize on
-    tmux set-option        -t "=$KEY" -g focus-events on
-    tmux set-option        -t "=$KEY" -g mouse on
-    tmux set-option        -t "=$KEY" -g set-clipboard on
-    tmux set-option        -ga terminal-overrides ',xterm*:Ms=\E]52;%p1%s;%p2%s\007'
+PROMPT_FILE="$HUB_DIR/sessions/$ID.prompt"
 
-    PROMPT_FILE="$HUB_DIR/sessions/$ID.prompt"
-    if [[ -f "$PROMPT_FILE" && "$AGENT" != "shell" ]]; then
+if tmux has-session -t "=$KEY" 2>/dev/null || [[ "$HUB_TERM_BACKEND" == tmux || ! -x "$G2MIRROR_BIN" ]]; then
+    if ! tmux has-session -t "=$KEY" 2>/dev/null; then
+        tmux new-session -d -s "$KEY" -c "$DIR" "${agent[*]}"
+        # Same tmux tuning as ttyd-attach.sh: latest client's size wins, focus
+        # events through, mouse on (wheel → Claude's transcript), OSC 52
+        # clipboard. The override is server-wide: add it once, not per session.
+        tmux set-option        -t "=$KEY" -g window-size latest
+        tmux set-window-option -t "=$KEY" -g aggressive-resize on
+        tmux set-option        -t "=$KEY" -g focus-events on
+        tmux set-option        -t "=$KEY" -g mouse on
+        tmux set-option        -t "=$KEY" -g set-clipboard on
+        if ! tmux show-options -gv terminal-overrides 2>/dev/null | grep -qF 'Ms=\E]52'; then
+            tmux set-option    -ga terminal-overrides ',xterm*:Ms=\E]52;%p1%s;%p2%s\007'
+        fi
+
+        if [[ -f "$PROMPT_FILE" && "$AGENT" != "shell" ]]; then
+            ( sleep 4
+              tmux send-keys -t "=$KEY:" -l "$(cat "$PROMPT_FILE")"
+              tmux send-keys -t "=$KEY:" Enter
+              rm -f "$PROMPT_FILE"
+            ) &
+        fi
+    fi
+    exec tmux -u attach-session -t "=$KEY"
+fi
+
+# g2mirror. The lock keeps two tabs opening a new session at once from
+# starting it twice.
+# (The headless wrapper's own command line, anchored: attach clients carry
+# the key too.)
+running() { pgrep -u "$(id -u)" -f "^[^ ]*g2mirror --headless .* -- env HUB_TERM_KEY=${KEY//./\\.} " >/dev/null; }
+mkdir -p "$HUB_DIR/locks"
+exec 9>"$HUB_DIR/locks/$KEY.lock"
+flock 9
+if ! running; then
+    # The agent gets the terminal type the browser tab really is, and the
+    # key first, so the attach pattern below always has a space after it.
+    ERR="$HUB_DIR/locks/$KEY.err"
+    if ! SOCKET="$(cd "$DIR" && "$G2MIRROR_BIN" --detached --title "$KEY" -- \
+            env HUB_TERM_KEY="$KEY" TERM=xterm-256color COLORTERM=truecolor "${agent[@]}" 2>"$ERR")"; then
+        cat "$ERR" >&2
+        exit 1
+    fi
+    if [[ -f "$PROMPT_FILE" && "$AGENT" != "shell" && -n "$SOCKET" ]]; then
+        # Typed once Claude is up; the pause before Enter makes it a submit,
+        # not a paste ending in a newline.
         ( sleep 4
-          tmux send-keys -t "=$KEY:" -l "$(cat "$PROMPT_FILE")"
-          tmux send-keys -t "=$KEY:" Enter
-          rm -f "$PROMPT_FILE"
+          node -e '
+            const [sock, file] = process.argv.slice(1);
+            const text = require("fs").readFileSync(file);
+            const c = require("net").createConnection(sock, () => {
+              const msg = (m) => JSON.stringify(m) + "\n";
+              c.end(msg({ type: "init", version: 1, device: "claude-hub", width: 80, height: 24, size_rank: 4294967295 })
+                + msg({ type: "input", data: Buffer.concat([text, Buffer.from("\r")]).toString("base64"),
+                        delays: [{ at: text.length, ms: 150 }] }));
+            });
+            c.on("error", () => process.exit(1));
+          ' "${G2MIRROR_DIR:-$HOME/.g2mirror}/$SOCKET" "$PROMPT_FILE" && rm -f "$PROMPT_FILE"
         ) &
     fi
 fi
+flock -u 9
+exec 9>&-
 
-exec tmux -u attach-session -t "=$KEY"
+exec "$G2MIRROR_BIN" -a "HUB_TERM_KEY=$KEY " --force --watch

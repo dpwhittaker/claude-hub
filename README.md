@@ -1,17 +1,17 @@
 # claude-hub
 
-One page over everything under `~/projects`: the Claude Code (or Codex, or plain shell) sessions running in tmux, the dev servers and daemons systemd keeps up, and every file, all as tabs you arrange in free-form panels. Reachable from a laptop, a phone or the G2 glasses over Tailscale, with the same workspace waiting on each.
+One page over everything under `~/projects`: the Claude Code (or Codex, or plain shell) sessions running in persistent terminals, the dev servers and daemons systemd keeps up, and every file, all as tabs you arrange in free-form panels. Reachable from a laptop, a phone or the G2 glasses over Tailscale, with the same workspace waiting on each.
 
 There is no "project" in the UI. A **session** is an agent running in some folder; a **service** is a systemd unit, with its site when it serves one; a **file** opens raw, rendered, in an editor or as a diff. A **profile** holds your open tabs and layout, plus the instructions appended to every Claude session you start, so two people (or one person's separate lives) share the box without sharing a workspace.
 
 ## What you get
 
-- **Terminals that survive everything.** Each session is a tmux session served by one ttyd unit. Close the laptop, open the phone: same scrollback, same conversation. Suspend it from the tab's bar; reconnect starts it again and Claude resumes where it was. Titles follow Claude's own naming, `/rename`, and an auto-titler that renames the tab as the work drifts.
+- **Terminals that survive everything.** Each session is a detached [g2mirror](https://github.com/dpwhittaker/g2mirror) session served by one ttyd unit. Close the laptop, open the phone: same scrollback, same conversation. Open it in a second tab and that tab takes over; the first keeps showing it and takes it back on a click. Suspend it from the tab's bar; reconnect starts it again and Claude resumes where it was. Titles follow Claude's own naming, `/rename`, and an auto-titler that renames the tab as the work drifts.
 - **Panels, not windows.** Drag a tab to a panel edge to split, to its centre to move, onto a strip to reorder. Sizes are proportions, so the same layout renders on a 4K monitor and a quarter-width side panel. Narrow screens collapse panels into tab groups in a menu.
 - **Files anywhere.** A browser rooted at `~/projects`, folders coloured by whether a terminal is open there. Raw shows highlighted source, View renders markdown, images, PDFs and the live page for html behind a dev server, Edit is CodeMirror with Ctrl+Space completion from the local `claude` CLI, Diff compares against HEAD or any commit that touched the file. Saves refuse to clobber a file an agent changed meanwhile.
 - **Services with their sites.** Units you maintain are discovered, not registered, and matched to their `tailscale serve` listeners. A service tab shows the site, the unit file or a live log tail, with start, stop and restart in its bar.
 - **New repos.** From a template (Vite + React, Phaser, react-three-fiber, Babylon, Jekyll, an Even Realities G2 app), a clone of one of your GitHub repos, or an existing folder. The scaffold gets a dev-server unit behind the proxy and a Claude session seeded with an orientation prompt.
-- **Glasses.** `glasses/` is an [Omni](https://github.com/lettucegoblin/omnieven) app for the Even Realities G2: sessions, the Explorer and a live terminal read through tmux, spoken prompts, and Claude's questions and permission prompts answered from the glasses through a hook that is inert unless they are watching. List the folder in Omni's `data/app-roots` and it is on the glasses.
+- **Glasses.** `glasses/` is an [Omni](https://github.com/lettucegoblin/omnieven) app for the Even Realities G2: sessions, the Explorer and a live terminal read through the hub, spoken prompts, and Claude's questions and permission prompts answered from the glasses through a hook that is inert unless they are watching. List the folder in Omni's `data/app-roots` and it is on the glasses.
 
 ## Run it
 
@@ -29,7 +29,7 @@ node services/install-glasses-hooks.mjs      # only if you have the glasses app
 
 The hub binds `127.0.0.1:8002`. `tailscale serve --bg --https=443 http://localhost:8002` puts it on your tailnet with a real certificate and nothing on the public internet. Open `https://<your-box>.<tailnet>.ts.net/`, pick or create a profile, and start a terminal from any folder in the Explorer.
 
-Requirements: Node 22+, tmux, ttyd 1.7+, a `claude` login (the completion and the auto-titler use it), and passwordless `sudo systemctl` for the hub's user so it can start and stop units.
+Requirements: Node 22+, g2mirror (the fork's `hub-deploy` branch, in `~/.local/bin`; tmux still serves sessions started before it), ttyd 1.7+, a `claude` login (the completion and the auto-titler use it), and passwordless `sudo systemctl` for the hub's user so it can start and stop units.
 
 ## Where things live
 

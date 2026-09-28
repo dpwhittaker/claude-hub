@@ -402,7 +402,7 @@
     const items = [];
     if (t.kind === 'term' && t.sessionId) {
       items.push(['End session', async () => {
-        if (!(await Hub.confirm('End session?', 'The tmux session and its agent are killed. A Claude conversation can be resumed later by its id.', 'End', true))) return;
+        if (!(await Hub.confirm('End session?', 'The terminal and its agent are closed. A Claude conversation can be resumed later by its id.', 'End', true))) return;
         try { await api('/api/v2/sessions/' + t.sessionId, { method: 'DELETE' }); Hub.closeTabsWhere((x) => x.kind === 'term' && x.termKey === t.termKey); if (Hub.sessions) Hub.sessions.at = 0; }
         catch (e) { toast(e.message, true); }
       }]);

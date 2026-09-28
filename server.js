@@ -35,6 +35,7 @@ const { bootstrapOnboard, listOrphanFolderNames } = require('./lib/onboard');
 const termRelayLib = require('./lib/term-relay');
 const scaffoldInstall = require('./lib/scaffold-install');
 const { makeV2Router } = require('./lib/v2-routes');
+const { makeHubTerms } = require('./lib/hub-terms');
 const { findSentinels } = require('./lib/sentinels');
 const { systemdEscapePath } = require('./lib/systemd-escape');
 const { resolveUnder } = require('./lib/v2-paths');
@@ -429,17 +430,9 @@ const termRelay = termRelayLib.makeRelay({
 const STT_URL = process.env.STT_URL || 'http://127.0.0.1:8012';
 const execFileAsync = require('node:util').promisify(require('node:child_process').execFile);
 
-// Exact session-name match (`=`), no prefix search — and the trailing ':' is
-// load-bearing: has-session takes `=key`, but every pane-targeted command
-// (send-keys, capture-pane, display-message) answers "can't find pane" to it
-// and wants `=key:` = that session's active pane (B25).
-function tmuxSession(key) { return '=' + key; }
-function tmuxTarget(key) { return '=' + key + ':'; }
-
-async function tmuxHasSession(key) {
-  try { await execFileAsync('tmux', ['has-session', '-t', tmuxSession(key)], { timeout: 3000 }); return true; }
-  catch { return false; }
-}
+// Every terminal op goes by key to whichever backend runs it: tmux for
+// sessions started before the switch, g2mirror for the rest.
+const hubTerms = makeHubTerms({ execFileP: execFileAsync });
 
 function readRawBody(req, res, maxBytes) {
   return new Promise((resolve) => {
@@ -474,30 +467,25 @@ function relayKeyOr400(res, key) {
 // "watched": only then may a hook hold a prompt for the glasses (V75).
 async function handleTermCapture(_req, res, key) {
   if (!relayKeyOr400(res, key)) return;
-  if (!(await tmuxHasSession(key))) return sendJson(res, 404, { error: 'no such terminal' });
-  termRelay.markWatched(key);
   let capture;
   try {
-    capture = await execFileAsync('tmux', ['capture-pane', '-p', '-J', '-t', tmuxTarget(key)],
-      { timeout: 3000, maxBuffer: 4 * 1024 * 1024 });
+    capture = await hubTerms.capture(key);
   } catch (e) {
     return sendJson(res, 500, { error: 'capture failed: ' + e.message });
   }
-  let cols = 0; let rows = 0;
-  try {
-    const dims = await execFileAsync('tmux', ['display-message', '-p', '-t', tmuxTarget(key), '#{pane_width} #{pane_height}'], { timeout: 3000 });
-    [cols, rows] = dims.stdout.trim().split(' ').map(Number);
-  } catch {}
+  if (!capture) return sendJson(res, 404, { error: 'no such terminal' });
+  termRelay.markWatched(key);
+  const { cols, rows } = capture;
   sendJson(res, 200, {
     key, cols, rows,
-    lines: termRelayLib.parseCapture(capture.stdout),
+    lines: termRelayLib.parseCapture(capture.text),
     pending: termRelay.getPending(key),
     state: termRelay.getState(key),
   });
 }
 
-// POST {text, enter?} → typed into the pane literally (`send-keys -l`), then
-// Enter when asked. This is how a spoken prompt lands in a Claude session.
+// POST {text, enter?} → typed into the terminal literally, then Enter when
+// asked. This is how a spoken prompt lands in a Claude session.
 function handleTermInput(req, res, key) {
   if (!relayKeyOr400(res, key)) return;
   readJsonBody(req, res, 16384, (body, err) => {
@@ -506,16 +494,14 @@ function handleTermInput(req, res, key) {
       return sendJson(res, 400, { error: 'text required (≤ 8192 chars)' });
     }
     (async () => {
-      if (!(await tmuxHasSession(key))) return sendJson(res, 404, { error: 'no such terminal' });
-      if (body.text) await execFileAsync('tmux', ['send-keys', '-t', tmuxTarget(key), '-l', '--', body.text], { timeout: 3000 });
-      if (body.enter) await execFileAsync('tmux', ['send-keys', '-t', tmuxTarget(key), 'Enter'], { timeout: 3000 });
+      if (!(await hubTerms.type(key, body.text, !!body.enter))) return sendJson(res, 404, { error: 'no such terminal' });
       sendJson(res, 200, { ok: true });
-    })().catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: 'send-keys failed: ' + e.message }); });
+    })().catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: 'input failed: ' + e.message }); });
   });
 }
 
-// POST {lines} → SGR wheel ticks typed into the pane; negative scrolls toward
-// older output. Claude Code consumes them as transcript scroll (V77).
+// POST {lines} → SGR wheel ticks typed into the terminal; negative scrolls
+// toward older output. Claude Code consumes them as transcript scroll (V77).
 function handleTermScroll(req, res, key) {
   if (!relayKeyOr400(res, key)) return;
   readJsonBody(req, res, 4096, (body, err) => {
@@ -524,10 +510,9 @@ function handleTermScroll(req, res, key) {
     if (!Number.isFinite(lines)) return sendJson(res, 400, { error: 'lines required' });
     const seqs = termRelayLib.wheelSequences(lines);
     (async () => {
-      if (!(await tmuxHasSession(key))) return sendJson(res, 404, { error: 'no such terminal' });
-      if (seqs.length) await execFileAsync('tmux', ['send-keys', '-t', tmuxTarget(key), '-l', '--', ...seqs], { timeout: 3000 });
+      if (!(await hubTerms.sendRaw(key, seqs))) return sendJson(res, 404, { error: 'no such terminal' });
       sendJson(res, 200, { ok: true, ticks: seqs.length });
-    })().catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: 'send-keys failed: ' + e.message }); });
+    })().catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: 'input failed: ' + e.message }); });
   });
 }
 
@@ -1205,21 +1190,9 @@ function readProjectRoutes(project) {
 const HUB_STATE_DIR = process.env.HUB_STATE_DIR || path.join(os.homedir(), '.claude-hub');
 process.env.HUB_STATE_DIR = HUB_STATE_DIR;
 
-// [{name, activity}] — activity = tmux's last-activity epoch seconds, the
-// "most recent response" a shell or codex session can report (V92).
-async function tmuxListSessions() {
-  try {
-    const { stdout } = await execFileP('tmux', ['list-sessions', '-F', '#{session_name}\t#{session_activity}'], { timeout: 3000 });
-    return stdout.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
-      const [name, activity] = l.split('\t');
-      return { name, activity: Number(activity) * 1000 || 0 };
-    });
-  } catch { return []; }
-}
-
 const v2Router = makeV2Router({
   projectsRoot: PROJECTS_ROOT, hubDir: HUB_STATE_DIR, sendJson, readJsonBody, execFileP,
-  readProjectRoutes, readProjectProxyPrefix, tmuxListSessions, claudeBin: CLAUDE_BIN,
+  readProjectRoutes, readProjectProxyPrefix, terms: hubTerms, claudeBin: CLAUDE_BIN,
 });
 
 const server = http.createServer(async (req, res) => {

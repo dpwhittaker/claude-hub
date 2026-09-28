@@ -63,7 +63,7 @@ https://<box>.<tailnet>.ts.net/  →  tailscale serve :443  →  127.0.0.1:8002 
 
   /                  the workspace: v2/index.html + app.js (profiles, panels, tabs)
   /v2/*  /api/v2/*   its files and its JSON API            lib/v2-routes.js
-  /term/hub/?arg=ID  a session's terminal (ttyd-hub.service → tmux)
+  /term/hub/?arg=ID  a session's terminal (ttyd-hub.service → g2mirror)
   /<proj>/*          a project's dev server, if its .project-meta.json has proxyTarget
   /api/projects POST new repo (template / clone / onboard)  server.js
   /api/term-*        the glasses relay                       lib/term-relay.js
@@ -82,15 +82,34 @@ There is no "project" in the UI (the word survives only in `.project-meta.json`
 and the repo-creation dialog).
 
 - **Sessions** — an agent (claude / codex / a shell) in some folder under
-  `~/projects`, one record at `~/.claude-hub/sessions/<id>.json`, one tmux
-  session named by its `termKey` (`hub-<id>`, or the `<project>__sN` name a
+  `~/projects`, one record at `~/.claude-hub/sessions/<id>.json`, one
+  terminal keyed by its `termKey` (`hub-<id>`, or the `<project>__sN` name a
   session migrated from v1 kept). ONE ttyd unit serves them all:
   `services/ttyd-hub.service` runs ttyd with `--url-arg`, the tab loads
   `/term/hub/?arg=<id>`, and `services/ttyd-attach-hub.sh <id>` attaches (or
-  creates) the tmux session. Creating a session is a file write, not a
-  `sudo systemctl enable`. Ending one deletes the record and kills tmux;
-  suspending only kills tmux (a reconnect starts it again; a Claude
+  creates) the terminal. Creating a session is a file write, not a
+  `sudo systemctl enable`. Ending one deletes the record and closes the
+  terminal; suspending only closes it (a reconnect starts it again; a Claude
   conversation resumes by uuid). `lib/v2-sessions.js`.
+- **Terminals** — a detached [g2mirror](https://github.com/dpwhittaker/g2mirror)
+  session (`--watch` and the clipboard/focus pass-through are on the fork's
+  `hub-deploy` branch, installed to `~/.local/bin`) running `env
+  HUB_TERM_KEY=<key> TERM=xterm-256color COLORTERM=truecolor <agent>` in the
+  session folder. The key is how everything finds it: the hub probes the
+  sockets in `~/.g2mirror` (each greets with its command, size and last
+  output — `lib/g2sessions.js`), a tab attaches with `g2mirror -a
+  "HUB_TERM_KEY=<key> " --force --watch` (the trailing space keeps `x__s1`
+  from matching `x__s10`), and Claude's registry entries and the glasses hook
+  read it from the agent's environment. `--force --watch`: the newest tab
+  drives the session (and sizes it); older tabs keep showing it, titled
+  `[watching]`, and take it back on a click or key. A key that still has a
+  **tmux** session (one started before the switch, 2026-09-27) stays on tmux
+  until that session ends; `HUB_TERM_BACKEND=tmux` in ttyd-hub's environment
+  starts new ones on tmux too. `lib/hub-terms.js` sends every terminal
+  operation to whichever backend holds the key. Reading a g2mirror screen
+  views it as the lowest-ranked viewer at its current size, so a glasses
+  poll never resizes the app; End/Suspend hang up the agent's process group,
+  as `tmux kill-session` did.
 - **Services** — discovered, not registered (`lib/v2-services.js`): every
   regular unit file in `/etc/systemd/system` that runs as the hub's user or
   works under `$HOME`, plus `vite@`/`jekyll@` instances and sentinel
@@ -123,15 +142,18 @@ lands in the panel with the largest area.
 ## Claude Code's own records are the truth for a live session
 
 `~/.claude/sessions/<pid>.json` (`lib/claude-registry.js`) names the tmux pane
-a running `claude` lives in, the session id it is ACTUALLY on (a `--resume` or
+a running `claude` lives in (under g2mirror there is no pane: the hub reads
+`HUB_TERM_KEY` from `/proc/<pid>/environ` instead), the session id it is
+ACTUALLY on (a `--resume` or
 `/clear` mints a new one; the hub follows it into the record so a reboot
 resumes the right conversation), its name with source (`user` = `/rename`,
 `auto` = Claude's own, `derived` = the `folder-1a` placeholder, never shown)
 and its status (busy / waiting / idle), which is what pulses the dot on Home.
 When several processes claim one pane — a `claude -p` the session spawned
 registers against it too — the earliest-started interactive `cli` entry is the
-tab. Recency is the registry's status change (idle TUI repaints bump tmux
-activity every few minutes, so tmux activity counts only for codex/shell).
+tab. Recency is the registry's status change (idle TUI repaints bump the
+terminal's activity every few minutes, so terminal activity — tmux's, or
+g2mirror's last output — counts only for codex/shell).
 
 **Titles** follow the newest by time of the registry name and the hub's auto
 title, so `/rename` and the titler take turns. `services/session-title-hook.mjs`
@@ -171,8 +193,8 @@ sudo systemctl enable --now <unit>`.
 
 | Unit | What it runs |
 |---|---|
-| `services/claude-hub.service` | `node server.js`. `KillMode=process` so a restart never kills the ttyd/tmux children. |
-| `services/ttyd-hub.service` | ttyd on `/run/ttyd/hub.sock` with `--url-arg`; `ttyd-attach-hub.sh` (installed to `/usr/local/bin`) attaches the id's tmux session. `KillMode=process`: the first attach after a boot starts the user's tmux server INSIDE this cgroup, and a unit restart must not take every session with it. `RuntimeDirectoryPreserve=yes`. |
+| `services/claude-hub.service` | `node server.js`. `KillMode=process` so a restart never kills the ttyd/terminal children. |
+| `services/ttyd-hub.service` | ttyd on `/run/ttyd/hub.sock` with `--url-arg`; `ttyd-attach-hub.sh` (installed to `/usr/local/bin`) attaches the id's terminal. `KillMode=process`: every g2mirror session (and, after a boot, the user's tmux server) starts INSIDE this cgroup, and a unit restart must not take every session with it. `RuntimeDirectoryPreserve=yes`. |
 | `services/vite@.service` / `services/jekyll@.service` | Templated dev servers, `Restart=always`; enabled by the scaffolds. |
 | `services/stt.service` | faster-whisper on `127.0.0.1:8012` for the glasses (`/api/stt`). |
 
@@ -197,9 +219,9 @@ update within a second; there is no build, no packaging, no second server.
 It talks only to `/api/v2/*` and the relay routes, and mirrors the workspace:
 sessions by recency with state glyphs (● busy ◐ waiting ○ idle · stopped),
 an Explorer rooted at `/` whose folders offer "terminal here", files as
-byte-budgeted blocks, and a terminal read through tmux with the TUI chrome
-stripped — native scrolling, where `up` at the top freezes the capture and
-scrolls tmux back and `down` goes live again; hold to speak (the hub's
+byte-budgeted blocks, and a terminal read through the hub with the TUI
+chrome stripped — native scrolling, where `up` at the top freezes the
+capture and scrolls the app's history back and `down` goes live again; hold to speak (the hub's
 `/api/stt`), tap to send; Claude's questions and permission prompts arrive
 as lists (double-tap hands them back to the terminal). `POST
 /api/apps/claude-hub/message {open: {session|file|folder}}` pushes a view.
@@ -222,7 +244,8 @@ prompt goes back to the TUI when the glasses stop polling or after 540 s.
 ## Mobile terminal input
 
 Every `/term/<key>/` HTML response gets the shims spliced into `<head>` on the
-way through the proxy: `installOsc52Bridge` (tmux `set-clipboard` → host
+way through the proxy: `installOsc52Bridge` (OSC 52 from the app — passed
+through by g2mirror's attach client, or by tmux `set-clipboard` → host
 clipboard), `installTermReconnect` (V63/V64: ttyd parks on "Press ⏎ to
 Reconnect" after a network drop; the shim retries and refits), the
 scrollbar-hide style, `installTouchWheel`, `installKeyboardFit` (V62) and

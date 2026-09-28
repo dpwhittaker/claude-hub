@@ -25,6 +25,9 @@ async function startFixture(opts = {}) {
   // ever write into the real ~/.claude-hub.
   const hubStateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-hub-state-'));
   process.env.HUB_STATE_DIR = hubStateDir;
+  // …and no test lists or touches the real g2mirror sessions.
+  const g2mirrorDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g2t-'));
+  process.env.G2MIRROR_DIR = g2mirrorDir;
   // Avoid clashing with the systemd unit on 8002.
   process.env.PROXY_PORT = '0';
 
@@ -49,6 +52,7 @@ async function startFixture(opts = {}) {
         server.close(() => {
           fs.rmSync(projectsRoot, { recursive: true, force: true });
           fs.rmSync(hubStateDir, { recursive: true, force: true });
+          fs.rmSync(g2mirrorDir, { recursive: true, force: true });
           resolve();
         });
       }),
