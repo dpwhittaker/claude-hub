@@ -248,7 +248,9 @@ way through the proxy: `installOsc52Bridge` (OSC 52 from the app — passed
 through by g2mirror's attach client, or by tmux `set-clipboard` → host
 clipboard), `installTermReconnect` (V63/V64: ttyd parks on "Press ⏎ to
 Reconnect" after a network drop; the shim retries and refits), the
-scrollbar-hide style, `installTouchWheel`, `installKeyboardFit` (V62) and
+scrollbar-hide style, `installTouchWheel`, `installTouchSelect` (V103:
+long-press selects, dragging extends, lifting copies; a tap clears),
+`installKeyboardFit` (V62) and
 `installAndroidInput` (V61, B17/B18/B23 — Gboard drops keystrokes through
 xterm's `CompositionHelper`; the shim diffs the textarea synchronously). All
 five are `.toString()`-inlined, so they must stay self-contained. **Upgrading

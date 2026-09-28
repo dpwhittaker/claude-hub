@@ -135,6 +135,9 @@ const TERM_INDEX_RE = /^\/term\/[A-Za-z0-9_.-]+\/?(?:\?.*)?$/;
 // parses) since ttyd's preact mount replaces body children, which would
 // strip a body-end script before it could run.
 const TOUCH_WHEEL_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${require('./lib/touch-wheel').installTouchWheel.toString()})(document);});</script>`;
+// Long-press selects text, lifting the finger copies it (V103). Shares the
+// touch stream with touch-wheel through `document.__touchSelecting`.
+const TOUCH_SELECT_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${require('./lib/touch-select').installTouchSelect.toString()})(document);});</script>`;
 const { patchViewportMeta, installKeyboardFit } = require('./lib/keyboard-fit');
 const KEYBOARD_FIT_INJECT = `<script>document.addEventListener('DOMContentLoaded',function(){(${installKeyboardFit.toString()})(document);});</script>`;
 // Android-only: take the IME input path off xterm's CompositionHelper, which
@@ -185,7 +188,7 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
     // before body parses) so ttyd's preact mount can't wipe us.
     html = patchViewportMeta(html);
     const injectBlob = OSC52_INJECT + TERM_RECONNECT_INJECT + SCROLLBAR_HIDE_INJECT
-      + TOUCH_WHEEL_INJECT + KEYBOARD_FIT_INJECT + ANDROID_INPUT_INJECT;
+      + TOUCH_WHEEL_INJECT + TOUCH_SELECT_INJECT + KEYBOARD_FIT_INJECT + ANDROID_INPUT_INJECT;
     if (html.includes('</head>')) {
       html = html.replace('</head>', injectBlob + '</head>');
     } else if (html.includes('</body>')) {
