@@ -1,0 +1,23 @@
+[Unit]
+Description=g2mirror-server — websocket gateway for the glasses (Faceclaw's Terminal app) to the g2mirror sessions
+After=network.target
+
+[Service]
+Type=simple
+# EDIT BEFORE INSTALLING: User= must match the account that owns ~/.g2mirror,
+# and ExecStart= must point at its home (systemd doesn't expand ~ here).
+User=david
+# Reads ~/.g2mirror/config.json (create it once with `g2mirror-server
+# --init-config`, which prints the glasses token) and listens on
+# 127.0.0.1:8737. `tailscale serve --bg --https=8737 http://localhost:8737`
+# puts TLS in front of it on the tailnet: the glasses connect with
+# g2mirrors://<token>@<host>:8737.
+ExecStart=/home/david/.local/bin/g2mirror-server
+# Sessions the glasses launch (the "shell" preset) start inside this cgroup;
+# KillMode=process keeps them alive across a restart.
+KillMode=process
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

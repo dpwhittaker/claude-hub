@@ -190,6 +190,7 @@ sudo systemctl enable --now <unit>`.
 | `services/ttyd-hub.service` | ttyd on `/run/ttyd/hub.sock` with `--url-arg`; `ttyd-attach-hub.sh` (installed to `/usr/local/bin`) attaches the id's terminal. `KillMode=process`: every g2mirror session starts INSIDE this cgroup, and a unit restart must not take every session with it. `RuntimeDirectoryPreserve=yes`. |
 | `services/vite@.service` / `services/jekyll@.service` | Templated dev servers, `Restart=always`; enabled by the scaffolds. |
 | `services/stt.service` | faster-whisper on `127.0.0.1:8012` for the glasses (`/api/stt`). |
+| `services/g2mirror-server.service` | g2mirror's websocket gateway on `127.0.0.1:8737`, so Faceclaw's Terminal app on the glasses can list, view and type into every g2mirror session (hub terminals included). Config and token hashes: `~/.g2mirror/config.json` (`g2mirror-server --init-config` once; `--add-token <name>` for more). TLS on the tailnet: `tailscale serve --bg --https=8737 http://localhost:8737`; the glasses connect with `g2mirrors://<token>@<host>:8737`. `KillMode=process`: sessions the glasses launch start in this cgroup. |
 
 ## Retiring v1 (done 2026-09-23)
 
