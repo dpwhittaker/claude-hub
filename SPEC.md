@@ -56,6 +56,7 @@ files:
 - `services/vite@.service` — templated per-project Vite dev server. `ExecStart=npm run dev`, `WorkingDirectory=~/projects/%i`. enabled on vite-family bootstrap.
 - `services/jekyll@.service` — templated per-project Jekyll preview. `ExecStart=~/projects/%i/serve-local.sh`, `Restart=always`, system PATH (no nvm). enabled on `jekyll`-template bootstrap (V52).
 - `services/stt/server.py` + `services/stt.service` — faster-whisper `turbo` on `127.0.0.1:8012` (`POST /transcribe`, `GET /health`), venv `~/stt-env`; gpu-gate lease `stt`, idle 90 s → unload; CPU fallback (V78).
+- `services/claude-rc.service` — `claude remote-control --chrome` in `~/projects` through a login shell, `Restart=always`; claude.ai/code + the Claude app spawn headless sessions here w/ Claude in Chrome. one remote-control per folder ∴ ⊥ a hand-started `claude rc` in `~/projects`. not hub code, kept w/ the units.
 - `templates/vite/`, `templates/game-2d/`, `templates/game-3d/`, `templates/game-3d-complex/`, `templates/jekyll/`, `templates/evenhub/`, `templates/_firebase/` — scaffold sources, `<NAME>`/`<PORT>`/`<NAMESLUG>` placeholders (V43–V46, V52, V70, V71). README templates carry NO frontmatter; AGENTS templates say title + description come from README H1/¶1 (T106).
 - `v2/index.html`, `v2/app.js`, `v2/tabs.js`, `v2/tab-home.js`, `v2/tab-file.js`, `v2/app.css` — the workspace (V80, V86–V95).
 - `lib/v2-routes.js` — the v2 router; `lib/v2-layout.js` (pure, served wrapped as `window.HubLayout`); `lib/v2-paths.js`, `lib/v2-fs.js`, `lib/v2-profiles.js`, `lib/v2-sessions.js`, `lib/v2-services.js`, `lib/v2-titles.js`; `lib/claude-registry.js`, `lib/claude-transcript.js`, `lib/session-title.js`; `lib/sentinels.js`, `lib/systemd-escape.js`; `lib/g2sessions.js` (terminals, V102); `lib/touch-select.js` (V103).
@@ -276,6 +277,7 @@ module exports (test surface, not public API):
 | T111 | x | terminals on g2mirror (V102): `lib/g2sessions.js`, `lib/hub-terms.js`, attach script dual path, registry env key, hook key; the fork gained `--watch`, OSC 52 + focus pass-through, fitted socket names and the headless greeting size (upstream PRs jimrandomh/g2mirror#1, #2) | V102 |
 | T112 | x | long-press text selection + copy on touch screens; touch-wheel yields to it; real-browser check with Android-emulated Chromium + CDP touch events | V103 |
 | T113 | x | deleted v1 + tmux leftovers: `lib/v1-migrate.js`, `services/migrate-v1-sessions.mjs`, `lib/hub-terms.js` (the tmux backend), the attach script's tmux path + `HUB_TERM_BACKEND`, stored `termKey`s, registry/hook tmux lookups, per-project/admin `/term/<key>/` routing + the `/term/wsl` redirect, v1-only reserved project names, the templates' `.develop-sessions.json` ignores; relay/route tests run on real g2mirror sessions | V96, V102 |
+| T114 | x | `services/claude-rc.service`: remote-control under systemd w/ `--chrome` (was a hand-started `claude rc` in a hub terminal, no Chrome, gone on reboot); probed under `systemd-run` before install | I.files |
 
 ## §B BUGS
 
