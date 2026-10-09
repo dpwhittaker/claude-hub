@@ -191,6 +191,7 @@ sudo systemctl enable --now <unit>`.
 | `services/vite@.service` / `services/jekyll@.service` | Templated dev servers, `Restart=always`; enabled by the scaffolds. |
 | `services/stt.service` | faster-whisper on `127.0.0.1:8012` for the glasses (`/api/stt`). |
 | `services/g2mirror-server.service` | g2mirror's websocket gateway on `127.0.0.1:8737`, so Faceclaw's Terminal app on the glasses can list, view and type into every g2mirror session (hub terminals included). Config and token hashes: `~/.g2mirror/config.json` (`g2mirror-server --init-config` once; `--add-token <name>` for more). TLS on the tailnet: `tailscale serve --bg --https=8737 http://localhost:8737`; the glasses connect with `g2mirrors://<token>@<host>:8737`. `KillMode=process`: sessions the glasses launch start in this cgroup. |
+| `services/claude-rc.service` | `claude remote-control --chrome` in `~/projects`, through a login shell, so claude.ai/code and the Claude app can start sessions here with Claude in Chrome. Not part of the hub, but kept here with the other units. Only one remote-control may serve a folder, so stop any hand-started `claude rc` there first. Those sessions run headless (`--print`, stream-json) and get a bridge-appended "cloud container" system prompt that is wrong for this box. |
 
 ## Retiring v1 (done 2026-09-23)
 
