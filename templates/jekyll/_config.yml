@@ -9,7 +9,7 @@ show_excerpts: false
 # matter); there is no index.html. Keep agent-facing + local-preview tooling
 # out of the built site.
 exclude:
-  - AGENTS.md
+  - CLAUDE.md
   - SPEC.md
   - .project-meta.json
   - README.original.md

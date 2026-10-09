@@ -1,4 +1,4 @@
-# claude-hub — AGENTS.md
+# claude-hub — CLAUDE.md
 
 One page over everything under `~/projects` — sessions, services, files — in
 free-form panels, plus the reverse proxy in front of each project's dev

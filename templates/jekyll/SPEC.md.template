@@ -29,7 +29,7 @@ first feature (§T.1). ⊥ leave this placeholder standing.
 - V2: preview deps ∈ `Gemfile.local`. ⊥ create `Gemfile` — Pages would build against it & the two configs fight.
 - V3: `.project-meta.json` `routes` ! track the permalink scheme. change `permalink:`/add a collection → update `routes`, else Browse's eye-icon previews 404.
 - V4: `README.md` H1/¶1 = the project's title/description. ⊥ let them drift from §G.
-- V5: agent-facing files (`AGENTS.md`, `SPEC.md`, `.project-meta.json`, `serve-local.sh`, `Gemfile.local*`, `vendor`) ∈ `_config.yml` `exclude`. ⊥ ship them in the built site.
+- V5: agent-facing files (`CLAUDE.md`, `SPEC.md`, `.project-meta.json`, `serve-local.sh`, `Gemfile.local*`, `vendor`) ∈ `_config.yml` `exclude`. ⊥ ship them in the built site.
 
 ## §T TASKS
 

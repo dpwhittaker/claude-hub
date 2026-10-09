@@ -27,7 +27,8 @@ test('scan-existing prompt instructs claude to scan tree + write missing docs (V
     writeBootstrapPrompt(d, 'cloned-thing', 'scan-existing');
     const txt = fs.readFileSync(path.join(d, '.claude-bootstrap.txt'), 'utf8');
     assert.match(txt, /Walk the tree/);
-    assert.match(txt, /AGENTS\.md/);
+    assert.match(txt, /CLAUDE\.md/);
+    assert.match(txt, /@AGENTS\.md/, "a clone that ships AGENTS.md gets an import, not a copy");
     assert.match(txt, /README\.md/);
     assert.match(txt, /never overwrite/i);
     assert.match(txt, /tech stack/i);

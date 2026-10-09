@@ -35,4 +35,4 @@ Requirements: Node 22+, g2mirror (the fork's `hub-deploy` branch, in `~/.local/b
 
 - `~/.claude-hub/` holds the state: `profiles/<id>/profile.json` and `CLAUDE.md`, `sessions/<id>.json`, `titles.json`, and an optional `services.json` that names units to show or gives one a URL.
 - `~/projects/<name>/.project-meta.json` is a project's proxy config: `proxyTarget`, `proxyPrefix`, `stripPrefix`, `extraUnits`, and optional `routes` mapping source files to the URLs they render at.
-- `SPEC.md` is the durable spec (goals, interfaces, invariants, tasks, bugs); `AGENTS.md` is the brief for an agent working on the hub itself; `SDD.md` is the protocol both follow.
+- `SPEC.md` is the durable spec (goals, interfaces, invariants, tasks, bugs); `CLAUDE.md` is the brief for an agent working on the hub itself; `SDD.md` is the protocol both follow.

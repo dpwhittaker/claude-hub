@@ -16,7 +16,7 @@ test('bootstrapOnboard stamps meta + writes scan-existing prompt without touchin
     const dir = path.join(root, 'legacy');
     fs.mkdirSync(dir);
     fs.writeFileSync(path.join(dir, 'README.md'), '# pre-existing\n');
-    fs.writeFileSync(path.join(dir, 'AGENTS.md'), 'pre-existing agent doc\n');
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), 'pre-existing agent doc\n');
     fs.writeFileSync(path.join(dir, 'src.js'), '// keep me\n');
 
     await bootstrapOnboard(dir, 'legacy');
@@ -28,7 +28,7 @@ test('bootstrapOnboard stamps meta + writes scan-existing prompt without touchin
     assert.ok(!('template' in meta), 'no template field on onboard');
 
     assert.equal(fs.readFileSync(path.join(dir, 'README.md'), 'utf8'), '# pre-existing\n');
-    assert.equal(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), 'pre-existing agent doc\n');
+    assert.equal(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8'), 'pre-existing agent doc\n');
     assert.equal(fs.readFileSync(path.join(dir, 'src.js'), 'utf8'), '// keep me\n');
 
     const prompt = fs.readFileSync(path.join(dir, '.claude-bootstrap.txt'), 'utf8');

@@ -111,7 +111,7 @@ by a grep, by reading one named file.
 
 ```
 - V13: every create path ends w/ `sudo systemctl enable --now ttyd@<name>.service`.
-- V29: pre-existing `AGENTS.md` / `README.md` are NEVER overwritten on clone.
+- V29: pre-existing `CLAUDE.md` / `README.md` are NEVER overwritten on clone.
 ```
 
 A good invariant is:

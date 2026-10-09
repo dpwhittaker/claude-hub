@@ -29,7 +29,7 @@ function seed(root) {
   fs.writeFileSync(path.join(root, 'proj/.project-meta.json'), JSON.stringify({ name: 'proj', proxyTarget: 'http://127.0.0.1:59999', routes: [{ match: '**/*.md', to: '/:dir/:name.html' }] }));
   fs.writeFileSync(path.join(root, 'proj/README.md'), '---\ntags: [AI]\n---\n# Proj\n\nHello *world*.\n');
   fs.writeFileSync(path.join(root, 'proj/src/a.js'), 'const a = 1;\n');
-  fs.writeFileSync(path.join(root, 'AGENTS.md'), 'root notes\n');
+  fs.writeFileSync(path.join(root, 'CLAUDE.md'), 'root notes\n');
   // A project below the top level (V99).
   fs.mkdirSync(path.join(root, 'group/site/docs'), { recursive: true });
   fs.writeFileSync(path.join(root, 'group/site/.project-meta.json'), JSON.stringify({ name: 'site', proxyTarget: 'http://127.0.0.1:59998', routes: [{ match: '**/*.md', to: '/:dir/:name.html' }] }));
@@ -150,7 +150,7 @@ test('V79/V81: file API — list, stat with previewUrl, text read/write with 409
   try {
     const root = await json(fx.url + '/api/v2/fs/list');
     assert.equal(root.status, 200);
-    assert.deepEqual(root.body.entries.map((e) => e.name), ['group', 'proj', 'AGENTS.md']);
+    assert.deepEqual(root.body.entries.map((e) => e.name), ['group', 'proj', 'CLAUDE.md']);
     const proj = root.body.entries.find((e) => e.name === 'proj');
     assert.equal(proj.project, true);
     assert.equal(proj.repo, true);

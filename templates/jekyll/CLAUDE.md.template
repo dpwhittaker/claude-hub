@@ -1,6 +1,6 @@
-# <NAME> — AGENTS.md
+# <NAME> — CLAUDE.md
 
-Complex 3D game: Babylon.js + Havok physics + Vite + TypeScript.
+Jekyll + minima Markdown site.
 
 ## Workflow rule: commit + push every turn
 
@@ -57,32 +57,43 @@ the spec true as the project grows.
 
 ## claude-hub conventions
 
-- **Dev server** runs via `vite@<NAME>.service` (systemd, `Restart=always`). Don't `npm run dev` manually — the unit owns the port.
-- **Reverse-proxied** at `/<NAME>/` by claude-hub. `vite.config.ts` sets `base: '/<NAME>/'` and `server.port: <PORT>` to match `.project-meta.json`.
-- **Entry point** is `src/main.ts` — builds the `Engine` + `Scene` against `#renderCanvas`. Imperative API; no React. Use HTML/CSS for HUD/menus over the canvas.
+- **Local preview** runs via `jekyll@<NAME>.service` (systemd, `Restart=always`)
+  → `serve-local.sh`, which runs `bundle exec jekyll serve --baseurl /<NAME>` on
+  port `<PORT>`. Don't run `jekyll serve` by hand — the unit owns the port.
+- **Reverse-proxied** at `/<NAME>/` by claude-hub (`stripPrefix: false`, so the
+  `/<NAME>` baseurl is required — already wired into `serve-local.sh`).
 - **Title and description** come from `README.md`: H1 = title, first paragraph = one-sentence description. The hub and the glasses app show both.
-
-## Stack
-
-- **`@babylonjs/core`** — engine, scene graph, cameras, lights, meshes, materials.
-- **`@babylonjs/havok`** — Havok physics (WASM). Wired via `PhysicsAggregate`. `vite.config.ts` excludes it from pre-bundling so the `.wasm` resolves.
-- **`@babylonjs/loaders`** — glTF/GLB import (`SceneLoader` / `ImportMeshAsync`).
-- **`@babylonjs/inspector`** — live scene debugger. Press `i` to toggle (lazy-imported, kept out of the prod bundle).
+  categories, not status — no `WIP`. `README.md` is also the site index
+  (`permalink: /`).
+- **`Gemfile.local`, not `Gemfile`**: GitHub Pages' build looks for a file named
+  literally `Gemfile`, so `Gemfile.local` is invisible to the deploy and only
+  drives the local preview. Bundler installs into a project-local
+  `vendor/bundle` (see `.bundle/config`).
+- **Browse preview icons (`routes`)**: `.project-meta.json` ships default
+  Jekyll-permalink `routes` (`README→/`, `**/index.md→/:dir/`,
+  `**/*.md→/:dir/:name.html`), so claude-hub's file browser shows an eye-icon on
+  every `.md` and renders it through the live preview. If you change the URL
+  scheme (custom `permalink:`, collections, a different layout), update `routes`
+  to match. Rule syntax + examples: `~/projects/claude-hub/CLAUDE.md` →
+  "File→URL routes".
 
 ## What to do first
 
 1. Ask the user what to build.
 2. Update `README.md` (H1, first paragraph).
-3. Edit `src/main.ts`. HMR through the proxy works.
-4. Assets: put `.glb`/`.gltf` in `public/`, load with `ImportMeshAsync('/<NAME>/model.glb', scene)`.
+3. Add Markdown pages. Set the site `title` / `description` / `theme` in
+   `_config.yml`.
 
-## Deploy (static hosting)
+## Deploy (GitHub Pages)
 
-`npm run build:pages` (GitHub Pages, base `/<NAME>/`) or `npm run build:firebase` (Firebase Hosting, base `/`). Output in `dist/`. Ensure the Havok `.wasm` is served — it ships under `dist/assets/`.
+Pages builds this natively with its own `github-pages` gem (ignores
+`Gemfile.local`). For a project Pages site served under a subpath, set
+`baseurl: "/<repo>"` in `_config.yml` — the local preview gets its baseurl from
+`serve-local.sh` instead, so the two don't fight.
 
-## Restarting the dev server
+## Restarting the preview
 
 ```bash
-sudo systemctl restart vite@<NAME>.service
-journalctl -u vite@<NAME>.service -f
+sudo systemctl restart jekyll@<NAME>.service
+journalctl -u jekyll@<NAME>.service -f
 ```

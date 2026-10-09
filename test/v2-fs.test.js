@@ -21,10 +21,10 @@ test('V79: list at the root and in a folder; dotfiles + noise dirs are dim; dirs
   fs.mkdirSync(path.join(root, 'proj/src'));
   fs.writeFileSync(path.join(root, 'proj/.env'), 'x');
   fs.writeFileSync(path.join(root, 'proj/README.md'), '# hi');
-  fs.writeFileSync(path.join(root, 'AGENTS.md'), 'root');
+  fs.writeFileSync(path.join(root, 'CLAUDE.md'), 'root');
   const top = api.list('');
   assert.equal(top.path, '');
-  assert.deepEqual(top.entries.map((e) => e.name), ['proj', 'AGENTS.md']);
+  assert.deepEqual(top.entries.map((e) => e.name), ['proj', 'CLAUDE.md']);
   assert.equal(top.entries[1].kind, 'file');
   assert.equal(top.entries[1].defaultMode, 'view');
   const inner = api.list('proj');

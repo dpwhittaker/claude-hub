@@ -1,4 +1,4 @@
-# <NAME> — AGENTS.md
+# <NAME> — CLAUDE.md
 
 Even Realities G2 smart-glasses app. Vite + TypeScript + `@evenrealities/even_hub_sdk`, served live by claude-hub — installable as a PWA, no `.ehpk` packaging in the loop.
 

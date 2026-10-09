@@ -6,7 +6,7 @@ const path = require('node:path');
 const { copyTemplate } = require('../lib/template');
 
 // SDD is only real if a fresh project arrives carrying it. These pin V67:
-// every scaffoldable template ships a starter SPEC.md and an AGENTS.md whose
+// every scaffoldable template ships a starter SPEC.md and a CLAUDE.md whose
 // top three sections are the workflow rules — commit, worktrees, spec — and
 // the bare `none` path (server.js's own templates) does the same.
 
@@ -43,9 +43,9 @@ for (const id of TEMPLATES) {
   test(`template ${id} ships SPEC.md + the three workflow rules (V67)`, () => {
     const dest = scaffold(id, { NAME: 'demo', PORT: '5300' });
     try {
-      const agents = fs.readFileSync(path.join(dest, 'AGENTS.md'), 'utf8');
-      assertRulesAtTop(agents, `templates/${id}/AGENTS.md`);
-      assert.ok(agents.includes('SDD.md'), 'AGENTS.md points at the SDD protocol');
+      const agents = fs.readFileSync(path.join(dest, 'CLAUDE.md'), 'utf8');
+      assertRulesAtTop(agents, `templates/${id}/CLAUDE.md`);
+      assert.ok(agents.includes('SDD.md'), 'CLAUDE.md points at the SDD protocol');
 
       const spec = fs.readFileSync(path.join(dest, 'SPEC.md'), 'utf8');
       for (const h of SPEC_SECTIONS) assert.ok(spec.includes(h), `${id} SPEC.md missing ${h}`);
@@ -73,9 +73,9 @@ test('the bare `none` path gets the same three rules + a SPEC.md (V67)', () => {
   // server.js writes these inline rather than copying a template tree, so it
   // is the one place the invariant can drift silently.
   const src = fs.readFileSync(path.join(REPO, 'server.js'), 'utf8');
-  const agents = src.slice(src.indexOf('function agentsTemplate('), src.indexOf('function specTemplate('));
-  assertRulesAtTop(agents, 'server.js agentsTemplate()');
-  assert.ok(agents.includes('SDD.md'), 'bare AGENTS.md points at the SDD protocol');
+  const agents = src.slice(src.indexOf('function claudeMdTemplate('), src.indexOf('function specTemplate('));
+  assertRulesAtTop(agents, 'server.js claudeMdTemplate()');
+  assert.ok(agents.includes('SDD.md'), 'bare CLAUDE.md points at the SDD protocol');
 
   const spec = src.slice(src.indexOf('function specTemplate('), src.indexOf('function readmeTemplate('));
   for (const h of SPEC_SECTIONS) assert.ok(spec.includes(h), `bare SPEC.md missing ${h}`);
@@ -108,6 +108,6 @@ test('SDD.md defines the sections, the encoding, and the maintenance moves (V67)
   assert.ok(/^- V13:/m.test(sdd), 'SDD.md §V example is one bullet per invariant');
 });
 
-test('AGENTS.md carries the same three rules at its top (V67)', () => {
-  assertRulesAtTop(fs.readFileSync(path.join(REPO, 'AGENTS.md'), 'utf8'), 'AGENTS.md');
+test('CLAUDE.md carries the same three rules at its top (V67)', () => {
+  assertRulesAtTop(fs.readFileSync(path.join(REPO, 'CLAUDE.md'), 'utf8'), 'CLAUDE.md');
 });

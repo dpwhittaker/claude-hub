@@ -279,11 +279,11 @@ function sendJson(res, status, body) {
 //   1. POST /api/projects { name, template, github } — mkdir, scaffold, sentinel
 //   2. a hub session in the folder, seeded with the bootstrap prompt
 //
-// AGENTS.md is the agent-facing brief; humans get README.md (its H1 and first
+// CLAUDE.md is the agent-facing brief; humans get README.md (its H1 and first
 // paragraph are what the hub and the glasses app show as the folder's title
 // and description).
-function agentsTemplate(name) {
-  return `# ${name} — AGENTS.md
+function claudeMdTemplate(name) {
+  return `# ${name} — CLAUDE.md
 
 This is the orientation doc for any agent (you) working in this project.
 Human-facing details — the project's title and one-sentence summary — live in
@@ -612,7 +612,7 @@ function execFileP(cmd, args, opts) {
 
 async function bootstrapNoGithub(dir, name) {
   fs.mkdirSync(dir, { recursive: false });
-  fs.writeFileSync(path.join(dir, 'AGENTS.md'), agentsTemplate(name));
+  fs.writeFileSync(path.join(dir, 'CLAUDE.md'), claudeMdTemplate(name));
   fs.writeFileSync(path.join(dir, 'README.md'), readmeTemplate(name));
   fs.writeFileSync(path.join(dir, 'SPEC.md'), specTemplate(name));
   fs.writeFileSync(
@@ -634,7 +634,7 @@ async function bootstrapClone(dir, name, source) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw new Error('clone failed: ' + e.message, { cause: e });
   }
-  // V29: pre-existing AGENTS.md / README.md are NEVER overwritten. Missing
+  // V29: pre-existing CLAUDE.md / README.md are NEVER overwritten. Missing
   // ones are NOT pre-filled with boilerplate either — claude scans the
   // cloned tree on first turn and writes whichever is missing (V30).
   // .project-meta.json is our sentinel; always write it.
