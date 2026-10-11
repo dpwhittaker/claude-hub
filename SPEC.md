@@ -279,6 +279,7 @@ module exports (test surface, not public API):
 | T113 | x | deleted v1 + tmux leftovers: `lib/v1-migrate.js`, `services/migrate-v1-sessions.mjs`, `lib/hub-terms.js` (the tmux backend), the attach script's tmux path + `HUB_TERM_BACKEND`, stored `termKey`s, registry/hook tmux lookups, per-project/admin `/term/<key>/` routing + the `/term/wsl` redirect, v1-only reserved project names, the templates' `.develop-sessions.json` ignores; relay/route tests run on real g2mirror sessions | V96, V102 |
 | T114 | x | `services/claude-rc.service`: remote-control under systemd w/ `--chrome` (was a hand-started `claude rc` in a hub terminal, no Chrome, gone on reboot); probed under `systemd-run` before install | I.files |
 | T115 | x | AGENTS.md → CLAUDE.md here, in every template (`CLAUDE.md.template`), the bare `none` path (`claudeMdTemplate`), the jekyll `exclude`, the bootstrap prompts and their tests; same rename across the managed projects. Claude Code loads CLAUDE.md at start, AGENTS.md only on demand; Codex is no longer used, so nothing else read it | V13, V21, V29, V31, V67 |
+| T116 | x | markdown render (`…/fs/render`): lines led by Cue's entry icons (‼ urgent, ◆ to do, ○ status) become list items w/ the icon as the bullet (`entryLinesAsItems` preprocess + `listitem` renderer in `lib/v2-routes.js`), so a notebook's entries stop running together into one paragraph; fenced code untouched | I.files |
 
 ## §B BUGS
 
