@@ -56,7 +56,6 @@ files:
 - `services/vite@.service` — templated per-project Vite dev server. `ExecStart=npm run dev`, `WorkingDirectory=~/projects/%i`. enabled on vite-family bootstrap.
 - `services/jekyll@.service` — templated per-project Jekyll preview. `ExecStart=~/projects/%i/serve-local.sh`, `Restart=always`, system PATH (no nvm). enabled on `jekyll`-template bootstrap (V52).
 - `services/stt/server.py` + `services/stt.service` — faster-whisper `turbo` on `127.0.0.1:8012` (`POST /transcribe`, `GET /health`), venv `~/stt-env`; gpu-gate lease `stt`, idle 90 s → unload; CPU fallback (V78).
-- `services/claude-rc.service` — `claude remote-control --chrome` in `~/projects` through a login shell, `Restart=always`; claude.ai/code + the Claude app spawn headless sessions here w/ Claude in Chrome. one remote-control per folder ∴ ⊥ a hand-started `claude rc` in `~/projects`. not hub code, kept w/ the units.
 - `templates/vite/`, `templates/game-2d/`, `templates/game-3d/`, `templates/game-3d-complex/`, `templates/jekyll/`, `templates/evenhub/`, `templates/_firebase/` — scaffold sources, `<NAME>`/`<PORT>`/`<NAMESLUG>` placeholders (V43–V46, V52, V70, V71). README templates carry NO frontmatter; CLAUDE.md templates say title + description come from README H1/¶1 (T106).
 - `v2/index.html`, `v2/app.js`, `v2/tabs.js`, `v2/tab-home.js`, `v2/tab-file.js`, `v2/app.css` — the workspace (V80, V86–V95).
 - `lib/v2-routes.js` — the v2 router; `lib/v2-layout.js` (pure, served wrapped as `window.HubLayout`); `lib/v2-paths.js`, `lib/v2-fs.js`, `lib/v2-profiles.js`, `lib/v2-sessions.js`, `lib/v2-services.js`, `lib/v2-titles.js`; `lib/claude-registry.js`, `lib/claude-transcript.js`, `lib/session-title.js`; `lib/sentinels.js`, `lib/systemd-escape.js`; `lib/g2sessions.js` (terminals, V102); `lib/touch-select.js` (V103).
@@ -280,6 +279,7 @@ module exports (test surface, not public API):
 | T114 | x | `services/claude-rc.service`: remote-control under systemd w/ `--chrome` (was a hand-started `claude rc` in a hub terminal, no Chrome, gone on reboot); probed under `systemd-run` before install | I.files |
 | T115 | x | AGENTS.md → CLAUDE.md here, in every template (`CLAUDE.md.template`), the bare `none` path (`claudeMdTemplate`), the jekyll `exclude`, the bootstrap prompts and their tests; same rename across the managed projects. Claude Code loads CLAUDE.md at start, AGENTS.md only on demand; Codex is no longer used, so nothing else read it | V13, V21, V29, V31, V67 |
 | T116 | x | markdown render (`…/fs/render`): lines led by Cue's entry icons (‼ urgent, ◆ to do, ○ status) become list items w/ the icon as the bullet (`entryLinesAsItems` preprocess + `listitem` renderer in `lib/v2-routes.js`), so a notebook's entries stop running together into one paragraph; fenced code untouched | I.files |
+| T117 | x | retired `services/claude-rc.service` (T114): `remoteControlAtStartup` puts every interactive claude on claude.ai/code + the app, and a hub session picks its folder, where the unit pinned spawned sessions to `~/projects`; unit stopped, disabled, uninstalled | I.files |
 
 ## §B BUGS
 
