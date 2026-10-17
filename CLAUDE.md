@@ -148,6 +148,14 @@ tab. Recency is the registry's status change (idle TUI repaints bump the
 terminal's last output every few minutes, so that counts only for
 codex/shell).
 
+**Backgrounding is the one move the registry can't see** (B36): Claude's
+daemon continues the conversation under a new id in a worker outside the
+terminal, and the old transcript gets a `continued-in` record naming it.
+`followContinuation` (`lib/claude-transcript.js`) walks those markers — the
+session list persists the result, and `ttyd-attach-hub.sh` resumes the
+followed id (it loads the lib from `$HUB_LIB`, default
+`$PROJECTS_ROOT/claude-hub/lib`, since it is installed to `/usr/local/bin`).
+
 **Titles** follow the newest by time of the registry name and the hub's auto
 title, so `/rename` and the titler take turns. `services/session-title-hook.mjs`
 runs on `Stop`, forks a detached worker (the hook exits in ms) that asks Haiku

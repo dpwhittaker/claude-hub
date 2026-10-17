@@ -11,7 +11,7 @@ const ATTACH = path.join(__dirname, '..', 'services', 'ttyd-attach-hub.sh');
 // prints a socket name) and pgrep (finds a running session only when
 // `running`), and runs the hub attach script against a scratch state dir
 // (V84, V102).
-function run(id, { session = null, prompt = null, instructions = null, transcript = false, running = false } = {}) {
+function run(id, { session = null, prompt = null, instructions = null, transcript = false, transcripts = {}, running = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'attach-hub-'));
   const projectsRoot = path.join(root, 'projects');
   const home = path.join(root, 'home');
@@ -31,6 +31,9 @@ function run(id, { session = null, prompt = null, instructions = null, transcrip
     const encoded = '-' + dir.replace(/^\//, '').replace(/\//g, '-');
     fs.mkdirSync(path.join(home, '.claude', 'projects', encoded), { recursive: true });
     fs.writeFileSync(path.join(home, '.claude', 'projects', encoded, session.uuid + '.jsonl'), '{}\n');
+    for (const [uuid, lines] of Object.entries(transcripts)) {
+      fs.writeFileSync(path.join(home, '.claude', 'projects', encoded, uuid + '.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    }
   }
   const g2log = path.join(root, 'g2mirror.log');
   fs.writeFileSync(path.join(bin, 'g2mirror'), [
@@ -47,7 +50,7 @@ function run(id, { session = null, prompt = null, instructions = null, transcrip
   let status = 0;
   try {
     execFileSync('bash', [ATTACH, id], {
-      env: { PATH: bin + ':' + process.env.PATH, HOME: home, HUB_STATE_DIR: hub, PROJECTS_ROOT: projectsRoot, G2_LOG: g2log, CLAUDE_BIN: '/fake/claude', CODEX_BIN: '/fake/codex', G2MIRROR_BIN: path.join(bin, 'g2mirror') },
+      env: { PATH: bin + ':' + process.env.PATH, HOME: home, HUB_STATE_DIR: hub, PROJECTS_ROOT: projectsRoot, G2_LOG: g2log, CLAUDE_BIN: '/fake/claude', CODEX_BIN: '/fake/codex', G2MIRROR_BIN: path.join(bin, 'g2mirror'), HUB_LIB: path.join(__dirname, '..', 'lib') },
       stdio: ['ignore', 'ignore', errFd],
     });
   } catch (e) { status = e.status; } finally { fs.closeSync(errFd); }
@@ -70,6 +73,22 @@ test('V84/V102: first attach starts claude --session-id detached in the session 
   assert.match(fresh.pgrep[0], /-f \^\[\^ \]\*g2mirror --headless \.\* -- env HUB_TERM_KEY=hub-abcd1234 $/);
   const again = run('abcd1234', { session: base, transcript: true });
   assert.match(started(again).args, /--resume 11111111-2222-3333-4444-555555555555 --chrome$/);
+});
+
+test('B36: a conversation Claude continued under a new id (backgrounded) resumes there, not at the old id\'s end', () => {
+  const NEXT = '99999999-2222-3333-4444-555555555555';
+  const handedOff = { [base.uuid]: [
+    { type: 'user', timestamp: '2026-10-17T02:08:00Z' },
+    { type: 'continued-in', timestamp: '2026-10-17T02:11:03Z', sessionId: base.uuid, continuedInSessionId: NEXT },
+    { type: 'cost-state' },
+  ], [NEXT]: [{ type: 'user', timestamp: '2026-10-17T02:15:54Z' }] };
+  const r = run('abcd1234', { session: base, transcript: true, transcripts: handedOff });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(started(r).args, new RegExp(`--resume ${NEXT} --chrome$`));
+  // The old id went on after the marker (it was resumed once already): it stands.
+  handedOff[base.uuid].push({ type: 'user', timestamp: '2026-10-17T13:04:52Z' });
+  const again = run('abcd1234', { session: base, transcript: true, transcripts: handedOff });
+  assert.match(started(again).args, new RegExp(`--resume ${base.uuid} --chrome$`));
 });
 
 test('V102: a session that is already running is only attached', () => {

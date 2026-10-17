@@ -304,6 +304,33 @@ test('V92/V90: a live claude session (Claude registry) supplies status, its curr
   }
 });
 
+test('B36: a stopped claude session whose transcript was continued under a new id lists and persists that id', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'v2home-'));
+  const realHome = process.env.HOME;
+  const fx = await startFixture({ seed });
+  try {
+    process.env.HOME = home;   // os.homedir() → where the transcripts are read
+    const s0 = await claudeSession(fx.url);
+    const NEXT = '44444444-4444-4444-4444-444444444444';
+    const dir = path.join(home, '.claude', 'projects', '-' + path.join(fx.projectsRoot, 'proj').replace(/^\//, '').replace(/\//g, '-'));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, U1 + '.jsonl'), [
+      { type: 'user', timestamp: '2026-10-12T19:53:00.000Z' },
+      { type: 'continued-in', timestamp: '2026-10-12T19:53:41.054Z', sessionId: U1, continuedInSessionId: NEXT },
+    ].map((o) => JSON.stringify(o)).join('\n') + '\n');
+    fs.writeFileSync(path.join(dir, NEXT + '.jsonl'), JSON.stringify({ type: 'user', timestamp: '2026-10-13T11:50:26.920Z' }) + '\n');
+    const s = (await json(fx.url + '/api/v2/sessions')).body.sessions.find((x) => x.id === s0.id);
+    assert.equal(s.running, false);
+    assert.equal(s.uuid, NEXT);
+    assert.equal(s.lastActive, Date.parse('2026-10-13T11:50:26.920Z'), 'recency comes from where the conversation went');
+    const rec = JSON.parse(fs.readFileSync(path.join(fx.hubStateDir, 'sessions', s0.id + '.json'), 'utf8'));
+    assert.equal(rec.uuid, NEXT, 'the record follows, so the next attach resumes the new id');
+  } finally {
+    process.env.HOME = realHome;
+    await fx.close();
+  }
+});
+
 test('V95: POST /api/v2/term/<key>/suspend closes a known terminal and refuses unknown keys', { skip: !haveG2mirror && 'g2mirror not installed' }, async () => {
   const fx = await startFixture({ seed });
   let term;

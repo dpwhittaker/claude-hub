@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { makeTitleStore, cleanTitle } = require('../lib/v2-titles');
 const { digestTranscript, buildPrompt, parseReply, validTitle, USER_NAME_FLOOR } = require('../lib/session-title');
-const { readSessionTitle, readTranscriptTitle, readTranscriptLastAt } = require('../lib/claude-transcript');
+const { readSessionTitle, readTranscriptTitle, readTranscriptLastAt, readContinuedIn, followContinuation } = require('../lib/claude-transcript');
 const { readLiveSessions, parseEntry } = require('../lib/claude-registry');
 const { spawn } = require('node:child_process');
 
@@ -212,4 +212,36 @@ test('B32: readTranscriptLastAt is the last record timestamp, not the file mtime
   // A huge trailing line (a tool result) pushes the last timestamp past 64 KB: the 1 MB pass finds it.
   fs.appendFileSync(f, JSON.stringify({ type: 'user', timestamp: '2026-09-22T08:00:00.000Z', message: { role: 'user', content: 'z'.repeat(200 * 1024) } }) + '\n');
   assert.equal(readTranscriptLastAt('/srv/projects/x', U1, { homedir: home }), Date.parse('2026-09-22T08:00:00.000Z'));
+});
+
+test('B36: a transcript whose newest timestamped record is `continued-in` hands its id on; the chain is followed to the end', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'v2home-'));
+  const dir = path.join(home, '.claude', 'projects', '-srv-projects-x');
+  fs.mkdirSync(dir, { recursive: true });
+  const [A, B, C] = ['aaaaaaaa', 'bbbbbbbb', 'cccccccc'].map((h) => h + '-2222-3333-4444-555555555555');
+  const opts = { homedir: home };
+  const turn = (at) => JSON.stringify({ type: 'user', timestamp: at, message: { role: 'user', content: 'x' } });
+  const moved = (from, to, at) => JSON.stringify({ type: 'continued-in', timestamp: at, sessionId: from, continuedInSessionId: to });
+  const write = (id, lines) => fs.writeFileSync(path.join(dir, id + '.jsonl'), lines.join('\n') + '\n');
+  assert.equal(readContinuedIn('/srv/projects/x', A, opts), null, 'no transcript');
+  assert.equal(followContinuation('/srv/projects/x', A, opts), A);
+  write(A, [turn('2026-10-17T02:08:00Z'), moved(A, B, '2026-10-17T02:11:03Z'), JSON.stringify({ type: 'last-prompt' }), JSON.stringify({ type: 'cost-state' })]);
+  assert.equal(readContinuedIn('/srv/projects/x', A, opts), null, 'the new id has no transcript here, so --resume could not find it');
+  write(B, [turn('2026-10-17T02:15:54Z')]);
+  assert.equal(readContinuedIn('/srv/projects/x', A, opts), B, 'untimestamped bookkeeping after the marker does not count as a turn');
+  assert.equal(followContinuation('/srv/projects/x', A, opts), B);
+  write(B, [turn('2026-10-17T02:15:54Z'), moved(B, C, '2026-10-17T05:00:00Z')]);
+  write(C, [turn('2026-10-17T05:00:01Z')]);
+  assert.equal(followContinuation('/srv/projects/x', A, opts), C, 'a session backgrounded twice');
+  write(C, [turn('2026-10-17T05:00:01Z'), moved(C, A, '2026-10-17T06:00:00Z')]);
+  assert.equal(followContinuation('/srv/projects/x', A, opts), C, 'a cycle stops where it closes');
+  // The old id resumed after all (a reboot resumed it): it is the live one again.
+  write(A, [moved(A, B, '2026-10-17T02:11:03Z'), turn('2026-10-17T13:04:52Z')]);
+  assert.equal(readContinuedIn('/srv/projects/x', A, opts), null);
+  // A marker behind a trailing record bigger than the first 64 KB window is still found.
+  write(A, [moved(A, B, '2026-10-17T02:11:03Z'), JSON.stringify({ type: 'cost-state', blob: 'z'.repeat(200 * 1024) })]);
+  assert.equal(readContinuedIn('/srv/projects/x', A, opts), B);
+  // Garbage ids are refused.
+  write(A, [moved(A, '../../etc/passwd', '2026-10-17T02:11:03Z')]);
+  assert.equal(readContinuedIn('/srv/projects/x', A, opts), null);
 });

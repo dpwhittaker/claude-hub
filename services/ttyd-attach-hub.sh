@@ -16,7 +16,12 @@
 #   claude → `claude --session-id <uuid>` first time, `--resume <uuid>` after
 #            (transcript on disk under ~/.claude/projects/<encoded cwd>/), plus
 #            `--append-system-prompt-file <profile CLAUDE.md>` when the
-#            session's profile has instructions (SPEC §V84).
+#            session's profile has instructions (SPEC §V84). The uuid is
+#            followed through any `continued-in` markers first: a session
+#            Claude backgrounded went on under a new id the record never
+#            heard of (B36). The rule lives in the hub's
+#            lib/claude-transcript.js, loaded from $HUB_LIB (this file is
+#            installed outside the repo); without it the record's id stands.
 #   codex  → plain `codex` (no id preassignment; the terminal is its
 #            persistence).
 #   shell  → `bash -l` in the folder.
@@ -29,6 +34,7 @@ CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
 CODEX_BIN="${CODEX_BIN:-codex}"
 G2MIRROR_BIN="${G2MIRROR_BIN:-$HOME/.local/bin/g2mirror}"
 PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/projects}"
+HUB_LIB="${HUB_LIB:-$PROJECTS_ROOT/claude-hub/lib}"
 
 if [[ ! "$ID" =~ ^[a-z0-9]{8}$ ]]; then
     echo "usage: $0 <session id>  (got: '$ID')" >&2
@@ -43,9 +49,13 @@ fi
 
 # One field per line, in a fixed order, so bash needs no JSON parser.
 { read -r CWD; read -r AGENT; read -r UUID; read -r PROFILE; } < <(node -e '
-  const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const [file, root, lib] = process.argv.slice(1);
+  const s = JSON.parse(require("fs").readFileSync(file, "utf8"));
+  if (s.agent === "claude" && s.uuid) {
+    try { s.uuid = require(lib + "/claude-transcript.js").followContinuation(require("path").join(root, s.cwd || ""), s.uuid); } catch {}
+  }
   for (const k of ["cwd", "agent", "uuid", "profile"]) console.log(String(s[k] == null ? "" : s[k]).replace(/\n/g, " "));
-' "$FILE")
+' "$FILE" "$PROJECTS_ROOT" "$HUB_LIB")
 
 DIR="$PROJECTS_ROOT${CWD:+/$CWD}"
 if [[ ! -d "$DIR" ]]; then
